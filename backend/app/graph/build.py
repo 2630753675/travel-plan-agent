@@ -81,96 +81,128 @@ def _summarize(node: str, upd: dict) -> str:
 
 
 def _log_lines(node: str, upd: dict, state: TripState) -> list:
-    """把节点结果写成可读的动作日志。
+    """把节点结果写成有层级的轨迹行。
 
-    只写具体事实（选中哪班机、砍掉哪个景点、超了多少），
-    不写"执行中/已完成"这类没有信息量的行。
+    depth=1 是 agent 的动作，depth=2 是它调用的工具及其返回。
+    只写具体事实（选中哪班机、砍掉哪个景点、超了多少）。
     """
-    from ..activity import entry
+    from ..activity import NODE_GROUP, entry, tool_call
 
-    lines = []
+    group = NODE_GROUP.get(node, "")
+    lines: list = []
+    brief = state.get("brief")
+
     try:
         if node == "clarify":
-            b = state.get("brief")
-            if b is not None:
+            if brief is not None:
                 lines.append(
                     entry(
                         "clarify",
-                        f"需求归一化：{b.destination} {b.days} 天，{b.travelers} 人，"
-                        f"预算 {b.budget_total:.0f} 元，同行 {('、'.join(b.companions))}",
+                        f"{brief.destination} {brief.days} 天，{brief.travelers} 人，"
+                        f"预算 {brief.budget_total:.0f} 元，同行 {('、'.join(brief.companions))}",
+                        group=group,
                     )
                 )
             for note in upd.get("notes") or []:
-                lines.append(entry("clarify", note, kind="decision"))
+                lines.append(entry("clarify", note, kind="decision", group=group, depth=2))
+
         elif node == "transport":
             p = upd["transport"]
+            if brief is not None:
+                lines.append(
+                    tool_call("transport", "search_flights", f"{brief.origin}→{brief.destination} {brief.start_date}",
+                              f"{len(p.outbound)} 条" if not p.error else "失败", group=group)
+                )
+                lines.append(
+                    tool_call("transport", "search_flights", f"{brief.destination}→{brief.origin} {brief.end_date}",
+                              f"{len(p.inbound)} 条" if not p.error else "失败", group=group)
+                )
             if p.error:
-                lines.append(entry("transport", p.error, kind="decision"))
+                lines.append(entry("transport", p.error, kind="decision", group=group))
             else:
-                out = p.chosen_outbound
-                back = p.chosen_inbound
+                out, back = p.chosen_outbound, p.chosen_inbound
                 lines.append(
                     entry(
                         "transport",
-                        f"去程 {len(p.outbound)} 班、返程 {len(p.inbound)} 班候选；"
                         f"选中 {out.flight_no if out else '无'} / {back.flight_no if back else '无'}，"
                         f"往返 {p.round_trip_cost:.0f} 元",
+                        group=group,
                     )
                 )
+
         elif node == "lodging":
             p = upd["lodging"]
+            if brief is not None:
+                lines.append(
+                    tool_call("lodging", "search_hotels", f"{brief.destination} 距市中心≤12km",
+                              f"{len(p.candidates)} 家" if not p.error else "失败", group=group)
+                )
             if p.error:
-                lines.append(entry("lodging", p.error, kind="decision"))
+                lines.append(entry("lodging", p.error, kind="decision", group=group))
             else:
                 lines.append(
                     entry(
                         "lodging",
-                        f"{len(p.candidates)} 家候选，推荐 {p.chosen.name}"
-                        f"（{p.chosen.price_per_night:.0f} 元/晚，距市中心 {p.chosen.distance_to_center_km} km）",
+                        f"推荐 {p.chosen.name}（{p.chosen.price_per_night:.0f} 元/晚，"
+                        f"距市中心 {p.chosen.distance_to_center_km} km）",
+                        group=group,
                     )
                 )
+
         elif node == "poi":
             p = upd["poi"]
+            if brief is not None:
+                lines.append(
+                    tool_call("poi", "list_pois", brief.destination,
+                              f"{len(p.candidates)} 个" if not p.error else "失败", group=group)
+                )
             if p.error:
-                lines.append(entry("poi", p.error, kind="decision"))
+                lines.append(entry("poi", p.error, kind="decision", group=group))
             else:
-                lines.append(entry("poi", f"{len(p.candidates)} 个可用景点"))
+                lines.append(entry("poi", f"{len(p.candidates)} 个可用景点", group=group))
                 if p.excluded:
-                    lines.append(entry("poi", "按同行人群排除：" + "、".join(p.excluded)))
+                    lines.append(
+                        entry("poi", "排除 " + "、".join(p.excluded), kind="decision", group=group, depth=2)
+                    )
+
         elif node == "weather":
             p = upd["weather"]
+            if brief is not None:
+                lines.append(
+                    tool_call("weather", "get_weather", f"{brief.destination} {brief.days} 天",
+                              f"{len(p.days)} 天" if not p.error else "失败", group=group)
+                )
             if p.error:
-                lines.append(entry("weather", p.error, kind="decision"))
+                lines.append(entry("weather", p.error, kind="decision", group=group))
             else:
                 rainy = [w.date for w in p.days if w.is_rainy]
                 lines.append(
                     entry(
                         "weather",
-                        f"{len(p.days)} 天天气；有雨 {len(rainy)} 天"
-                        + (f"（{'、'.join(str(d)[5:] for d in rainy)}）" if rainy else ""),
+                        f"有雨 {len(rainy)} 天" + (f"（{'、'.join(str(d)[5:] for d in rainy)}）" if rainy else ""),
+                        group=group,
                     )
                 )
+
         elif node == "planner":
             it = upd["draft"]
             sights = sum(1 for d in it.days for i in d.items if i.type == "sight")
             lines.append(
-                entry(
-                    "planner",
-                    f"排出 {len(it.days)} 天 {sights} 个景点，预计总花费 {it.total_cost:.0f} 元",
-                )
+                entry("planner", f"排出 {len(it.days)} 天 {sights} 个景点，预计 {it.total_cost:.0f} 元", group=group)
             )
             over = it.total_cost - it.budget_total
             if over > 0:
-                lines.append(entry("planner", f"超出预算 {over:.0f} 元", kind="decision"))
+                lines.append(entry("planner", f"超出预算 {over:.0f} 元", kind="decision", group=group))
+
         elif node == "critic":
             c = upd["critique"]
             blockers = [i for i in c.issues if i.severity == "blocker"]
             if c.passed:
-                lines.append(entry("critic", f"校验通过，{len(c.issues)} 条提醒"))
+                lines.append(entry("critic", f"通过，{len(c.issues)} 条提醒", group=group))
             else:
-                lines.append(entry("critic", f"校验未通过，{len(blockers)} 个阻断项", kind="decision"))
+                lines.append(entry("critic", f"未通过，{len(blockers)} 个阻断项", kind="decision", group=group))
                 for i in blockers[:4]:
-                    lines.append(entry("critic", i.message, kind="decision"))
+                    lines.append(entry("critic", i.message, kind="decision", group=group, depth=2))
     except Exception:
         pass
     return lines
@@ -323,17 +355,23 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
         _emit({"phase": "end", "node": "negotiation", "summary": log.summary})
 
-        lines = [entry("system", f"阶段: 预算与体验协商（第 {round_no} 轮）", kind="stage")]
+        from ..activity import entry, stage, tool_call
+
+        lines = [stage("negotiation")]
+        lines.append(
+            entry("negotiation", f"第 {round_no} 轮", kind="action", group="negotiation", depth=1)
+        )
         # 只记录本轮新增的发言，历史轮次已经在之前的日志里了
         for m in log.rounds[-3:]:
-            lines.append(
-                entry(
-                    m.speaker,
-                    m.claim,
-                    kind="decision" if m.speaker == "mediator" else "action",
-                    detail="；".join(f"{e.label} {e.value}" for e in m.evidence),
+            lines.append(entry(m.speaker, m.claim, kind="speech", group="negotiation", depth=1))
+            for t in m.tool_calls:
+                lines.append(
+                    tool_call(m.speaker, t, "", "已执行", group="negotiation")
                 )
-            )
+            for e in m.evidence:
+                lines.append(
+                    entry(m.speaker, f"{e.label}：{e.value}", group="negotiation", depth=2)
+                )
 
         return {
             "negotiation": log,
@@ -380,9 +418,14 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         return {
             "user_hint": str(choice),
             "log": [
-                entry("system", "阶段: 协商僵持，请你定方向", kind="stage"),
-                entry("negotiation", f"僵持：{deadlock}", kind="question"),
-                entry("user", str(choice), kind="answer"),
+                entry(
+                    "negotiation",
+                    f"僵持：{deadlock}",
+                    kind="question",
+                    group="negotiation",
+                    depth=1,
+                ),
+                entry("user", str(choice), kind="answer", group="negotiation", depth=1),
             ],
         }
 
@@ -392,7 +435,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         这是副作用极小的节点：只调 interrupt()，不做任何计算，
         因为恢复时该节点会从头重放。
         """
-        from ..activity import entry
+        from ..activity import entry, stage
 
         draft = state["draft"]
         brief = state["brief"]
@@ -428,13 +471,15 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         return {
             "decision": str(decision),
             "log": [
-                entry("system", "阶段: 等待你决定", kind="stage"),
+                stage("confirm"),
                 entry(
                     "confirm",
                     f"超出预算 {over:.0f} 元（{ratio:.0%}），问你接受 / 降配 / 取消",
                     kind="question",
+                    group="confirm",
+                    depth=1,
                 ),
-                entry("user", f"选择：{picked}", kind="answer"),
+                entry("user", f"选择：{picked}", kind="answer", group="confirm", depth=1),
             ],
         }
 
@@ -521,9 +566,11 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         async def node(state: TripState) -> dict:
             _emit({"phase": "start", "node": name})
             result = await fn(state)
-            from ..activity import STAGE_LABEL, entry
+            from ..activity import NODE_GROUP, STAGE_NODES, stage
 
-            lines = [entry("system", f"阶段: {STAGE_LABEL.get(name, name)}", kind="stage")]
+            lines = []
+            if name in STAGE_NODES:
+                lines.append(stage(NODE_GROUP[name]))
             lines.extend(_log_lines(name, result, state))
             result["log"] = list(result.get("log") or []) + lines
             _emit({"phase": "end", "node": name, "summary": _summarize(name, result)})

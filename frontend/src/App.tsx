@@ -202,37 +202,102 @@ function NegotiationTrail({ neg }: { neg: Negotiation }) {
   )
 }
 
-type LogEntry = { ts: string; actor: string; kind: string; text: string; detail: string }
+type LogEntry = {
+  ts: string
+  actor: string
+  kind: string
+  text: string
+  detail: string
+  group: string
+  depth: number
+  tool: string
+}
 
-const LOG_MARK: Record<string, string> = {
-  stage: '▸',
+const GROUP_LABEL: Record<string, string> = {
+  clarify: '需求澄清',
+  retrieval: '并行检索',
+  plan: '行程规划',
+  check: '可行性校验',
+  negotiation: '预算与体验协商',
+  confirm: '等你决定',
+  misc: '其他',
+}
+
+/** 按阶段分块：连续同 group 的行归一块（同一阶段多次出现时自然分开） */
+function groupByStage(entries: LogEntry[]) {
+  const groups: { key: string; label: string; ts: string; items: LogEntry[] }[] = []
+  for (const e of entries) {
+    const key = e.group || 'misc'
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.items.push(e)
+    else groups.push({ key, label: GROUP_LABEL[key] ?? key, ts: e.ts, items: [e] })
+  }
+  return groups
+}
+
+/** 组内按 actor 分块，让"谁做了什么"一眼可读 */
+function chunkByActor(items: LogEntry[]) {
+  const chunks: { actor: string; items: LogEntry[] }[] = []
+  for (const e of items) {
+    const last = chunks[chunks.length - 1]
+    if (last && last.actor === e.actor) last.items.push(e)
+    else chunks.push({ actor: e.actor, items: [e] })
+  }
+  return chunks
+}
+
+const KIND_MARK: Record<string, string> = {
   action: '·',
   decision: '!',
   question: '?',
   answer: '✓',
+  tool: '⚙',
+  speech: '“',
 }
 
 function ActivityLog({ entries }: { entries: LogEntry[] }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   if (!entries || entries.length === 0) return null
+
+  const groups = groupByStage(entries)
   return (
     <section className="activity">
       <div className="section-head">
-        <h2>动作日志</h2>
-        <span className="hint">{entries.length} 条，按发生顺序</span>
+        <h2>执行轨迹</h2>
+        <span className="hint">{entries.length} 步 · 按阶段分组</span>
       </div>
-      <ol className="log-lines">
-        {entries.map((e, i) => (
-          <li key={i} className={`log-line ${e.kind}`}>
-            <span className="log-ts">{e.ts}</span>
-            <span className="log-actor">{e.actor}</span>
-            <span className="log-mark">{LOG_MARK[e.kind] ?? '·'}</span>
-            <span className="log-body">
-              <span className="log-text">{e.text}</span>
-              {e.detail && <span className="log-detail">{e.detail}</span>}
-            </span>
-          </li>
-        ))}
-      </ol>
+      <div className="log-groups">
+        {groups.map((g, gi) => {
+          const key = `${g.key}-${gi}`
+          const isCollapsed = collapsed[key]
+          return (
+            <div key={key} className={`log-group ${isCollapsed ? 'collapsed' : ''}`}>
+              <button className="log-group-head" onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}>
+                <span className="log-caret">{isCollapsed ? '▶' : '▼'}</span>
+                <span className="log-group-label">{g.label}</span>
+                <span className="log-group-ts">{g.ts}</span>
+              </button>
+              {!isCollapsed && (
+                <div className="log-group-body">
+                  {chunkByActor(g.items.filter((e) => e.depth > 0)).map((chunk, ci) => (
+                    <div key={ci} className="log-chunk">
+                      <div className="log-chunk-head">{chunk.actor}</div>
+                      <ul className="log-list">
+                        {chunk.items.map((e, i) => (
+                          <li key={i} className={`log-row kind-${e.kind} depth-${e.depth}`}>
+                            <span className="log-mark">{KIND_MARK[e.kind] ?? '·'}</span>
+                            <span className="log-text">{e.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </section>
   )
 }

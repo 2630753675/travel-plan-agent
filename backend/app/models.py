@@ -137,17 +137,24 @@ class Issue(BaseModel):
 
 
 class LogEntry(BaseModel):
-    """动作日志的一行：谁、在什么时候、做了什么。
+    """执行轨迹的一行：谁、在什么时候、做了什么。
 
-    轨迹的价值在于"每一步都能查"——所以这里记录的必须是具体动作
-    （选中了哪个航班、砍掉了哪个景点），不是"执行中"这种空话。
+    层级由 (group, depth) 决定：
+    - group: 所属阶段（clarify / retrieval / plan / check / negotiation / confirm）
+    - depth: 0=阶段标题，1=agent 动作或主张，2=工具调用或证据
+
+    记录原则：只写具体事实（选中哪个航班、砍掉哪个景点、超了多少），
+    不写"执行中/已完成"这类没有信息量的行。
     """
 
     ts: str
     actor: str
-    kind: Literal["stage", "action", "decision", "question", "answer"] = "action"
+    kind: Literal["stage", "action", "decision", "question", "answer", "tool", "speech"] = "action"
     text: str
     detail: str = ""
+    group: str = ""
+    depth: int = 1
+    tool: str = ""
 
 
 class Critique(BaseModel):
