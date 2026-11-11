@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from ...models import POI, TripBrief
+from ...models import TripBrief
 from .protocol import Adjustment, Evidence, Message
 
 HIGH_VALUE = 0.6
