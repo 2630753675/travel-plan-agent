@@ -55,18 +55,6 @@ type Result = {
   activity?: LogEntry[]
 }
 
-const NODE_LABEL: Record<string, string> = {
-  clarify: '需求澄清',
-  transport: '交通',
-  lodging: '住宿',
-  poi: '景点',
-  weather: '天气',
-  planner: '行程规划',
-  critic: '可行性校验',
-}
-
-const PARALLEL = ['transport', 'lodging', 'poi', 'weather']
-
 const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
 const PACE = ['轻松', '适中', '紧凑'] as const
 
@@ -339,7 +327,6 @@ export default function App() {
   const [llmOn, setLlmOn] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [liveLogs, setLiveLogs] = useState<LogEntry[]>([])
-  const timelineRef = useRef<HTMLDivElement>(null)
   const drawerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -380,10 +367,6 @@ export default function App() {
       })
       .catch(() => setError('该规划不存在或已失效'))
   }, [])
-
-  useEffect(() => {
-    timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' })
-  }, [cards])
 
   // 轨迹面板跟随最新一条自动滚动
   useEffect(() => {
@@ -556,42 +539,6 @@ export default function App() {
   }
 
   const doneCount = cards.filter((c) => c.kind === 'node' && c.status === 'done').length
-
-  function renderAgent(c: Card) {
-    return (
-      <article key={c.key} className={`agent ${c.status} ${PARALLEL.includes(c.node) ? 'in-group' : ''}`}>
-        <div className="agent-head">
-          <span className="agent-name">{NODE_LABEL[c.node] ?? c.node}</span>
-          <span className={`dot ${c.status}`} />
-        </div>
-        <p className="agent-summary">
-          {c.summary ??
-            (c.status === 'running'
-              ? c.node === 'confirm'
-                ? '等待你决定…'
-                : '执行中…'
-              : c.status === 'waiting'
-                ? '等待中'
-                : '')}
-        </p>
-      </article>
-    )
-  }
-
-  /** 把连续的并行节点聚成一组，视觉上体现同一 superstep 并发 */
-  function groupCards(list: Card[]) {
-    const out: ({ kind: 'single'; card: Card } | { kind: 'group'; cards: Card[]; key: string })[] = []
-    for (const c of list) {
-      if (c.kind === 'node' && PARALLEL.includes(c.node)) {
-        const last = out[out.length - 1]
-        if (last && last.kind === 'group') last.cards.push(c)
-        else out.push({ kind: 'group', cards: [c], key: `g-${c.key}` })
-      } else {
-        out.push({ kind: 'single', card: c })
-      }
-    }
-    return out
-  }
 
   return (
     <div className="shell">
@@ -776,31 +723,6 @@ export default function App() {
 
         <main className="main">
           {error && <div className="alert">{error}</div>}
-
-          {cards.length > 0 && (
-            <section className="timeline-wrap">
-              <div className="section-head">
-                <h2>编排过程</h2>
-                <span className="hint">四路检索并行执行，校验不通过会回退重排</span>
-              </div>
-              <div className="timeline" ref={timelineRef}>
-                {groupCards(cards).map((g) =>
-                  g.kind === 'group' ? (
-                    <div key={g.key} className="parallel-group">
-                      <span className="group-label">并行检索（同一 superstep）</span>
-                      <div className="parallel-cells">{g.cards.map(renderAgent)}</div>
-                    </div>
-                  ) : g.card.kind === 'edge' ? (
-                    <div key={g.card.key} className="edge">
-                      ↳ {g.card.reason}
-                    </div>
-                  ) : (
-                    renderAgent(g.card)
-                  ),
-                )}
-              </div>
-            </section>
-          )}
 
           {interruptInfo && (
             <section className="interrupt">

@@ -187,10 +187,22 @@ def _log_lines(node: str, upd: dict, state: TripState) -> list:
         elif node == "planner":
             it = upd["draft"]
             sights = sum(1 for d in it.days for i in d.items if i.type == "sight")
-            lines.append(
-                entry("planner", f"排出 {len(it.days)} 天 {sights} 个景点，预计 {it.total_cost:.0f} 元", group=group)
-            )
+            revision = state.get("revision", 0)
             over = it.total_cost - it.budget_total
+            if revision == 0 and over <= 0:
+                lead = "我排出"
+            elif revision == 0:
+                lead = "我先排出"
+            else:
+                lead = "按校验意见改好了，现在"
+            lines.append(
+                entry(
+                    "planner",
+                    f"{lead} {len(it.days)} 天 {sights} 个景点，总花费 {it.total_cost:.0f} 元",
+                    kind="speech",
+                    group=group,
+                )
+            )
             if over > 0:
                 lines.append(entry("planner", f"超出预算 {over:.0f} 元", kind="decision", group=group))
 
@@ -198,9 +210,9 @@ def _log_lines(node: str, upd: dict, state: TripState) -> list:
             c = upd["critique"]
             blockers = [i for i in c.issues if i.severity == "blocker"]
             if c.passed:
-                lines.append(entry("critic", f"通过，{len(c.issues)} 条提醒", group=group))
+                lines.append(entry("critic", f"没问题，可以定稿（{len(c.issues)} 条提醒）", kind="speech", group=group))
             else:
-                lines.append(entry("critic", f"未通过，{len(blockers)} 个阻断项", kind="decision", group=group))
+                lines.append(entry("critic", f"这份方案不行，{len(blockers)} 个问题：", kind="speech", group=group))
                 for i in blockers[:4]:
                     lines.append(entry("critic", i.message, kind="decision", group=group, depth=2))
     except Exception:

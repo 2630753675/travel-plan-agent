@@ -58,8 +58,14 @@ def main() -> int:
         check("校验状态存在", any("通过" in s or "未解决" in s for s in stats), str(stats))
 
         trace_cards = page.locator(".agent").count()
-        print(f"  编排过程卡片 {trace_cards} 个")
-        check("时间线有内容", trace_cards >= 7, str(trace_cards))
+        print(f"  编排过程卡片 {trace_cards} 个（已移入右侧抽屉）")
+        # 过程展示已从主区移到右侧执行轨迹抽屉，这里改为检查抽屉内容
+        page.get_by_role("button", name="执行轨迹").click()
+        page.wait_for_selector(".drawer", timeout=10000)
+        trace_rows = page.locator(".log-row").count()
+        print(f"  抽屉内轨迹 {trace_rows} 行")
+        check("轨迹有内容", trace_rows >= 7, str(trace_rows))
+        page.get_by_role("button", name="收起").click()
 
         page.screenshot(path=str(DOCS / "shot-ui-done.png"), full_page=True)
 
