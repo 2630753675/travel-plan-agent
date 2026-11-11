@@ -639,6 +639,140 @@ button:disabled {
   color: var(--accent);
 }
 
+.negotiation {
+  margin: 18px 0 4px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.neg-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.neg-head h2 {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.neg-outcome {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.neg-outcome.adopted {
+  color: var(--ok);
+}
+
+.neg-outcome.escalated {
+  color: var(--warn);
+}
+
+.neg-trigger {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.neg-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.neg-msg {
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 2px;
+  background: var(--panel-2);
+}
+
+.neg-msg.budget_officer {
+  border-left-color: var(--warn);
+}
+
+.neg-msg.experience_officer {
+  border-left-color: var(--accent);
+}
+
+.neg-msg.mediator {
+  border-left-color: var(--ok);
+}
+
+.neg-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.neg-name {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.neg-stance {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.neg-stance.object {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.neg-stance.escalate {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.neg-stance.adopt,
+.neg-stance.accept {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.neg-claim {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.neg-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.neg-evidence li {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.neg-label {
+  color: #5f6674;
+}
+
+.neg-value {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
 .empty {
   padding: 60px 0;
   text-align: center;

@@ -51,6 +51,7 @@ type Result = {
   critique: { passed: boolean; issues: Issue[]; suggestions: string[] }
   revision: number
   errors: string[]
+  negotiation?: Negotiation | null
 }
 
 const NODE_LABEL: Record<string, string> = {
@@ -127,6 +128,79 @@ function weekday(d: string) {
   return '日一二三四五六'[new Date(d + 'T00:00:00').getDay()]
 }
 
+type NegEvidence = { label: string; value: string }
+
+type NegMessage = {
+  round: number
+  speaker: string
+  stance: string
+  claim: string
+  evidence: NegEvidence[]
+  tool_calls: string[]
+}
+
+type Negotiation = {
+  triggered_by: string
+  rounds: NegMessage[]
+  outcome: string
+  adjustment: { drop_poi_ids: string[]; use_cheaper_hotel: boolean }
+  summary: string
+}
+
+const SPEAKER_LABEL: Record<string, string> = {
+  budget_officer: '预算官',
+  experience_officer: '体验官',
+  mediator: '调解者',
+}
+
+const STANCE_LABEL: Record<string, string> = {
+  propose: '提议',
+  object: '反对',
+  accept: '让步',
+  rule: '裁决',
+  adopt: '采纳',
+  escalate: '升级',
+}
+
+const OUTCOME_LABEL: Record<string, string> = {
+  adopted: '已达成方案',
+  escalated: '未达成一致，交给你决定',
+  no_change: '无需调整',
+}
+
+function NegotiationTrail({ neg }: { neg: Negotiation }) {
+  return (
+    <section className="negotiation">
+      <div className="neg-head">
+        <h2>协商过程</h2>
+        <span className={`neg-outcome ${neg.outcome}`}>{OUTCOME_LABEL[neg.outcome] ?? neg.outcome}</span>
+      </div>
+      <p className="neg-trigger">{neg.triggered_by}</p>
+      <ol className="neg-rounds">
+        {neg.rounds.map((m, i) => (
+          <li key={i} className={`neg-msg ${m.speaker}`}>
+            <div className="neg-who">
+              <span className="neg-name">{SPEAKER_LABEL[m.speaker] ?? m.speaker}</span>
+              <span className={`neg-stance ${m.stance}`}>{STANCE_LABEL[m.stance] ?? m.stance}</span>
+            </div>
+            <p className="neg-claim">{m.claim}</p>
+            {m.evidence.length > 0 && (
+              <ul className="neg-evidence">
+                {m.evidence.map((e, j) => (
+                  <li key={j}>
+                    <span className="neg-label">{e.label}</span>
+                    <span className="neg-value">{e.value}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
 type InterruptOption = { value: string; label: string }
 
 type InterruptInfo = {
@@ -137,6 +211,7 @@ type InterruptInfo = {
   ratio: number
   options: InterruptOption[]
   plan_id: string
+  negotiation?: Negotiation | null
 }
 
 export default function App() {
@@ -586,8 +661,11 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              {interruptInfo.negotiation && <NegotiationTrail neg={interruptInfo.negotiation} />}
             </section>
           )}
+
+          {result?.negotiation && <NegotiationTrail neg={result.negotiation} />}
 
           {result && (
             <section className="result">

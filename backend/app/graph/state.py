@@ -10,6 +10,7 @@ import operator
 from typing import Annotated, TypedDict
 
 from ..agents.lodging import LodgingPlan
+from ..agents.negotiators.protocol import NegotiationLog
 from ..agents.poi import PoiPlan
 from ..agents.transport import TransportPlan
 from ..agents.weather import WeatherPlan
@@ -27,4 +28,8 @@ class TripState(TypedDict, total=False):
     critique: Critique
     revision: int
     decision: str
+    negotiation: NegotiationLog
+    negotiated: bool
+    forced_drops: list[str]
+    force_cheaper_hotel: bool
     errors: Annotated[list[str], operator.add]

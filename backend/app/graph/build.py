@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..agents import clarify, critic, lodging, llm_selector, planner, poi, transport, weather
+from ..agents import negotiators
 from ..llm import LLMClient, TokenBudget
 from ..settings import AppSettings
 from ..tools.base import TravelSource
@@ -154,6 +155,8 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             critique=critique,
             revision=state.get("revision", 0),
             llm_selection=llm_selection,
+            forced_drops=set(state.get("forced_drops") or []),
+            force_cheaper_hotel=bool(state.get("force_cheaper_hotel")),
         )
         if settings.llm.enabled and llm_selection is None and not budget_pressure:
             # 模型启用但没拿到可用结果：必须让用户看到这次是规则生成的
@@ -171,6 +174,43 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             weather=state["weather"],
         )
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
+
+    async def negotiation_node(state: TripState) -> dict:
+        """预算官 vs 体验官，由调解者裁决。
+
+        只在模型可用时启用：没有模型就没有"主张"可言，直接走规则降配。
+        """
+        _emit({"phase": "start", "node": "negotiation"})
+        if not settings.llm.configured:
+            _emit(
+                {
+                    "phase": "end",
+                    "node": "negotiation",
+                    "summary": "模型未启用，跳过协商，直接走规则降配",
+                }
+            )
+            return {"negotiated": True}
+
+        client = LLMClient(
+            settings.llm,
+            settings.orchestration.node_timeout_s,
+            TokenBudget(settings.orchestration.token_budget),
+        )
+        try:
+            log, drops, cheaper = await negotiators.negotiate(
+                state["brief"], state["draft"], state["poi"].candidates, client
+            )
+        except Exception as e:
+            _emit({"phase": "end", "node": "negotiation", "summary": f"协商异常，回落规则：{e}"})
+            return {"negotiated": True, "errors": [f"negotiation: {e}"]}
+
+        _emit({"phase": "end", "node": "negotiation", "summary": log.summary})
+        return {
+            "negotiation": log,
+            "negotiated": True,
+            "forced_drops": sorted(drops),
+            "force_cheaper_hotel": cheaper,
+        }
 
     async def confirm_node(state: TripState) -> dict:
         """预算严重超支时暂停，让用户在三个选项里决定。
@@ -215,11 +255,22 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         over_ratio = (
             (draft.total_cost - brief.budget_total) / brief.budget_total if brief.budget_total else 0
         )
+        is_budget_issue = any(i.code == "BUDGET_EXCEEDED" for i in critique.issues)
 
         if critique.passed:
             return END
 
-        # 超支超过 20% 且还有重排余量：交给用户决定，不替用户拍板
+        # 1. 预算严重超支且还没协商过：让两个角色先谈一轮
+        #    （用和"是否打扰用户"相同的 20% 阈值，避免为几块钱惊动用户）
+        if (
+            settings.llm.configured
+            and is_budget_issue
+            and not state.get("negotiated")
+            and over_ratio > 0.2
+        ):
+            return "negotiation"
+
+        # 2. 谈完仍严重超支：交给用户拍板，不替他决定
         if (
             enable_interrupt
             and over_ratio > 0.2
@@ -237,6 +288,26 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "from": "critic",
                 "to": "planner",
                 "reason": "校验未通过，回退重排",
+            }
+        )
+        return "planner"
+
+    def route_after_negotiation(state: TripState) -> str:
+        log = state.get("negotiation")
+        if log is None:
+            return "planner"
+        if log.outcome in ("escalated", "no_change"):
+            # 谈不拢，或压根提不出可执行的削减项：都该由用户决定，
+            # 不能因为"没得砍"就悄悄给一份超支行程。
+            return "confirm" if enable_interrupt else "planner"
+        if log.adjustment.is_empty():
+            return END
+        _emit(
+            {
+                "phase": "edge",
+                "from": "negotiation",
+                "to": "planner",
+                "reason": "按协商结论执行降配",
             }
         )
         return "planner"
@@ -278,13 +349,21 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         g.add_edge(name, "planner")
     g.add_edge("planner", "critic")
 
+    g.add_node("negotiation", negotiation_node)
+
+    critic_targets: dict = {"planner": "planner", "negotiation": "negotiation", END: END}
+    if enable_interrupt:
+        critic_targets["confirm"] = "confirm"
+
+    g.add_conditional_edges("critic", route_after_critic, critic_targets)
+
+    negotiation_targets: dict = {"planner": "planner", END: END}
+    if enable_interrupt:
+        negotiation_targets["confirm"] = "confirm"
+    g.add_conditional_edges("negotiation", route_after_negotiation, negotiation_targets)
+
     if enable_interrupt:
         g.add_node("confirm", confirm_node)
-        g.add_conditional_edges(
-            "critic", route_after_critic, {"planner": "planner", "confirm": "confirm", END: END}
-        )
         g.add_conditional_edges("confirm", route_after_confirm, {"planner": "planner", END: END})
-    else:
-        g.add_conditional_edges("critic", route_after_critic, {"planner": "planner", END: END})
 
     return g.compile(checkpointer=checkpointer)

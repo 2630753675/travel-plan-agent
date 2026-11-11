@@ -137,8 +137,13 @@ def run(
     target_date: date | None = None,
     feedback: str = "",
     llm_selection: dict[date, list[str]] | None = None,
+    forced_drops: set[str] | None = None,
+    force_cheaper_hotel: bool = False,
 ) -> Itinerary:
-    budget_pressure = bool(critique and any(i.code == "BUDGET_EXCEEDED" for i in critique.issues))
+    budget_pressure = bool(
+        force_cheaper_hotel
+        or (critique and any(i.code == "BUDGET_EXCEEDED" for i in critique.issues))
+    )
     duration_pressure = bool(critique and any(i.code == "DAY_TOO_LONG" for i in critique.issues))
 
     hotel = _pick_hotel(lodging, brief, budget_pressure)
@@ -219,6 +224,12 @@ def run(
             picked = _select_for_day(
                 pool, used, d, rainy, want, prefer_free=budget_pressure, is_last_day=is_last
             )
+
+        # 协商结果：被点名的景点一律不排
+        if forced_drops:
+            picked = [p for p in picked if p.id not in forced_drops]
+            for pid in forced_drops:
+                used.add(pid)
 
         lunch_at: int | None = None
         for poi in picked:

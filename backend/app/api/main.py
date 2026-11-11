@@ -81,6 +81,10 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         info = dict(pending[0].value or {})
         info["plan_id"] = plan_id
         info["revision"] = final.get("revision", 0)
+        # 中断前若发生过协商，把轨迹一并给出，否则用户无从判断该选哪个
+        negotiation = final.get("negotiation")
+        if negotiation is not None:
+            info["negotiation"] = negotiation.model_dump(mode="json")
         yield _sse("interrupt", info)
         return
 
@@ -92,6 +96,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     critique: Critique = final["critique"]
     revision = final.get("revision", 0)
     decision = final.get("decision")
+    negotiation = final.get("negotiation")
 
     if decision == "accept":
         itinerary.warnings.append("你已确认接受超出预算的方案")
@@ -107,7 +112,9 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         critique.model_dump(mode="json"),
         trace,
         revision,
+        negotiation.model_dump(mode="json") if negotiation else None,
     )
+    negotiation = final.get("negotiation")
     yield _sse(
         "done",
         {
@@ -117,6 +124,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             "critique": critique.model_dump(mode="json"),
             "revision": revision,
             "decision": decision,
+            "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
             "errors": final.get("errors") or [],
         },
     )

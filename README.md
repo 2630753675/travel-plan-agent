@@ -171,6 +171,8 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_settings_ui.py  # 设置页交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_interrupt.py    # 人工介入：accept / downgrade / abort（需先起服务）
 .venv/Scripts/python.exe scripts/verify_interrupt_ui.py # 中断面板交互（需先起服务）
+.venv/Scripts/python.exe scripts/verify_negotiation.py  # 协商轨迹结构（需先起服务）
+.venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -189,6 +191,8 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_settings_ui | 7 组 10 项 | 通过（同上，只读模式） |
 | verify_interrupt | 3 组 18 项 | 通过 |
 | verify_interrupt_ui | 3 组 9 项 | 通过 |
+| verify_negotiation | 5 组 20 项 | 通过 |
+| verify_negotiation_ui | 3 组 8 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
@@ -196,6 +200,34 @@ $env:PYTHONPATH=(Get-Location).Path
 
 人工介入覆盖：超支 >20% 触发中断而非直接出结果、三个选项各自的结果、
 决策被记录进 warnings、无待确认中断时 resume 返回 400、降配后费用确实下降。
+
+协商覆盖：三条发言的角色与顺序、每条主张都带工具计算的证据、
+预算严重超支才触发协商（小额超支不打扰用户）、协商无进展时仍升级给用户、
+被砍景点不进最终行程、轨迹可持久化并回放。
+
+## 6.1 协商机制
+
+预算严重超支（>20%）时，不是让一个模型自己决定怎么省，而是两个**有明确立场**的角色各说各话：
+
+```
+预算官（只对钱负责）   → 提议砍掉 X、换便宜酒店，可省 N 元
+体验官（只对值不值负责）→ 用不可替代性评分判断 X 该不该保
+调解者（规则裁决）     → 达成方案 / 折中 / 升级给用户
+```
+
+关键在于**每个角色的判断都来自自己的计算工具**，不是同一份数据换一句 prompt：
+
+| 角色 | 工具 | 输出 |
+|---|---|---|
+| 预算官 | `day_cost_breakdown`、可砍清单扫描 | 每天钱花在哪、砍掉能省多少 |
+| 体验官 | `poi_irreplaceability`、`day_experience` | 每个景点在同城有多难被替代（0-1） |
+| 调解者 | 规则 | 按体验损失与用户偏好裁决 |
+
+不可替代性由同类稀缺度、时长、门票、室内外配比加权得出，纯规则、可解释。
+所以体验官能说"熊猫基地 0.676，砍掉后当天只剩 0.211"，而不是"我觉得可惜"。
+
+简化之处：一次协商固定三轮发言，不做多轮辩论；调解用规则而非第三个模型，
+以保证结论可复现。轨迹（谁说的、依据什么、结论如何）会完整返回并落库。
 
 ## 7. 已知限制
 
