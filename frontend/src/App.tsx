@@ -255,49 +255,57 @@ const KIND_MARK: Record<string, string> = {
   speech: '“',
 }
 
-function ActivityLog({ entries }: { entries: LogEntry[] }) {
+function LogGroups({ entries }: { entries: LogEntry[] }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  if (!entries || entries.length === 0) return null
-
   const groups = groupByStage(entries)
+  return (
+    <div className="log-groups">
+      {groups.map((g, gi) => {
+        const key = `${g.key}-${gi}`
+        const isCollapsed = collapsed[key]
+        return (
+          <div key={key} className={`log-group ${isCollapsed ? 'collapsed' : ''}`}>
+            <button
+              className="log-group-head"
+              onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
+            >
+              <span className="log-caret">{isCollapsed ? '▶' : '▼'}</span>
+              <span className="log-group-label">{g.label}</span>
+              <span className="log-group-ts">{g.ts}</span>
+            </button>
+            {!isCollapsed && (
+              <div className="log-group-body">
+                {chunkByActor(g.items.filter((e) => e.depth > 0)).map((chunk, ci) => (
+                  <div key={ci} className="log-chunk">
+                    <div className="log-chunk-head">{chunk.actor}</div>
+                    <ul className="log-list">
+                      {chunk.items.map((e, i) => (
+                        <li key={i} className={`log-row kind-${e.kind} depth-${e.depth}`}>
+                          <span className="log-mark">{KIND_MARK[e.kind] ?? '·'}</span>
+                          <span className="log-text">{e.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ActivityLog({ entries }: { entries: LogEntry[] }) {
+  if (!entries || entries.length === 0) return null
   return (
     <section className="activity">
       <div className="section-head">
         <h2>执行轨迹</h2>
         <span className="hint">{entries.length} 步 · 按阶段分组</span>
       </div>
-      <div className="log-groups">
-        {groups.map((g, gi) => {
-          const key = `${g.key}-${gi}`
-          const isCollapsed = collapsed[key]
-          return (
-            <div key={key} className={`log-group ${isCollapsed ? 'collapsed' : ''}`}>
-              <button className="log-group-head" onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}>
-                <span className="log-caret">{isCollapsed ? '▶' : '▼'}</span>
-                <span className="log-group-label">{g.label}</span>
-                <span className="log-group-ts">{g.ts}</span>
-              </button>
-              {!isCollapsed && (
-                <div className="log-group-body">
-                  {chunkByActor(g.items.filter((e) => e.depth > 0)).map((chunk, ci) => (
-                    <div key={ci} className="log-chunk">
-                      <div className="log-chunk-head">{chunk.actor}</div>
-                      <ul className="log-list">
-                        {chunk.items.map((e, i) => (
-                          <li key={i} className={`log-row kind-${e.kind} depth-${e.depth}`}>
-                            <span className="log-mark">{KIND_MARK[e.kind] ?? '·'}</span>
-                            <span className="log-text">{e.text}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+      <LogGroups entries={entries} />
     </section>
   )
 }
@@ -329,7 +337,10 @@ export default function App() {
   const [refineNote, setRefineNote] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [llmOn, setLlmOn] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [liveLogs, setLiveLogs] = useState<LogEntry[]>([])
   const timelineRef = useRef<HTMLDivElement>(null)
+  const drawerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetch('/api/config')
@@ -365,6 +376,7 @@ export default function App() {
             })),
         )
         setPhase('done')
+        if (rec.activity) setLiveLogs(rec.activity)
       })
       .catch(() => setError('该规划不存在或已失效'))
   }, [])
@@ -372,6 +384,12 @@ export default function App() {
   useEffect(() => {
     timelineRef.current?.scrollTo({ top: timelineRef.current.scrollHeight, behavior: 'smooth' })
   }, [cards])
+
+  // 轨迹面板跟随最新一条自动滚动
+  useEffect(() => {
+    if (!drawerOpen) return
+    drawerRef.current?.scrollTo({ top: drawerRef.current.scrollHeight, behavior: 'smooth' })
+  }, [liveLogs, drawerOpen])
 
   function pushTrace(ev: Trace) {
     if (ev.phase === 'start') {
@@ -415,17 +433,25 @@ export default function App() {
   }
 
   function handleEvent(name: string, data: any) {
-    if (name === 'trace') pushTrace(data)
-    else if (name === 'done') {
+    if (name === 'trace') {
+      if (data.phase === 'log' && data.entry) {
+        // 流式追加：每条轨迹在产生的瞬间就出现
+        setLiveLogs((prev) => [...prev, data.entry])
+      } else {
+        pushTrace(data)
+      }
+    } else if (name === 'done') {
       setResult(data)
       setPhase('done')
       setInterruptInfo(null)
+      if (data.activity) setLiveLogs(data.activity)
       const url = new URL(location.href)
       url.searchParams.set('plan', data.plan_id)
       history.replaceState(null, '', url)
     } else if (name === 'interrupt') {
       setInterruptInfo(data)
       setPhase('interrupt')
+      if (data.activity) setLiveLogs(data.activity)
     } else if (name === 'error') {
       setError(data.message)
       setPhase('error')
@@ -464,6 +490,7 @@ export default function App() {
     )
     setResult(null)
     setInterruptInfo(null)
+    setLiveLogs([])
     setError('')
     const body = {
       origin: form.origin,
@@ -582,11 +609,41 @@ export default function App() {
             {phase === 'done' && (result?.critique.passed ? '已完成' : '已完成 · 有未解项')}
             {phase === 'error' && '失败'}
           </div>
+          <button
+            className={`ghost ${drawerOpen ? 'active' : ''}`}
+            onClick={() => setDrawerOpen((v) => !v)}
+            disabled={liveLogs.length === 0 && phase === 'form'}
+          >
+            执行轨迹{liveLogs.length > 0 ? ` · ${liveLogs.length}` : ''}
+          </button>
           <button className="ghost" onClick={() => setSettingsOpen(true)}>
             设置
           </button>
         </div>
       </header>
+
+      {drawerOpen && (
+        <aside className="drawer">
+          <div className="drawer-head">
+            <div>
+              <h2>执行轨迹</h2>
+              <span className="drawer-sub">
+                {phase === 'running' ? '实时' : '已完成'} · {liveLogs.length} 步
+              </span>
+            </div>
+            <button className="ghost" onClick={() => setDrawerOpen(false)}>
+              收起
+            </button>
+          </div>
+          <div className="drawer-body" ref={drawerRef}>
+            {liveLogs.length === 0 ? (
+              <p className="muted">提交需求后，各 agent 的讨论与工具调用会实时出现在这里。</p>
+            ) : (
+              <LogGroups entries={liveLogs} />
+            )}
+          </div>
+        </aside>
+      )}
 
       {settingsOpen && (
         <SettingsPanel
@@ -780,15 +837,15 @@ export default function App() {
                 ))}
               </div>
               {interruptInfo.activity && interruptInfo.activity.length > 0 && (
-                <ActivityLog entries={interruptInfo.activity} />
+                <button className="ghost" onClick={() => setDrawerOpen(true)}>
+                  查看执行轨迹（{interruptInfo.activity.length} 步）
+                </button>
               )}
               {interruptInfo.negotiation && <NegotiationTrail neg={interruptInfo.negotiation} />}
             </section>
           )}
 
           {result?.negotiation && <NegotiationTrail neg={result.negotiation} />}
-
-          {result?.activity && <ActivityLog entries={result.activity} />}
 
           {result && (
             <section className="result">

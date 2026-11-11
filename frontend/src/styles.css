@@ -773,6 +773,51 @@ button:disabled {
   font-family: var(--mono);
 }
 
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: 470px;
+  max-width: 94vw;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-head h2 {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.drawer-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drawer-body {
+  flex: 1;
+  padding: 12px 14px 40px;
+  overflow-y: auto;
+}
+
+.ghost.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .activity {
   margin: 18px 0 4px;
 }

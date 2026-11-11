@@ -373,6 +373,10 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                     entry(m.speaker, f"{e.label}：{e.value}", group="negotiation", depth=2)
                 )
 
+        # 逐条推送，协商过程能实时看到"谁在说什么"
+        for line in lines:
+            _emit({"phase": "log", "entry": line.model_dump(mode="json")})
+
         return {
             "negotiation": log,
             "negotiated": True,
@@ -573,6 +577,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 lines.append(stage(NODE_GROUP[name]))
             lines.extend(_log_lines(name, result, state))
             result["log"] = list(result.get("log") or []) + lines
+            # 逐条推给前端，让轨迹像思考过程一样流式出现，而不是最后一次性给出
+            for line in lines:
+                _emit({"phase": "log", "entry": line.model_dump(mode="json")})
             _emit({"phase": "end", "node": name, "summary": _summarize(name, result)})
             return result
 

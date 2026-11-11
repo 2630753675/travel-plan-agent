@@ -127,12 +127,13 @@ $env:PYTHONPATH=(Get-Location).Path
 - 天气模板含 2 个雨天 → 检验室内优先与雨天提醒
 - 都江堰/青城山带"老人不宜"标签 → 检验人群过滤
 
-## 5. 执行轨迹
+## 5. 执行轨迹（右侧抽屉，流式）
 
-轨迹按三层组织，读起来是「阶段 → agent → 它调的工具有什么结果」：
+点顶栏「执行轨迹」打开右侧面板。各 agent 的讨论与工具调用**边执行边出现**，
+不是跑完才一次性给出——后端每产出一条轨迹就通过 SSE 推一条。
 
 ```
-▼ 并行检索                                        17:56:55
+▼ 并行检索                                        18:04:46
     住宿
       ⚙ search_hotels(成都 距市中心≤12km) → 5 家
       · 推荐 春熙路亚朵酒店（520 元/晚，距市中心 0.5 km）
@@ -144,21 +145,29 @@ $env:PYTHONPATH=(Get-Location).Path
       ⚙ search_flights(上海→成都 2026-11-20) → 4 条
       ⚙ search_flights(成都→上海 2026-11-24) → 3 条
       · 选中 MU5401 / CA4515，往返 2030 元
+
+▼ 预算与体验协商                                  18:05:12
+    预算官
+      “ 优先砍高价景点且保证每天仍有安排…
+      ⚙ cuttable_scan → 已执行
+      ! 拟砍掉：成都大熊猫繁育研究基地
+    体验官
+      “ 熊猫基地不可替代性 0.676 且适合老人，砍掉后当天仅剩 0.211
+      · 被砍项目不可替代性：0.68
+    调解者
+      “ 折中：砍掉 1 个可替代性较低的项目
 ```
 
-层级由 `(group, depth)` 两个字段决定：
+层级由 `(group, depth)` 决定：
 
 | depth | 含义 | 例子 |
 |---|---|---|
-| 0 | 阶段标题（可折叠） | 阶段: 并行检索 |
+| 0 | 阶段块标题（点击折叠） | 并行检索 |
 | 1 | agent 的动作或主张 | 选中 MU5401 / CA4515 |
 | 2 | 工具调用、证据、约束 | `search_flights(上海→成都 11-20) → 4 条` |
 
-协商阶段同样按这个结构展开：预算官 / 体验官 / 调解者各成一块，
-每块下面是它调用的工具与给出的证据。
-
 记录原则：只写具体事实（选中哪个航班、砍掉哪个景点、超了多少），
-不写「执行中/已完成」。轨迹随结果与中断一并下发，也落进 SQLite。
+不写「执行中/已完成」。轨迹随结果与中断一并下发，也落进 SQLite，分享链接回放时仍在。
 
 ## 6. 配置：全部在界面维护
 
@@ -207,6 +216,7 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_negotiation.py  # 协商轨迹结构（需先起服务）
 .venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
 .venv/Scripts/python.exe scripts/verify_mediation.py    # 协商裁决逻辑（纯单元，不需服务）
+.venv/Scripts/python.exe scripts/verify_trace_drawer.py # 轨迹抽屉与流式输出（需先起服务）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -228,6 +238,7 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_negotiation | 5 组 20 项 | 通过 |
 | verify_negotiation_ui | 3 组 8 项 | 通过 |
 | verify_mediation | 7 组 18 项 | 通过 |
+| verify_trace_drawer | 6 组 16 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
