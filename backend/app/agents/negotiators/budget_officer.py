@@ -39,9 +39,7 @@ def _cuttable(itinerary: Itinerary) -> list[dict]:
 
 
 def _hotel_option(itinerary: Itinerary) -> dict | None:
-    hotels = [
-        i for d in itinerary.days for i in d.items if i.type == "hotel"
-    ]
+    hotels = [i for d in itinerary.days for i in d.items if i.type == "hotel"]
     if not hotels:
         return None
     per_night = hotels[0].cost
@@ -49,7 +47,7 @@ def _hotel_option(itinerary: Itinerary) -> dict | None:
     return {
         "current_per_night": round(per_night, 2),
         "nights": nights,
-        "note": "还有更便宜的市内酒店可选，换过去每晚约省 260 元",
+        "note": "还有更便宜的市内酒店可选，具体差价要换过才知道",
     }
 
 
@@ -58,17 +56,38 @@ async def propose(
     itinerary: Itinerary,
     client: LLMClient,
     round_no: int = 1,
+    user_hint: str = "",
+    rejected: list[str] | None = None,
 ) -> Message:
+    """提出削减方案。
+
+    round_no > 1 时说明上一轮谈崩了、用户已给出倾向：
+    - user_hint 决定这次是继续省钱、还是干脆放弃省钱
+    - rejected 是上一轮被体验官否掉的项目，不能原样再提
+    """
     over = itinerary.total_cost - brief.budget_total
     cuttable = _cuttable(itinerary)
+    rejected = rejected or []
+    if rejected:
+        cuttable = [c for c in cuttable if c["title"] not in rejected]
     hotel = _hotel_option(itinerary)
     day_costs = [day_cost_breakdown(d) for d in itinerary.days]
+
+    round_context = ""
+    if round_no > 1:
+        round_context = f"""
+这是第 {round_no} 轮协商。上一轮你提的方案被体验官驳回，用户已经表态：
+「{user_hint}」
+
+如果用户倾向"保住体验"，就不要砍不可替代性高的景点，优先靠换酒店省钱；
+如果用户倾向"控制预算"，可以坚持砍，但要说清牺牲了什么。
+"""
 
     prompt = f"""行程超预算了，你要提出削减方案。
 
 总花费 {itinerary.total_cost:.0f} 元，预算 {brief.budget_total:.0f} 元，超出 {over:.0f} 元。
 同行人群：{brief.companions}，用户偏好：{brief.preferences or "无"}
-
+{round_context}
 每天花费：
 {json.dumps([{"date": d["date"], "total": d["total"], "by_type": d["by_type"]} for d in day_costs], ensure_ascii=False)}
 
@@ -81,10 +100,10 @@ async def propose(
 不要砍掉最后一个景点导致某天完全没安排。
 
 输出 JSON：
-{{"poi_ids":["p0x"],"use_cheaper_hotel":true,"claim":"不超过 40 字，说明你的取舍逻辑"}}"""
+{{"poi_ids":["p0x"],"use_cheaper_hotel":true,"claim":"不超过 50 字，说明你的取舍逻辑"}}"""
 
     try:
-        raw = await client.chat_json(SYSTEM, prompt, max_tokens=1200)
+        raw = await client.chat_json(SYSTEM, prompt)
     except LLMError:
         # 模型不可用时退化为"砍最便宜的几个"，保证功能不中断
         fallback = [c["poi_id"] for c in cuttable[:2] if c["poi_id"]]
@@ -111,7 +130,8 @@ async def propose(
         Evidence(label="砍景点可省", value=f"{saving:.0f} 元"),
     ]
     if use_hotel:
-        evidence.append(Evidence(label="换酒店可省", value="约 1040 元 / 4 晚"))
+        # 具体能省多少要换过才知道，这里不给编出来的数字
+        evidence.append(Evidence(label="换酒店", value="改为更便宜的市内酒店"))
     if picked:
         titles = [c["title"] for c in cuttable if c["poi_id"] in picked]
         evidence.append(Evidence(label="拟砍掉", value="、".join(titles)))

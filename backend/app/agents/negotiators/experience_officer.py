@@ -87,7 +87,7 @@ async def critique(
 {{"verdict":"accept"|"object","worst_id":"p0x","claim":"不超过 40 字，说明你保留或放手的理由"}}"""
 
     try:
-        raw = await client.chat_json(SYSTEM, prompt, max_tokens=1200)
+        raw = await client.chat_json(SYSTEM, prompt)
         verdict = str(raw.get("verdict", "")).lower()
         claim = str(raw.get("claim") or "").strip()
         if verdict not in ("accept", "object"):

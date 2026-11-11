@@ -80,6 +80,102 @@ def _summarize(node: str, upd: dict) -> str:
     return ""
 
 
+def _log_lines(node: str, upd: dict, state: TripState) -> list:
+    """把节点结果写成可读的动作日志。
+
+    只写具体事实（选中哪班机、砍掉哪个景点、超了多少），
+    不写"执行中/已完成"这类没有信息量的行。
+    """
+    from ..activity import entry
+
+    lines = []
+    try:
+        if node == "clarify":
+            b = state.get("brief")
+            if b is not None:
+                lines.append(
+                    entry(
+                        "clarify",
+                        f"需求归一化：{b.destination} {b.days} 天，{b.travelers} 人，"
+                        f"预算 {b.budget_total:.0f} 元，同行 {('、'.join(b.companions))}",
+                    )
+                )
+            for note in upd.get("notes") or []:
+                lines.append(entry("clarify", note, kind="decision"))
+        elif node == "transport":
+            p = upd["transport"]
+            if p.error:
+                lines.append(entry("transport", p.error, kind="decision"))
+            else:
+                out = p.chosen_outbound
+                back = p.chosen_inbound
+                lines.append(
+                    entry(
+                        "transport",
+                        f"去程 {len(p.outbound)} 班、返程 {len(p.inbound)} 班候选；"
+                        f"选中 {out.flight_no if out else '无'} / {back.flight_no if back else '无'}，"
+                        f"往返 {p.round_trip_cost:.0f} 元",
+                    )
+                )
+        elif node == "lodging":
+            p = upd["lodging"]
+            if p.error:
+                lines.append(entry("lodging", p.error, kind="decision"))
+            else:
+                lines.append(
+                    entry(
+                        "lodging",
+                        f"{len(p.candidates)} 家候选，推荐 {p.chosen.name}"
+                        f"（{p.chosen.price_per_night:.0f} 元/晚，距市中心 {p.chosen.distance_to_center_km} km）",
+                    )
+                )
+        elif node == "poi":
+            p = upd["poi"]
+            if p.error:
+                lines.append(entry("poi", p.error, kind="decision"))
+            else:
+                lines.append(entry("poi", f"{len(p.candidates)} 个可用景点"))
+                if p.excluded:
+                    lines.append(entry("poi", "按同行人群排除：" + "、".join(p.excluded)))
+        elif node == "weather":
+            p = upd["weather"]
+            if p.error:
+                lines.append(entry("weather", p.error, kind="decision"))
+            else:
+                rainy = [w.date for w in p.days if w.is_rainy]
+                lines.append(
+                    entry(
+                        "weather",
+                        f"{len(p.days)} 天天气；有雨 {len(rainy)} 天"
+                        + (f"（{'、'.join(str(d)[5:] for d in rainy)}）" if rainy else ""),
+                    )
+                )
+        elif node == "planner":
+            it = upd["draft"]
+            sights = sum(1 for d in it.days for i in d.items if i.type == "sight")
+            lines.append(
+                entry(
+                    "planner",
+                    f"排出 {len(it.days)} 天 {sights} 个景点，预计总花费 {it.total_cost:.0f} 元",
+                )
+            )
+            over = it.total_cost - it.budget_total
+            if over > 0:
+                lines.append(entry("planner", f"超出预算 {over:.0f} 元", kind="decision"))
+        elif node == "critic":
+            c = upd["critique"]
+            blockers = [i for i in c.issues if i.severity == "blocker"]
+            if c.passed:
+                lines.append(entry("critic", f"校验通过，{len(c.issues)} 条提醒"))
+            else:
+                lines.append(entry("critic", f"校验未通过，{len(blockers)} 个阻断项", kind="decision"))
+                for i in blockers[:4]:
+                    lines.append(entry("critic", i.message, kind="decision"))
+    except Exception:
+        pass
+    return lines
+
+
 def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None):
     settings = settings or AppSettings()
     max_revisions = settings.orchestration.max_revisions
@@ -176,11 +272,13 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
 
     async def negotiation_node(state: TripState) -> dict:
-        """预算官 vs 体验官，由调解者裁决。
-
-        只在模型可用时启用：没有模型就没有"主张"可言，直接走规则降配。
-        """
+        """预算官 vs 体验官，由调解者裁决。支持多轮：谈崩时交给用户表态后重谈。"""
         _emit({"phase": "start", "node": "negotiation"})
+        from ..activity import entry
+
+        round_no = int(state.get("neg_round", 1) or 1)
+        user_hint = state.get("user_hint", "") or ""
+
         if not settings.llm.configured:
             _emit(
                 {
@@ -189,7 +287,13 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                     "summary": "模型未启用，跳过协商，直接走规则降配",
                 }
             )
-            return {"negotiated": True}
+            return {
+                "negotiated": True,
+                "log": [
+                    entry("system", "阶段: 预算与体验协商", kind="stage"),
+                    entry("negotiation", "模型未启用，跳过协商", kind="decision"),
+                ],
+            }
 
         client = LLMClient(
             settings.llm,
@@ -198,18 +302,88 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         )
         try:
             log, drops, cheaper = await negotiators.negotiate(
-                state["brief"], state["draft"], state["poi"].candidates, client
+                state["brief"],
+                state["draft"],
+                state["poi"].candidates,
+                client,
+                round_no=round_no,
+                user_hint=user_hint,
+                history=state.get("negotiation"),
             )
         except Exception as e:
             _emit({"phase": "end", "node": "negotiation", "summary": f"协商异常，回落规则：{e}"})
-            return {"negotiated": True, "errors": [f"negotiation: {e}"]}
+            return {
+                "negotiated": True,
+                "errors": [f"negotiation: {e}"],
+                "log": [
+                    entry("system", "阶段: 预算与体验协商", kind="stage"),
+                    entry("negotiation", f"协商异常，回落规则：{e}", kind="decision"),
+                ],
+            }
 
         _emit({"phase": "end", "node": "negotiation", "summary": log.summary})
+
+        lines = [entry("system", f"阶段: 预算与体验协商（第 {round_no} 轮）", kind="stage")]
+        # 只记录本轮新增的发言，历史轮次已经在之前的日志里了
+        for m in log.rounds[-3:]:
+            lines.append(
+                entry(
+                    m.speaker,
+                    m.claim,
+                    kind="decision" if m.speaker == "mediator" else "action",
+                    detail="；".join(f"{e.label} {e.value}" for e in m.evidence),
+                )
+            )
+
         return {
             "negotiation": log,
             "negotiated": True,
+            "neg_round": round_no + 1,
             "forced_drops": sorted(drops),
             "force_cheaper_hotel": cheaper,
+            "log": lines,
+        }
+
+    async def ask_node(state: TripState) -> dict:
+        """协商僵持时暂停，让用户给倾向，然后带着这个倾向重谈。
+
+        这是 negotiate 的第二轮入口：用户表态是"继续协商"的输入，
+        不是"由用户自己拍板结束"。
+        """
+        from ..activity import entry
+
+        log = state.get("negotiation")
+        draft = state["draft"]
+        brief = state["brief"]
+        over = draft.total_cost - brief.budget_total
+        ratio = over / brief.budget_total if brief.budget_total else 0
+        deadlock = log.summary if log else "预算与体验无法两全"
+
+        _emit({"phase": "start", "node": "ask"})
+        choice = interrupt(
+            {
+                "type": "negotiation_deadlock",
+                "message": deadlock,
+                "total": round(draft.total_cost),
+                "budget": round(brief.budget_total),
+                "over": round(over),
+                "ratio": round(ratio, 3),
+                "options": [
+                    {"value": "体验优先：接受超支，保住这几个必去项", "label": "体验优先，接受超支"},
+                    {"value": "预算优先：可以砍掉高价值项目，控制在预算内", "label": "预算优先，砍掉贵的"},
+                    {"value": "先换便宜酒店或少排一天，再谈", "label": "先换酒店再谈"},
+                ],
+            }
+        )
+        _emit({"phase": "end", "node": "ask", "summary": f"你选择：{choice}"})
+
+        return {
+            "user_hint": str(choice),
+            "log": [
+                entry("system", "阶段: 协商僵持，请你定方向", kind="stage"),
+                entry("negotiation", f"僵持：{deadlock}", kind="question"),
+                entry("user", str(choice), kind="answer"),
+            ],
         }
 
     async def confirm_node(state: TripState) -> dict:
@@ -218,6 +392,8 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         这是副作用极小的节点：只调 interrupt()，不做任何计算，
         因为恢复时该节点会从头重放。
         """
+        from ..activity import entry
+
         draft = state["draft"]
         brief = state["brief"]
         over = draft.total_cost - brief.budget_total
@@ -246,7 +422,21 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 ),
             }
         )
-        return {"decision": str(decision)}
+        picked = {"accept": "接受超支", "downgrade": "要求降配重排", "abort": "取消"}.get(
+            str(decision), str(decision)
+        )
+        return {
+            "decision": str(decision),
+            "log": [
+                entry("system", "阶段: 等待你决定", kind="stage"),
+                entry(
+                    "confirm",
+                    f"超出预算 {over:.0f} 元（{ratio:.0%}），问你接受 / 降配 / 取消",
+                    kind="question",
+                ),
+                entry("user", f"选择：{picked}", kind="answer"),
+            ],
+        }
 
     def route_after_critic(state: TripState) -> str:
         critique = state["critique"]
@@ -297,8 +487,10 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         if log is None:
             return "planner"
         if log.outcome in ("escalated", "no_change"):
-            # 谈不拢，或压根提不出可执行的削减项：都该由用户决定，
+            # 僵持或压根没方案：先问用户要倾向，再带着倾向重谈一轮。
             # 不能因为"没得砍"就悄悄给一份超支行程。
+            if enable_interrupt and not state.get("user_hint"):
+                return "ask"
             return "confirm" if enable_interrupt else "planner"
         if log.adjustment.is_empty():
             return END
@@ -329,6 +521,11 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         async def node(state: TripState) -> dict:
             _emit({"phase": "start", "node": name})
             result = await fn(state)
+            from ..activity import STAGE_LABEL, entry
+
+            lines = [entry("system", f"阶段: {STAGE_LABEL.get(name, name)}", kind="stage")]
+            lines.extend(_log_lines(name, result, state))
+            result["log"] = list(result.get("log") or []) + lines
             _emit({"phase": "end", "node": name, "summary": _summarize(name, result)})
             return result
 
@@ -360,6 +557,10 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
     negotiation_targets: dict = {"planner": "planner", END: END}
     if enable_interrupt:
         negotiation_targets["confirm"] = "confirm"
+        g.add_node("ask", ask_node)
+        negotiation_targets["ask"] = "ask"
+        # 用户表态后带着倾向重谈一轮
+        g.add_edge("ask", "negotiation")
     g.add_conditional_edges("negotiation", route_after_negotiation, negotiation_targets)
 
     if enable_interrupt:

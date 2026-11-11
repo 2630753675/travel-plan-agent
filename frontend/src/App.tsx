@@ -52,6 +52,7 @@ type Result = {
   revision: number
   errors: string[]
   negotiation?: Negotiation | null
+  activity?: LogEntry[]
 }
 
 const NODE_LABEL: Record<string, string> = {
@@ -201,10 +202,46 @@ function NegotiationTrail({ neg }: { neg: Negotiation }) {
   )
 }
 
+type LogEntry = { ts: string; actor: string; kind: string; text: string; detail: string }
+
+const LOG_MARK: Record<string, string> = {
+  stage: '▸',
+  action: '·',
+  decision: '!',
+  question: '?',
+  answer: '✓',
+}
+
+function ActivityLog({ entries }: { entries: LogEntry[] }) {
+  if (!entries || entries.length === 0) return null
+  return (
+    <section className="activity">
+      <div className="section-head">
+        <h2>动作日志</h2>
+        <span className="hint">{entries.length} 条，按发生顺序</span>
+      </div>
+      <ol className="log-lines">
+        {entries.map((e, i) => (
+          <li key={i} className={`log-line ${e.kind}`}>
+            <span className="log-ts">{e.ts}</span>
+            <span className="log-actor">{e.actor}</span>
+            <span className="log-mark">{LOG_MARK[e.kind] ?? '·'}</span>
+            <span className="log-body">
+              <span className="log-text">{e.text}</span>
+              {e.detail && <span className="log-detail">{e.detail}</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
 type InterruptOption = { value: string; label: string }
 
 type InterruptInfo = {
   type: string
+  message?: string
   total: number
   budget: number
   over: number
@@ -212,6 +249,7 @@ type InterruptInfo = {
   options: InterruptOption[]
   plan_id: string
   negotiation?: Negotiation | null
+  activity?: LogEntry[]
 }
 
 export default function App() {
@@ -645,15 +683,30 @@ export default function App() {
           {interruptInfo && (
             <section className="interrupt">
               <div className="interrupt-head">
-                <h3>预算超支，需要你决定</h3>
+                <h3>
+                  {interruptInfo.type === 'negotiation_deadlock'
+                    ? '预算和体验谈不拢，需要你定方向'
+                    : '预算超支，需要你决定'}
+                </h3>
                 <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
               </div>
-              <p className="interrupt-body">
-                当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
-                预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元，
-                超出 <strong>{interruptInfo.over.toFixed(0)}</strong> 元。
-                系统没有替你决定，请选择：
-              </p>
+              {interruptInfo.type === 'negotiation_deadlock' && interruptInfo.message && (
+                <p className="interrupt-body">
+                  <strong>{interruptInfo.message}</strong>
+                  <br />
+                  当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
+                  预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元。
+                  你给个倾向，两位会带着这个倾向再谈一轮：
+                </p>
+              )}
+              {interruptInfo.type !== 'negotiation_deadlock' && (
+                <p className="interrupt-body">
+                  当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
+                  预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元，
+                  超出 <strong>{interruptInfo.over.toFixed(0)}</strong> 元。
+                  系统没有替你决定，请选择：
+                </p>
+              )}
               <div className="interrupt-actions">
                 {interruptInfo.options.map((o) => (
                   <button key={o.value} onClick={() => resumePlan(o.value)}>
@@ -661,11 +714,16 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              {interruptInfo.activity && interruptInfo.activity.length > 0 && (
+                <ActivityLog entries={interruptInfo.activity} />
+              )}
               {interruptInfo.negotiation && <NegotiationTrail neg={interruptInfo.negotiation} />}
             </section>
           )}
 
           {result?.negotiation && <NegotiationTrail neg={result.negotiation} />}
+
+          {result?.activity && <ActivityLog entries={result.activity} />}
 
           {result && (
             <section className="result">

@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS plans (
     critique    TEXT NOT NULL,
     trace       TEXT NOT NULL,
     revision    INTEGER NOT NULL DEFAULT 0,
-    negotiation TEXT
+    negotiation TEXT,
+    activity    TEXT
 );
 """
 
@@ -36,6 +37,8 @@ def _connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE plans ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
     if "negotiation" not in cols:
         conn.execute("ALTER TABLE plans ADD COLUMN negotiation TEXT")
+    if "activity" not in cols:
+        conn.execute("ALTER TABLE plans ADD COLUMN activity TEXT")
     return conn
 
 
@@ -51,12 +54,13 @@ def save(
     trace: list[dict],
     revision: int = 0,
     negotiation: dict | None = None,
+    activity: list[dict] | None = None,
 ) -> None:
     with _connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO plans "
-            "(id, created_at, brief, itinerary, critique, trace, revision, negotiation) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 plan_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -66,6 +70,7 @@ def save(
                 json.dumps(trace, ensure_ascii=False),
                 revision,
                 json.dumps(negotiation, ensure_ascii=False) if negotiation else None,
+                json.dumps(activity, ensure_ascii=False) if activity else None,
             ),
         )
 
@@ -73,7 +78,7 @@ def save(
 def load(plan_id: str) -> dict | None:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, created_at, brief, itinerary, critique, trace, revision, negotiation "
+            "SELECT id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity "
             "FROM plans WHERE id = ?",
             (plan_id,),
         ).fetchone()
@@ -88,4 +93,5 @@ def load(plan_id: str) -> dict | None:
         "trace": json.loads(row[5]),
         "revision": row[6],
         "negotiation": json.loads(row[7]) if row[7] else None,
+        "activity": json.loads(row[8]) if row[8] else [],
     }

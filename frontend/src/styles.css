@@ -773,6 +773,103 @@ button:disabled {
   font-family: var(--mono);
 }
 
+.activity {
+  margin: 18px 0 4px;
+}
+
+.activity .section-head {
+  margin-bottom: 8px;
+}
+
+.log-lines {
+  margin: 0;
+  padding: 10px 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 62px 84px 12px 1fr;
+  gap: 8px;
+  padding: 3px 14px;
+  align-items: baseline;
+}
+
+.log-line:hover {
+  background: var(--panel-2);
+}
+
+.log-ts {
+  color: #4d5566;
+}
+
+.log-actor {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-mark {
+  color: #4d5566;
+  text-align: center;
+}
+
+.log-body {
+  min-width: 0;
+}
+
+.log-text {
+  color: var(--text);
+}
+
+.log-detail {
+  display: block;
+  margin-top: 1px;
+  color: #5f6674;
+  font-size: 11px;
+}
+
+.log-line.stage .log-text {
+  color: var(--muted);
+}
+
+.log-line.stage .log-actor {
+  color: #4d5566;
+}
+
+.log-line.decision .log-mark {
+  color: var(--warn);
+}
+
+.log-line.decision .log-text {
+  color: #e8d5a8;
+}
+
+.log-line.question .log-mark {
+  color: var(--accent);
+}
+
+.log-line.question .log-text {
+  color: var(--accent);
+}
+
+.log-line.answer .log-mark {
+  color: var(--ok);
+}
+
+.log-line.answer .log-text {
+  color: var(--ok);
+}
+
 .empty {
   padding: 60px 0;
   text-align: center;

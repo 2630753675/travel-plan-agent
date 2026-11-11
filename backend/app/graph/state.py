@@ -14,7 +14,7 @@ from ..agents.negotiators.protocol import NegotiationLog
 from ..agents.poi import PoiPlan
 from ..agents.transport import TransportPlan
 from ..agents.weather import WeatherPlan
-from ..models import Critique, Itinerary, TripBrief
+from ..models import Critique, Itinerary, LogEntry, TripBrief
 
 
 class TripState(TypedDict, total=False):
@@ -32,4 +32,5 @@ class TripState(TypedDict, total=False):
     negotiated: bool
     forced_drops: list[str]
     force_cheaper_hotel: bool
+    log: Annotated[list[LogEntry], operator.add]
     errors: Annotated[list[str], operator.add]

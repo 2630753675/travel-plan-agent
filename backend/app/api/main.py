@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
-from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,7 +45,9 @@ class RefineRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    decision: Literal["accept", "downgrade", "abort"]
+    # 预算超支用 accept/downgrade/abort；
+    # 协商僵持时这里是用户选中的倾向文本，两种都在同一个恢复入口
+    decision: str
 
 
 # interrupt/resume 需要 checkpointer。这里用进程内存储：
@@ -85,6 +86,8 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         negotiation = final.get("negotiation")
         if negotiation is not None:
             info["negotiation"] = negotiation.model_dump(mode="json")
+        activity = final.get("log") or []
+        info["activity"] = [e.model_dump(mode="json") for e in activity]
         yield _sse("interrupt", info)
         return
 
@@ -113,6 +116,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         trace,
         revision,
         negotiation.model_dump(mode="json") if negotiation else None,
+        [e.model_dump(mode="json") for e in (final.get("log") or [])],
     )
     negotiation = final.get("negotiation")
     yield _sse(
@@ -125,6 +129,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             "revision": revision,
             "decision": decision,
             "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
+            "activity": [e.model_dump(mode="json") for e in (final.get("log") or [])],
             "errors": final.get("errors") or [],
         },
     )

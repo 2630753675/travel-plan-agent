@@ -136,6 +136,20 @@ class Issue(BaseModel):
     message: str
 
 
+class LogEntry(BaseModel):
+    """动作日志的一行：谁、在什么时候、做了什么。
+
+    轨迹的价值在于"每一步都能查"——所以这里记录的必须是具体动作
+    （选中了哪个航班、砍掉了哪个景点），不是"执行中"这种空话。
+    """
+
+    ts: str
+    actor: str
+    kind: Literal["stage", "action", "decision", "question", "answer"] = "action"
+    text: str
+    detail: str = ""
+
+
 class Critique(BaseModel):
     passed: bool
     issues: list[Issue] = Field(default_factory=list)

@@ -30,10 +30,13 @@ def rule(
     budget_total: float,
     round_no: int = 1,
     titles_map: dict[str, str] | None = None,
+    final_round: bool = False,
 ) -> tuple[Message, Adjustment, str]:
     """返回 (调解者发言, 调整方案, 结果状态)。
 
     结果状态：adopted / escalated / no_change
+    final_round=True 表示用户已经表过态、这是最后一轮，
+    此时不允许再升级——必须给方案。
     """
     titles_map = titles_map or {}
     over = total_cost - budget_total
@@ -108,7 +111,27 @@ def rule(
             "adopted",
         )
 
-    # 4. 全部都是高价值项目：不替用户决定
+    # 4. 全部都是高价值项目
+    #    还有机会问用户 → 升级；已经问过一轮 → 不能再拖，必须给方案
+    if final_round:
+        adjustment = Adjustment(drop_poi_ids=list(proposed_ids), use_cheaper_hotel=True)
+        return (
+            Message(
+                round=round_no,
+                speaker="mediator",
+                stance="adopt",
+                claim="你已表态，这一轮不再往返：按预算优先执行削减，体验损失记录在案",
+                evidence=[
+                    Evidence(label="超出预算", value=f"{over:.0f} 元（{over / budget_total:.0%}）"),
+                    Evidence(label="裁决依据", value="用户已表态，必须给出可执行方案"),
+                    Evidence(label="牺牲", value="、".join(titles_map.get(p, p) for p in proposed_ids)),
+                ],
+                tool_calls=["rule_based_mediate", "final_round_decision"],
+            ),
+            adjustment,
+            "adopted",
+        )
+
     titles = "、".join(titles_map.get(pid, pid) for pid in proposed_ids)
     return (
         Message(
@@ -117,7 +140,7 @@ def rule(
             stance="escalate",
             claim=(
                 f"预算官想砍的项目全部难以替代（最低 {min(scores.get(p, 0) for p in proposed_ids):.2f}），"
-                "双方无法达成一致，交给你决定"
+                "双方无法达成一致，需要你给个倾向"
             ),
             evidence=[
                 Evidence(label="超出预算", value=f"{over:.0f} 元（{over / budget_total:.0%}）"),
