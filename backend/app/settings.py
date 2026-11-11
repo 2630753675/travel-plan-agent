@@ -35,8 +35,14 @@ class LLMSettings(BaseModel):
     temperature: float = Field(default=0.3, ge=0, le=2)
 
     @property
+    def has_credentials(self) -> bool:
+        """凭据是否齐全。仅用于连通性测试：不要求已启用。"""
+        return bool(self.api_key and self.base_url and self.model)
+
+    @property
     def configured(self) -> bool:
-        return bool(self.enabled and self.api_key and self.base_url and self.model)
+        """是否真正参与规划：已启用且凭据齐全。"""
+        return bool(self.enabled and self.has_credentials)
 
 
 class OrchestrationSettings(BaseModel):

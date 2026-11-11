@@ -107,11 +107,18 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
         body: JSON.stringify({ llm: body.llm }),
       })
       const data = await res.json()
-      setMsg(
-        data.ok
-          ? { ok: true, text: `连接成功：${data.reply}` }
-          : { ok: false, text: `连接失败：${data.error ?? '未知错误'}` },
-      )
+      if (data.ok && !body.llm.enabled) {
+        setMsg({
+          ok: true,
+          text: `连接正常：${data.reply}。若要用于规划，请勾选「启用模型」并保存。`,
+        })
+      } else {
+        setMsg(
+          data.ok
+            ? { ok: true, text: `连接成功：${data.reply}` }
+            : { ok: false, text: `连接失败：${data.error ?? '未知错误'}` },
+        )
+      }
     } catch (e) {
       setMsg({ ok: false, text: `请求失败：${String(e)}` })
     } finally {

@@ -135,6 +135,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [refining, setRefining] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<string, string>>({})
+  const [refineNote, setRefineNote] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [llmOn, setLlmOn] = useState(false)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -286,6 +287,10 @@ export default function App() {
       const data = await res.json()
       setResult({ ...result, itinerary: data.itinerary, critique: data.critique, revision: data.revision ?? result.revision })
       setFeedback((f) => ({ ...f, [day]: '' }))
+      setRefineNote((n) => ({
+        ...n,
+        [day]: data.refine_source === 'model' ? '已由模型理解意见后重排' : '已按规则重排',
+      }))
     } catch (e) {
       setError(String(e))
     } finally {
@@ -592,6 +597,7 @@ export default function App() {
                         {refining === day.date ? '重排中…' : '重排这一天'}
                       </button>
                     </div>
+                    {refineNote[day.date] && <p className="refine-note">{refineNote[day.date]}</p>}
                   </article>
                 ))}
               </div>

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -35,7 +36,7 @@ class TokenBudget:
         return self.used > self.budget
 
 
-def _post(url: str, payload: dict, api_key: str, timeout: float) -> dict:
+def _post(url: str, payload: dict, api_key: str, timeout: float, host: str) -> dict:
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
         url,
@@ -54,7 +55,10 @@ def _post(url: str, payload: dict, api_key: str, timeout: float) -> dict:
         detail = e.read().decode(errors="replace")[:200]
         raise LLMError(f"HTTP {e.code}: {detail}") from e
     except urllib.error.URLError as e:
-        raise LLMError(f"网络不可达: {e.reason}") from e
+        reason = str(getattr(e, "reason", e))
+        if "getaddrinfo" in reason or "Name or service not known" in reason or "nodename" in reason:
+            raise LLMError(f"域名无法解析：{host}，请确认接口地址是否写错") from e
+        raise LLMError(f"无法连接 {host}：{reason}") from e
     except TimeoutError as e:
         raise LLMError("请求超时") from e
 
@@ -69,9 +73,18 @@ class LLMClient:
     def _endpoint(self) -> str:
         return self.cfg.base_url.rstrip("/") + "/chat/completions"
 
-    async def chat_json(self, system: str, user: str, *, max_tokens: int = 2000) -> dict:
-        if not self.cfg.configured:
-            raise LLMError("模型未配置")
+    @property
+    def _host(self) -> str:
+        from urllib.parse import urlparse
+
+        return urlparse(self.cfg.base_url).hostname or self.cfg.base_url
+
+    async def _complete(
+        self, system: str, user: str, *, max_tokens: int = 2000, json_mode: bool = False
+    ) -> str:
+        """发一次请求并返回 content 原文。网络与结构错误统一抛 LLMError。"""
+        if not self.cfg.has_credentials:
+            raise LLMError("缺少 base_url / model / api_key")
 
         if self.budget:
             self.budget.add(system + user)
@@ -86,32 +99,98 @@ class LLMClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "response_format": {"type": "json_object"},
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
         # urllib 是阻塞的，放线程里跑，避免阻塞事件循环
         data = await asyncio.wait_for(
-            asyncio.to_thread(_post, self._endpoint, payload, self.cfg.api_key, float(self.timeout_s)),
+            asyncio.to_thread(
+                _post, self._endpoint, payload, self.cfg.api_key, float(self.timeout_s), self._host
+            ),
             timeout=self.timeout_s + 1,
         )
 
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError("响应结构不符合 OpenAI 兼容格式") from e
 
+        content = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or ""
+        finish = choice.get("finish_reason")
+
+        if not content.strip():
+            if finish == "length":
+                raise LLMError(
+                    f"输出被截断：max_tokens={max_tokens} 不足。"
+                    "推理模型会先消耗 token 思考，请调大节点超时/换非推理模型"
+                )
+            if reasoning:
+                raise LLMError(
+                    f"模型只输出了推理过程没有最终答案（finish_reason={finish}）"
+                )
+            raise LLMError("模型返回了空内容")
+
+        if finish == "length":
+            # 内容非空但被截断：JSON 大概率不完整，宁可降级也不要半截数据
+            raise LLMError(f"输出被截断（max_tokens={max_tokens}），结果不可信")
+
         if self.budget:
             self.budget.add(content)
+        return content
 
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            raise LLMError(f"模型输出不是合法 JSON: {content[:120]}") from e
+    async def chat_json(self, system: str, user: str, *, max_tokens: int = 4000) -> dict:
+        """要求 JSON 输出。模型偶尔会用代码块包裹或加解释，这里做容错提取。"""
+        content = await self._complete(system, user, max_tokens=max_tokens, json_mode=True)
+        return _extract_json(content)
 
     async def ping(self) -> str:
-        """设置页的连通性检测：发一个最小请求，返回模型回显内容。"""
-        result = await self.chat_json(
-            "只输出 JSON。",
-            '回 {"ok": true, "model": "<你的模型名>"}',
-            max_tokens=64,
+        """设置页的连通性检测。
+
+        只验证"能不能调通"，不要求模型遵守 JSON 或任何格式约定——
+        格式约束属于具体任务，不该成为连通性测试的通过条件。
+        推理模型会先用 token 思考，因此这里给足额度。
+        """
+        content = await self._complete(
+            "你是一个连通性测试助手，回答越短越好。",
+            "回复两个字：正常",
+            max_tokens=512,
         )
-        return str(result)
+        return content.strip()[:80]
+
+
+def _extract_json(text: str) -> dict:
+    """从模型输出里取出 JSON 对象。
+
+    依次尝试：整体解析 → ```json 代码块 → 第一个 { 到最后一个 }。
+    全部失败才算失败，避免因为多说了两句话就整条链路降级。
+    """
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    fenced = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    if fenced:
+        try:
+            parsed = json.loads(fenced.group(1).strip())
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        try:
+            parsed = json.loads(text[start : end + 1])
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise LLMError(f"模型输出不是合法 JSON: {text[:120]}")

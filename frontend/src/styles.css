@@ -515,6 +515,13 @@ button:disabled {
   color: var(--accent);
 }
 
+.refine-note {
+  margin: 0;
+  padding: 0 16px 10px;
+  color: var(--ok);
+  font-size: 11px;
+}
+
 .issues {
   margin-top: 24px;
 }

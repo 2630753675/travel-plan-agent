@@ -19,9 +19,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from .. import settings as config_store
-from ..agents import critic, lodging, planner, poi, transport, weather
+from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..graph.build import build
-from ..llm import LLMClient, LLMError
+from ..llm import LLMClient, LLMError, TokenBudget
 from ..models import Critique, Itinerary, TripBrief
 from ..settings import AppSettings
 from ..tools.factory import make_source
@@ -140,6 +140,32 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         if match:
             l_plan.chosen = match
 
+    target_day = next(d for d in itinerary.days if d.date == target)
+
+    # 模型启用时由模型理解反馈；失败或未启用则回落关键词规则
+    llm_selection = None
+    refine_source = "rule"
+    if cfg.llm.configured:
+        used_elsewhere = {
+            i.ref_id
+            for d in itinerary.days
+            if d.date != target
+            for i in d.items
+            if i.type == "sight" and i.ref_id
+        }
+        is_rainy = any(w.date == target and w.is_rainy for w in w_plan.days)
+        client = LLMClient(
+            cfg.llm,
+            cfg.orchestration.node_timeout_s,
+            TokenBudget(cfg.orchestration.token_budget),
+        )
+        picked = await llm_refiner.refine_day(
+            brief, target_day, body.feedback, p_plan.candidates, used_elsewhere, is_rainy, client
+        )
+        if picked is not None:
+            llm_selection = {target: picked}
+            refine_source = "model"
+
     frozen = {d.date: d for d in itinerary.days}
     new_itinerary = planner.run(
         brief=brief,
@@ -150,6 +176,7 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         frozen=frozen,
         target_date=target,
         feedback=body.feedback,
+        llm_selection=llm_selection,
     )
     new_critique = critic.run(brief, new_itinerary, p_plan, t_plan, w_plan)
 
@@ -159,7 +186,8 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         new_itinerary.model_dump(mode="json"),
         new_critique.model_dump(mode="json"),
         record["trace"]
-        + [{"phase": "refine", "node": "planner", "target": str(target), "feedback": body.feedback}],
+        + [{"phase": "refine", "node": "planner", "target": str(target),
+            "feedback": body.feedback, "source": refine_source}],
         record.get("revision", 0),
     )
     return {
@@ -167,6 +195,7 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         "itinerary": new_itinerary.model_dump(mode="json"),
         "critique": new_critique.model_dump(mode="json"),
         "revision": record.get("revision", 0),
+        "refine_source": refine_source,
     }
 
 
@@ -189,7 +218,10 @@ def put_config(body: dict):
 
 @app.post("/api/config/test")
 async def test_config(body: dict | None = None):
-    """连通性检测。body 可带尚未保存的表单值，先合再测。"""
+    """连通性检测。body 可带尚未保存的表单值，先合再测。
+
+    只要求凭据齐全，不要求「启用模型」——先测通再决定是否启用是更自然的顺序。
+    """
     cfg = config_store.load()
     if body:
         try:
@@ -197,14 +229,25 @@ async def test_config(body: dict | None = None):
         except ValidationError as e:
             first = e.errors()[0]
             raise HTTPException(status_code=400, detail=str(first["msg"])) from e
-    if not cfg.llm.configured:
-        return {"ok": False, "error": "模型未启用，或 base_url / model / api_key 不完整"}
+
+    missing = [
+        name
+        for name, value in (
+            ("接口地址 base_url", cfg.llm.base_url),
+            ("模型名 model", cfg.llm.model),
+            ("API Key", cfg.llm.api_key),
+        )
+        if not value
+    ]
+    if missing:
+        return {"ok": False, "error": "请先填写：" + "、".join(missing)}
+
     client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s)
     try:
         reply = await client.ping()
     except LLMError as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "reply": reply}
+    return {"ok": True, "reply": reply, "enabled": cfg.llm.enabled}
 
 
 @app.get("/api/health")
