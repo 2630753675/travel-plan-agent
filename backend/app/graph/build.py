@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from ..agents import clarify, critic, lodging, llm_selector, planner, poi, transport, weather
 from ..llm import LLMClient, TokenBudget
@@ -78,9 +79,11 @@ def _summarize(node: str, upd: dict) -> str:
     return ""
 
 
-def build(source: TravelSource, settings: AppSettings | None = None):
+def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None):
     settings = settings or AppSettings()
     max_revisions = settings.orchestration.max_revisions
+    # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"
+    enable_interrupt = checkpointer is not None
 
     async def clarify_node(state: TripState) -> dict:
         result = clarify.run(state["brief"])
@@ -127,8 +130,15 @@ def build(source: TravelSource, settings: AppSettings | None = None):
         return {"weather": plan}
 
     async def planner_node(state: TripState) -> dict:
+        critique = state.get("critique")
+        # 预算已被判定超支时不再交给模型自由发挥：
+        # 降配是用户明确的省钱诉求，规则层"换便宜酒店 + 优先免费景点"更可预测。
+        budget_pressure = bool(
+            critique and any(i.code == "BUDGET_EXCEEDED" for i in critique.issues)
+        )
+
         llm_selection = None
-        if settings.llm.configured:
+        if settings.llm.configured and not budget_pressure:
             budget = TokenBudget(settings.orchestration.token_budget)
             client = LLMClient(settings.llm, settings.orchestration.node_timeout_s, budget)
             llm_selection = await llm_selector.select_pois(
@@ -141,13 +151,15 @@ def build(source: TravelSource, settings: AppSettings | None = None):
             lodging=state["lodging"],
             poi_plan=state["poi"],
             weather=state["weather"],
-            critique=state.get("critique"),
+            critique=critique,
             revision=state.get("revision", 0),
             llm_selection=llm_selection,
         )
-        if settings.llm.enabled and llm_selection is None:
+        if settings.llm.enabled and llm_selection is None and not budget_pressure:
             # 模型启用但没拿到可用结果：必须让用户看到这次是规则生成的
             itinerary.warnings.append("模型选择不可用，本次行程由规则引擎生成")
+        if budget_pressure and settings.llm.enabled:
+            itinerary.warnings.append("降配重排由规则引擎执行，以保证确实省钱")
         return {"draft": itinerary}
 
     async def critic_node(state: TripState) -> dict:
@@ -160,10 +172,62 @@ def build(source: TravelSource, settings: AppSettings | None = None):
         )
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
 
+    async def confirm_node(state: TripState) -> dict:
+        """预算严重超支时暂停，让用户在三个选项里决定。
+
+        这是副作用极小的节点：只调 interrupt()，不做任何计算，
+        因为恢复时该节点会从头重放。
+        """
+        draft = state["draft"]
+        brief = state["brief"]
+        over = draft.total_cost - brief.budget_total
+        ratio = over / brief.budget_total if brief.budget_total else 0
+        _emit({"phase": "start", "node": "confirm"})
+        decision = interrupt(
+            {
+                "type": "budget_overrun",
+                "total": round(draft.total_cost),
+                "budget": round(brief.budget_total),
+                "over": round(over),
+                "ratio": round(ratio, 3),
+                "options": [
+                    {"value": "accept", "label": "接受超支，就这样"},
+                    {"value": "downgrade", "label": "降配重排（换便宜酒店/减少付费景点）"},
+                    {"value": "abort", "label": "取消，不要这份行程"},
+                ],
+            }
+        )
+        _emit(
+            {
+                "phase": "end",
+                "node": "confirm",
+                "summary": {"accept": "已接受超支", "downgrade": "要求降配重排", "abort": "已取消"}.get(
+                    str(decision), str(decision)
+                ),
+            }
+        )
+        return {"decision": str(decision)}
+
     def route_after_critic(state: TripState) -> str:
         critique = state["critique"]
+        draft = state["draft"]
+        brief = state["brief"]
+        over_ratio = (
+            (draft.total_cost - brief.budget_total) / brief.budget_total if brief.budget_total else 0
+        )
+
         if critique.passed:
             return END
+
+        # 超支超过 20% 且还有重排余量：交给用户决定，不替用户拍板
+        if (
+            enable_interrupt
+            and over_ratio > 0.2
+            and state.get("revision", 0) < max_revisions
+            and not state.get("decision")
+        ):
+            return "confirm"
+
         if state.get("revision", 0) >= max_revisions:
             # 达到上限强制放行，由 warnings 提示未解决的 blocker
             return END
@@ -176,6 +240,19 @@ def build(source: TravelSource, settings: AppSettings | None = None):
             }
         )
         return "planner"
+
+    def route_after_confirm(state: TripState) -> str:
+        if state.get("decision") == "downgrade":
+            _emit(
+                {
+                    "phase": "edge",
+                    "from": "confirm",
+                    "to": "planner",
+                    "reason": "按你的选择降配重排",
+                }
+            )
+            return "planner"
+        return END
 
     def wrap(name: str, fn):
         async def node(state: TripState) -> dict:
@@ -200,6 +277,14 @@ def build(source: TravelSource, settings: AppSettings | None = None):
         g.add_edge("clarify", name)
         g.add_edge(name, "planner")
     g.add_edge("planner", "critic")
-    g.add_conditional_edges("critic", route_after_critic, {"planner": "planner", END: END})
 
-    return g.compile()
+    if enable_interrupt:
+        g.add_node("confirm", confirm_node)
+        g.add_conditional_edges(
+            "critic", route_after_critic, {"planner": "planner", "confirm": "confirm", END: END}
+        )
+        g.add_conditional_edges("confirm", route_after_confirm, {"planner": "planner", END: END})
+    else:
+        g.add_conditional_edges("critic", route_after_critic, {"planner": "planner", END: END})
+
+    return g.compile(checkpointer=checkpointer)

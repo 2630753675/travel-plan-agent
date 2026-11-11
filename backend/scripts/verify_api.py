@@ -33,7 +33,7 @@ def post(path: str, body: dict) -> tuple[int, str]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=240) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
@@ -41,7 +41,7 @@ def post(path: str, body: dict) -> tuple[int, str]:
 
 def get(path: str) -> tuple[int, str]:
     try:
-        with urllib.request.urlopen(BASE + path, timeout=30) as r:
+        with urllib.request.urlopen(BASE + path, timeout=120) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()

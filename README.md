@@ -20,14 +20,20 @@
                      planner（排程）
                           │
                       critic（可行性校验）
-                     ┌────┴─────┐
-             未通过且未达上限    通过 / 达上限
-                     ▼          ▼
-                  planner      END
+        ┌─────────────────┼─────────────────────┐
+   通过 / 达上限      超支 > 20%          未通过且未达上限
+        ▼                 ▼                     ▼
+       END         confirm（中断等人）        planner
+                          │
+              ┌───────────┼───────────┐
+           accept     downgrade      abort
+              ▼           ▼             ▼
+             END       planner         END
 ```
 
 四个检索 agent 并行执行，任一失败只降级该路结果，不阻断整体；
 `critic` 只判可行性、`planner` 只负责排程，职责分离让"为什么改了这一版"可追溯。
+预算超支超过 20% 时不替用户拍板，而是中断执行让用户在三个选项里选。
 
 ## 2. 目录
 
@@ -163,6 +169,8 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_ui.py           # 浏览器交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_settings.py     # 配置层 + LLM 接入（需先起服务）
 .venv/Scripts/python.exe scripts/verify_settings_ui.py  # 设置页交互（需先起服务）
+.venv/Scripts/python.exe scripts/verify_interrupt.py    # 人工介入：accept / downgrade / abort（需先起服务）
+.venv/Scripts/python.exe scripts/verify_interrupt_ui.py # 中断面板交互（需先起服务）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -177,12 +185,17 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_edge_cases | 11 条用例 × 5 项不变量 | 通过 |
 | verify_api | 5 组 16 项 | 通过 |
 | verify_ui | 4 组浏览器交互 | 通过 |
-| verify_settings | 11 组 24 项 | 通过 |
-| verify_settings_ui | 7 组 10 项 | 通过 |
+| verify_settings | 11 组 24 项 | 通过（有真实密钥时自动跳过覆写用例） |
+| verify_settings_ui | 7 组 10 项 | 通过（同上，只读模式） |
+| verify_interrupt | 3 组 18 项 | 通过 |
+| verify_interrupt_ui | 3 组 9 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
 模型故障回落并提示、`max_revisions` 立即生效、设置页保存后顶栏模式切换。
+
+人工介入覆盖：超支 >20% 触发中断而非直接出结果、三个选项各自的结果、
+决策被记录进 warnings、无待确认中断时 resume 返回 400、降配后费用确实下降。
 
 ## 7. 已知限制
 
@@ -195,6 +208,9 @@ $env:PYTHONPATH=(Get-Location).Path
 - **推理模型需要更大的 max_tokens**：`deepseek-flash` 这类模型会先把 token 花在 `reasoning_content`，
   `content` 才是答案。额度不足时会返回空 `content` 且 `finish_reason=length`，
   系统明确报"输出被截断"并降级，不会拿半截 JSON 去用。
+- **中断用的 checkpointer 是进程内的**（`MemorySaver`）：服务重启后，尚未确认的中断会失效，
+  需要重新规划。已完成的行程存在 SQLite 里，不受影响。
+- **超支阈值 20% 是代码常量**，暂未做成界面配置项。
 - **数据默认全为 mock**，不含真实价格与余票。HTTP 适配器已写好但本机没有接口可测，标注为未验证。
 - **密钥在库里是明文**，且没有登录与权限——知道地址就能改配置。仅适合本机演示。
 - **分享链接是隐式公开的**：知道 `plan_id` 就能读。

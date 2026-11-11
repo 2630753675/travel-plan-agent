@@ -26,4 +26,5 @@ class TripState(TypedDict, total=False):
     draft: Itinerary
     critique: Critique
     revision: int
+    decision: str
     errors: Annotated[list[str], operator.add]

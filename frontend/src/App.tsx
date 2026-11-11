@@ -127,11 +127,24 @@ function weekday(d: string) {
   return '日一二三四五六'[new Date(d + 'T00:00:00').getDay()]
 }
 
+type InterruptOption = { value: string; label: string }
+
+type InterruptInfo = {
+  type: string
+  total: number
+  budget: number
+  over: number
+  ratio: number
+  options: InterruptOption[]
+  plan_id: string
+}
+
 export default function App() {
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
-  const [phase, setPhase] = useState<'form' | 'running' | 'done' | 'error'>('form')
+  const [phase, setPhase] = useState<'form' | 'running' | 'interrupt' | 'done' | 'error'>('form')
   const [cards, setCards] = useState<Card[]>([])
   const [result, setResult] = useState<Result | null>(null)
+  const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
   const [refining, setRefining] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<string, string>>({})
@@ -223,6 +236,44 @@ export default function App() {
     }
   }
 
+  function handleEvent(name: string, data: any) {
+    if (name === 'trace') pushTrace(data)
+    else if (name === 'done') {
+      setResult(data)
+      setPhase('done')
+      setInterruptInfo(null)
+      const url = new URL(location.href)
+      url.searchParams.set('plan', data.plan_id)
+      history.replaceState(null, '', url)
+    } else if (name === 'interrupt') {
+      setInterruptInfo(data)
+      setPhase('interrupt')
+    } else if (name === 'error') {
+      setError(data.message)
+      setPhase('error')
+    }
+  }
+
+  async function resumePlan(decision: string) {
+    const pid = interruptInfo?.plan_id
+    if (!pid) return
+    setInterruptInfo(null)
+    setPhase('running')
+    try {
+      const res = await fetch(`/api/plan/${pid}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await consume(res, handleEvent)
+      setPhase((p) => (p === 'running' ? 'done' : p))
+    } catch (e) {
+      setError(String(e))
+      setPhase('error')
+    }
+  }
+
   async function runPlan() {
     setPhase('running')
     setCards(
@@ -234,6 +285,7 @@ export default function App() {
       })),
     )
     setResult(null)
+    setInterruptInfo(null)
     setError('')
     const body = {
       origin: form.origin,
@@ -255,19 +307,8 @@ export default function App() {
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      await consume(res, (name, data) => {
-        if (name === 'trace') pushTrace(data)
-        else if (name === 'done') {
-          setResult(data)
-          setPhase('done')
-          const url = new URL(location.href)
-          url.searchParams.set('plan', data.plan_id)
-          history.replaceState(null, '', url)
-        } else if (name === 'error') {
-          setError(data.message)
-          setPhase('error')
-        }
-      })
+      await consume(res, handleEvent)
+      setPhase((p) => (p === 'running' ? 'done' : p))
     } catch (e) {
       setError(String(e))
       setPhase('error')
@@ -285,11 +326,22 @@ export default function App() {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
+      const sightsOf = (it: any, d: string) =>
+        (it.days.find((x: any) => x.date === d)?.items ?? [])
+          .filter((i: any) => i.type === 'sight')
+          .map((i: any) => i.title)
+      const before = sightsOf(result.itinerary, day)
+      const after = sightsOf(data.itinerary, day)
+      const changed = JSON.stringify(before) !== JSON.stringify(after)
       setResult({ ...result, itinerary: data.itinerary, critique: data.critique, revision: data.revision ?? result.revision })
       setFeedback((f) => ({ ...f, [day]: '' }))
       setRefineNote((n) => ({
         ...n,
-        [day]: data.refine_source === 'model' ? '已由模型理解意见后重排' : '已按规则重排',
+        [day]: changed
+          ? data.refine_source === 'model'
+            ? '已由模型理解意见后重排'
+            : '已按规则重排'
+          : '没有改动：当前安排已符合你的意见',
       }))
     } catch (e) {
       setError(String(e))
@@ -308,7 +360,14 @@ export default function App() {
           <span className={`dot ${c.status}`} />
         </div>
         <p className="agent-summary">
-          {c.summary ?? (c.status === 'running' ? '执行中…' : c.status === 'waiting' ? '等待中' : '')}
+          {c.summary ??
+            (c.status === 'running'
+              ? c.node === 'confirm'
+                ? '等待你决定…'
+                : '执行中…'
+              : c.status === 'waiting'
+                ? '等待中'
+                : '')}
         </p>
       </article>
     )
@@ -341,6 +400,7 @@ export default function App() {
           <div className="status-pill">
             {phase === 'form' && '待提交'}
             {phase === 'running' && `执行中 ${doneCount}/7`}
+            {phase === 'interrupt' && '等待你的决定'}
             {phase === 'done' && (result?.critique.passed ? '已完成' : '已完成 · 有未解项')}
             {phase === 'error' && '失败'}
           </div>
@@ -503,6 +563,28 @@ export default function App() {
                     renderAgent(g.card)
                   ),
                 )}
+              </div>
+            </section>
+          )}
+
+          {interruptInfo && (
+            <section className="interrupt">
+              <div className="interrupt-head">
+                <h3>预算超支，需要你决定</h3>
+                <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
+              </div>
+              <p className="interrupt-body">
+                当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
+                预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元，
+                超出 <strong>{interruptInfo.over.toFixed(0)}</strong> 元。
+                系统没有替你决定，请选择：
+              </p>
+              <div className="interrupt-actions">
+                {interruptInfo.options.map((o) => (
+                  <button key={o.value} onClick={() => resumePlan(o.value)}>
+                    {o.label}
+                  </button>
+                ))}
               </div>
             </section>
           )}

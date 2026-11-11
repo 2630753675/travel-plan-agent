@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from .. import settings as config_store
@@ -42,18 +45,26 @@ class RefineRequest(BaseModel):
     feedback: str = ""
 
 
+class ResumeRequest(BaseModel):
+    decision: Literal["accept", "downgrade", "abort"]
+
+
+# interrupt/resume 需要 checkpointer。这里用进程内存储：
+# 服务重启后未完成的待确认规划会失效，已完成的结果在 SQLite 里不受影响。
+_CHECKPOINTER = MemorySaver()
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
-    graph = build(make_source(cfg.datasource), cfg)
+async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief):
+    """消费图的事件流，并把「中断待确认」也作为一类事件推给前端。"""
     trace: list[dict] = []
     final: dict = {}
     try:
         async for mode, payload in graph.astream(
-            {"brief": brief, "revision": 0, "errors": []},
-            stream_mode=["custom", "values"],
+            graph_input, config=config, stream_mode=["custom", "values"]
         ):
             if mode == "custom":
                 trace.append(payload)
@@ -64,9 +75,31 @@ async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
         yield _sse("error", {"message": f"规划过程异常：{e}"})
         return
 
+    snapshot = await graph.aget_state(config)
+    pending = [i for task in (snapshot.tasks or []) for i in task.interrupts]
+    if pending:
+        info = dict(pending[0].value or {})
+        info["plan_id"] = plan_id
+        info["revision"] = final.get("revision", 0)
+        yield _sse("interrupt", info)
+        return
+
+    if "draft" not in final or "critique" not in final:
+        yield _sse("error", {"message": "规划未产出结果"})
+        return
+
     itinerary: Itinerary = final["draft"]
     critique: Critique = final["critique"]
     revision = final.get("revision", 0)
+    decision = final.get("decision")
+
+    if decision == "accept":
+        itinerary.warnings.append("你已确认接受超出预算的方案")
+    elif decision == "abort":
+        itinerary.warnings.append("你已选择取消，此行程仅供参考")
+    elif decision == "downgrade":
+        itinerary.warnings.append("已按你的选择降配重排")
+
     store.save(
         plan_id,
         brief.model_dump(mode="json"),
@@ -83,9 +116,19 @@ async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
             "itinerary": itinerary.model_dump(mode="json"),
             "critique": critique.model_dump(mode="json"),
             "revision": revision,
+            "decision": decision,
             "errors": final.get("errors") or [],
         },
     )
+
+
+async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
+    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
+    config = {"configurable": {"thread_id": plan_id}}
+    async for chunk in _run_graph(
+        graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief
+    ):
+        yield chunk
 
 
 @app.post("/api/plan")
@@ -109,6 +152,41 @@ async def get_plan(plan_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
     return record
+
+
+@app.post("/api/plan/{plan_id}/resume")
+async def resume_plan(plan_id: str, body: ResumeRequest):
+    """恢复一次因预算超支而暂停的规划。"""
+    record = store.load(plan_id)
+    brief_dict = record["brief"] if record else None
+
+    # 中断时还没落库，因此从 checkpointer 里取原始 brief
+    cfg = config_store.load()
+    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
+    config = {"configurable": {"thread_id": plan_id}}
+    snapshot = await graph.aget_state(config)
+    if not snapshot.next:
+        raise HTTPException(status_code=400, detail="该规划没有待确认的中断")
+
+    if brief_dict:
+        brief = TripBrief(**brief_dict)
+    else:
+        raw = snapshot.values.get("brief")
+        if raw is None:
+            raise HTTPException(status_code=400, detail="找不到该规划的原始需求")
+        brief = raw
+
+    async def stream():
+        async for chunk in _run_graph(
+            graph, config, Command(resume=body.decision), plan_id, brief
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/plan/{plan_id}/refine")
