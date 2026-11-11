@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+
+# 运行期数据（每次规划都会写入，不入库）
+backend/data/plans.db
+backend/data/plans.db-journal
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# 工具残留
+.probe
+*.log

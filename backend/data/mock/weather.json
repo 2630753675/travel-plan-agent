@@ -1,0 +1,7 @@
+[
+  {"condition": "多云", "temp_low": 9, "temp_high": 16, "rain_prob": 0.1},
+  {"condition": "晴", "temp_low": 8, "temp_high": 18, "rain_prob": 0.0},
+  {"condition": "小雨", "temp_low": 7, "temp_high": 13, "rain_prob": 0.8},
+  {"condition": "阴", "temp_low": 9, "temp_high": 15, "rain_prob": 0.3},
+  {"condition": "中雨", "temp_low": 6, "temp_high": 12, "rain_prob": 0.9}
+]

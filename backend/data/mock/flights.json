@@ -1,0 +1,11 @@
+[
+  {"flight_no": "MU5401", "dep_city": "上海", "arr_city": "成都", "dep_time": "08:05", "arr_time": "11:20", "duration_min": 195, "price": 980, "seats_left": 9},
+  {"flight_no": "CA4516", "dep_city": "上海", "arr_city": "成都", "dep_time": "10:30", "arr_time": "13:50", "duration_min": 200, "price": 1120, "seats_left": 3},
+  {"flight_no": "3U8890", "dep_city": "上海", "arr_city": "成都", "dep_time": "14:20", "arr_time": "17:35", "duration_min": 195, "price": 760, "seats_left": 12},
+  {"flight_no": "MU5411", "dep_city": "上海", "arr_city": "成都", "dep_time": "19:10", "arr_time": "22:25", "duration_min": 195, "price": 680, "seats_left": 20},
+  {"flight_no": "MU5402", "dep_city": "成都", "arr_city": "上海", "dep_time": "13:00", "arr_time": "16:05", "duration_min": 185, "price": 960, "seats_left": 8},
+  {"flight_no": "CA4515", "dep_city": "成都", "arr_city": "上海", "dep_time": "17:40", "arr_time": "20:45", "duration_min": 185, "price": 1050, "seats_left": 5},
+  {"flight_no": "3U8891", "dep_city": "成都", "arr_city": "上海", "dep_time": "09:40", "arr_time": "12:50", "duration_min": 190, "price": 720, "seats_left": 15},
+  {"flight_no": "ZH9953", "dep_city": "北京", "arr_city": "成都", "dep_time": "07:45", "arr_time": "10:55", "duration_min": 190, "price": 890, "seats_left": 6},
+  {"flight_no": "ZH9954", "dep_city": "成都", "arr_city": "北京", "dep_time": "18:20", "arr_time": "21:30", "duration_min": 190, "price": 940, "seats_left": 7}
+]

@@ -1,0 +1,8 @@
+[
+  {"id": "h1", "name": "春熙路亚朵酒店", "district": "春熙路", "price_per_night": 520, "rating": 4.6, "tags": ["地铁近", "老人友好", "早餐好"], "distance_to_center_km": 0.5},
+  {"id": "h2", "name": "宽窄巷子隐栖堂", "district": "宽窄巷子", "price_per_night": 780, "rating": 4.7, "tags": ["精品", "安静", "近景点"], "distance_to_center_km": 1.2},
+  {"id": "h3", "name": "锦江宾馆", "district": "人民南路", "price_per_night": 620, "rating": 4.5, "tags": ["老牌", "房间大", "老人友好"], "distance_to_center_km": 2.0},
+  {"id": "h4", "name": "环球中心洲际酒店", "district": "高新区", "price_per_night": 1080, "rating": 4.8, "tags": ["亲子", "泳池", "商场一体"], "distance_to_center_km": 8.5},
+  {"id": "h5", "name": "春熙里和颐", "district": "春熙路", "price_per_night": 260, "rating": 4.2, "tags": ["经济", "地铁近"], "distance_to_center_km": 0.8},
+  {"id": "h6", "name": "青城山下道隐民宿", "district": "都江堰", "price_per_night": 460, "rating": 4.4, "tags": ["山景", "安静", "适合休整"], "distance_to_center_km": 55.0}
+]
