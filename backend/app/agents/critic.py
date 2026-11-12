@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from datetime import time
+
 from ..models import Critique, Issue, Itinerary, TripBrief
 from .poi import PoiPlan
 from .transport import TransportPlan
@@ -17,12 +19,109 @@ from .weather import WeatherPlan
 
 MAX_DAY_MINUTES = 600
 BUDGET_NEAR_RATIO = 0.9
+AIRPORT_LEAD_MIN = 150
 
 ELDER_UNFIT_TAGS = {"老人不宜", "老人慎选", "爬山", "体力消耗大"}
 
 
+def _m(t: time) -> int:
+    return t.hour * 60 + t.minute
+
+
 def _active_minutes(day) -> int:
     return sum(i.duration_min for i in day.items if i.type != "rest")
+
+
+def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan) -> list[Issue]:
+    """时间轴本身是否成立。
+
+    这里检查的是"这张表能不能照着走"：活动是否叠在一起、
+    景点是不是在开放时间内、有没有错过赶飞机的时间。
+    这些问题不该等到用户出门才被发现。
+    """
+    issues: list[Issue] = []
+    acts = [i for i in day.items if i.type != "rest"]
+    acts.sort(key=lambda i: (_m(i.start_time), _m(i.end_time)))
+
+    # 1. 相邻活动不能重叠（航班也算：人在飞机上，不能同时安排别的）
+    for a, b in zip(acts, acts[1:]):
+        if _m(a.end_time) > _m(b.start_time):
+            issues.append(
+                Issue(
+                    severity="blocker",
+                    code="TIME_OVERLAP",
+                    day=day.date,
+                    message=(
+                        f"{day.date} {a.title}（{a.start_time.strftime('%H:%M')}-"
+                        f"{a.end_time.strftime('%H:%M')}）与 {b.title}"
+                        f"（{b.start_time.strftime('%H:%M')}）时间重叠"
+                    ),
+                )
+            )
+
+    # 2. 景点必须落在开放时间内
+    for item in acts:
+        if item.type != "sight" or not item.ref_id:
+            continue
+        poi = poi_map.get(item.ref_id)
+        if poi is None:
+            continue
+        if _m(item.start_time) < _m(poi.open_time) or _m(item.end_time) > _m(poi.close_time):
+            issues.append(
+                Issue(
+                    severity="blocker",
+                    code="OUTSIDE_OPEN_HOURS",
+                    day=day.date,
+                    message=(
+                        f"{poi.name} 开放时间 {poi.open_time.strftime('%H:%M')}-"
+                        f"{poi.close_time.strftime('%H:%M')}，"
+                        f"却被排在 {item.start_time.strftime('%H:%M')}-{item.end_time.strftime('%H:%M')}"
+                    ),
+                )
+            )
+
+    # 3. 返程日不能错过赶飞机的时间
+    if is_last and transport.chosen_inbound:
+        deadline = _m(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN
+        for item in acts:
+            if item.type == "transport":
+                continue
+            if _m(item.start_time) >= deadline:
+                issues.append(
+                    Issue(
+                        severity="blocker",
+                        code="MISSED_AIRPORT_DEADLINE",
+                        day=day.date,
+                        message=(
+                            f"{item.title} 排在 {item.start_time.strftime('%H:%M')}，"
+                            f"但当天需在 {deadline // 60:02d}:{deadline % 60:02d} 前赶往机场"
+                        ),
+                    )
+                )
+
+    # 4. 一天里应该吃饭（长行程缺餐食说明排程把时间塞满了）
+    if len(day.items) >= 3:
+        titles = " ".join(i.title for i in day.items if i.type == "meal")
+        if "午餐" not in titles:
+            issues.append(
+                Issue(
+                    severity="warning",
+                    code="MISSING_LUNCH",
+                    day=day.date,
+                    message=f"{day.date} 没有安排午餐",
+                )
+            )
+        if "晚餐" not in titles:
+            issues.append(
+                Issue(
+                    severity="warning",
+                    code="MISSING_DINNER",
+                    day=day.date,
+                    message=f"{day.date} 没有安排晚餐",
+                )
+            )
+
+    return issues
 
 
 def run(
@@ -57,6 +156,7 @@ def run(
         )
 
     # 2. 逐日检查
+    is_last_day = itinerary.days[-1].date if itinerary.days else None
     for day in itinerary.days:
         active = _active_minutes(day)
         if active > MAX_DAY_MINUTES:
@@ -69,10 +169,14 @@ def run(
                 )
             )
 
+        # 时间轴本身是否立得住：重叠、开放时间、赶飞机、餐食
+        issues.extend(
+            _timeline_issues(day, poi_map, day.date == is_last_day, transport)
+        )
+
         sights = [i for i in day.items if i.type == "sight"]
         # 最后一天以返程为主，没有景点属正常，不提示
-        is_last_day = day.date == itinerary.days[-1].date
-        if not sights and len(itinerary.days) > 2 and not is_last_day:
+        if not sights and len(itinerary.days) > 2 and day.date != is_last_day:
             issues.append(
                 Issue(
                     severity="warning",
@@ -131,5 +235,9 @@ def run(
         suggestions.append("减少单日景点数量，或把长时项目拆到另一天")
     if any(i.code == "ELDER_UNFIT" for i in blockers):
         suggestions.append("替换为低强度景点或改为休整")
+    if any(i.code in ("TIME_OVERLAP", "OUTSIDE_OPEN_HOURS") for i in blockers):
+        suggestions.append("调整当天活动时段，避开开放时间边界并消除相互重叠")
+    if any(i.code == "MISSED_AIRPORT_DEADLINE" for i in blockers):
+        suggestions.append("压缩返程日安排，确保提前 150 分钟到机场")
 
     return Critique(passed=not blockers, issues=issues, suggestions=suggestions)

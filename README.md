@@ -127,6 +127,22 @@ $env:PYTHONPATH=(Get-Location).Path
 - 天气模板含 2 个雨天 → 检验室内优先与雨天提醒
 - 都江堰/青城山带"老人不宜"标签 → 检验人群过滤
 
+### 4.6 时间轴也要校验，不能只校验"排了多少"
+
+`critic` 除了预算、时长、闭馆日和人群，还检查这张表**能不能照着走**：
+
+| 检查 | 代码 | 严重度 |
+|---|---|---|
+| 相邻活动重叠（含航班占用时段） | `TIME_OVERLAP` | blocker |
+| 景点被排在开放时间之外 | `OUTSIDE_OPEN_HOURS` | blocker |
+| 返程日错过赶飞机的时间 | `MISSED_AIRPORT_DEADLINE` | blocker |
+| 长行程缺午餐/晚餐 | `MISSING_LUNCH` / `MISSING_DINNER` | warning |
+
+这条规则抓出过一个真实缺陷：14 天行程里把都江堰排在 16:30-20:30，
+而它 18:00 关门。根因是 `_place_poi` 只查开始时间不查结束时间。
+`verify_timeline` 里同时做了正反两侧验证——真实行程必须自洽，
+人为构造的违规必须被抓到。
+
 ## 5. 执行轨迹（右侧抽屉，流式）
 
 点顶栏「执行轨迹」打开右侧面板。各 agent 的讨论与工具调用**边执行边出现**，
@@ -218,6 +234,7 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_mediation.py    # 协商裁决逻辑（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_trace_drawer.py # 轨迹抽屉与流式输出（需先起服务）
 .venv/Scripts/python.exe scripts/verify_collaboration.py # 检索 agent 按需协作（纯单元，不需服务）
+.venv/Scripts/python.exe scripts/verify_timeline.py     # 时间轴与硬约束（正反双向，不需服务）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -241,6 +258,7 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_mediation | 7 组 18 项 | 通过 |
 | verify_trace_drawer | 6 组 16 项 | 通过 |
 | verify_collaboration | 5 组 13 项 | 通过 |
+| verify_timeline | 4 组 17 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、

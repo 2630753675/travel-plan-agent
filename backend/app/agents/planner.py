@@ -108,10 +108,14 @@ def _picked_by_llm(pool: list[POI], used: set[str], d: date, ids: list[str], wan
     return out
 
 
-def _place_poi(start: int, poi: POI, lunch_at: int | None) -> tuple[int, int, int | None]:
+def _place_poi(
+    start: int, poi: POI, lunch_at: int | None
+) -> tuple[int | None, int | None, int | None]:
     """返回实际可用的 (start, end, lunch_at)。
 
+    放不下时返回 (None, None, lunch_at)，由调用方跳过这个景点。
     两处需要午饭让路：已过午饭时间还没吃，或本次景点会横跨午饭时段。
+    结束时间必须早于闭馆时间，否则就是把游客排到关门后的景点。
     """
     if lunch_at is None and start >= LUNCH_START:
         lunch_at = start
@@ -122,6 +126,9 @@ def _place_poi(start: int, poi: POI, lunch_at: int | None) -> tuple[int, int, in
         lunch_at = LUNCH_START
         s = max(LUNCH_END, _minutes(poi.open_time))
         e = s + poi.duration_min
+    # 关门时间检查：排不进去就放弃这个景点，不能排出"闭馆后游览"
+    if e > _minutes(poi.close_time):
+        return None, None, lunch_at
     return s, e, lunch_at
 
 
@@ -234,6 +241,9 @@ def run(
         lunch_at: int | None = None
         for poi in picked:
             s, e, lunch_at = _place_poi(cursor, poi, lunch_at)
+            if s is None or e is None:
+                # 关门前来不及游览，换下一个
+                continue
             if s >= DAY_LATEST_POI_START:
                 continue
             if deadline is not None and e > deadline:
@@ -270,13 +280,15 @@ def run(
 
         # 返程日若晚餐时间晚于机场截止时间，说明人在机场，不再单列晚餐
         dinner_allowed = deadline is None or deadline > DINNER_START + MEAL_DINNER
+        dinner_end = cursor
         if dinner_allowed:
             dinner_at = max(cursor, DINNER_START)
+            dinner_end = dinner_at + MEAL_DINNER
             items.append(
                 Item(
                     slot="晚上",
                     start_time=_to_time(dinner_at),
-                    end_time=_to_time(dinner_at + MEAL_DINNER),
+                    end_time=_to_time(dinner_end),
                     type="meal",
                     title="晚餐",
                     cost=MEAL_DINNER * brief.travelers,
@@ -302,12 +314,14 @@ def run(
             )
 
         # 住宿（最后一晚不住）
+        # 入住时间不能早于晚餐结束，否则晚餐和入住会叠在一起
         if not is_last and hotel:
+            hotel_at = max(21 * 60, dinner_end)
             items.append(
                 Item(
                     slot="晚上",
-                    start_time=time(21, 0),
-                    end_time=time(21, 30),
+                    start_time=_to_time(hotel_at),
+                    end_time=_to_time(hotel_at + 30),
                     type="hotel",
                     title=f"入住 {hotel.name}",
                     ref_id=hotel.name,
@@ -316,12 +330,15 @@ def run(
                     note=f"{hotel.district} · 距市中心 {hotel.distance_to_center_km}km",
                 )
             )
+            rest_at = hotel_at + 30
+        else:
+            rest_at = max(21 * 60 + 30, dinner_end)
 
         items.append(
             Item(
                 slot="晚上",
-                start_time=time(21, 30),
-                end_time=time(21, 30),
+                start_time=_to_time(rest_at),
+                end_time=_to_time(rest_at),
                 type="rest",
                 title="市内交通预留",
                 cost=LOCAL_TRANSPORT_PER_PERSON_DAY * brief.travelers,
