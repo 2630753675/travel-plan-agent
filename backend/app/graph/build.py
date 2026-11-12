@@ -270,6 +270,94 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             }
         return {"weather": plan}
 
+    async def coordinator_node(state: TripState) -> dict:
+        """四路检索跑完后校对一次：结果之间有没有对不上的地方。
+
+        只做规则检查，不调模型——这类一致性判断不值得花一次 LLM 调用。
+        发现问题就向相关 agent 发一次请求，没有问题就直接往下走。
+        """
+        from ..activity import ACTOR_LABEL, entry, stage
+        from ..agents import coordinator
+
+        _emit({"phase": "start", "node": "coordinator"})
+        result = coordinator.review(
+            state["brief"], state["lodging"].chosen, state["poi"].candidates
+        )
+        lines = [stage("collab")]
+
+        if not result.needed:
+            lines.append(
+                entry("coordinator", "四路结果对得上，不需要补充", group="collab", depth=1)
+            )
+            _emit({"phase": "end", "node": "coordinator", "summary": "无需协作"})
+            return {"collab_done": True, "log": lines}
+
+        req = result.requests[0]
+        sender = ACTOR_LABEL.get(req.sender, req.sender)
+        receiver = ACTOR_LABEL.get(req.receiver, req.receiver)
+        lines.append(
+            entry(req.sender, f"→ {receiver}：{req.question}", kind="speech", group="collab", depth=1)
+        )
+        lines.append(
+            entry(
+                req.receiver,
+                f"← {sender}：收到，提供 {len(req.payload.get('poi_ids', []))} 个景点的坐标",
+                kind="answer",
+                group="collab",
+                depth=1,
+            )
+        )
+        for note in result.notes:
+            lines.append(entry("coordinator", note, kind="decision", group="collab", depth=2))
+
+        _emit({"phase": "end", "node": "coordinator", "summary": req.reason})
+        return {
+            "collab_done": True,
+            "collab_requests": [
+                {
+                    "sender": sender,
+                    "receiver": receiver,
+                    "question": req.question,
+                    "reason": req.reason,
+                }
+            ],
+            "focus_poi_ids": req.payload.get("poi_ids", []),
+            "log": lines,
+        }
+
+    async def lodging_fix_node(state: TripState) -> dict:
+        """住宿 agent 带着景点坐标重选一次。"""
+        from ..activity import entry, stage
+
+        _emit({"phase": "start", "node": "lodging_fix"})
+        focus_ids = set(state.get("focus_poi_ids") or [])
+        focus = [p for p in state["poi"].candidates if p.id in focus_ids]
+        before = state["lodging"].chosen
+        plan = lodging.run(state["brief"], source, focus_pois=focus)
+
+        lines = [stage("collab")]
+        if plan.error:
+            lines.append(entry("lodging", plan.error, kind="decision", group="collab", depth=1))
+        elif plan.chosen is not None:
+            changed = before is None or plan.chosen.name != before.name
+            lines.append(
+                entry(
+                    "lodging",
+                    (
+                        f"按景点位置重选为 {plan.chosen.name}"
+                        if changed
+                        else f"重算后仍是 {plan.chosen.name}，位置最合适"
+                    ),
+                    kind="speech",
+                    group="collab",
+                    depth=1,
+                )
+            )
+        _emit(
+            {"phase": "end", "node": "lodging_fix", "summary": plan.chosen.name if plan.chosen else "无"}
+        )
+        return {"lodging": plan, "log": lines}
+
     async def planner_node(state: TripState) -> dict:
         critique = state.get("critique")
         # 预算已被判定超支时不再交给模型自由发挥：
@@ -609,7 +697,16 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
     g.add_edge(START, "clarify")
     for name in ("transport", "lodging", "poi", "weather"):
         g.add_edge("clarify", name)
-        g.add_edge(name, "planner")
+        g.add_edge(name, "coordinator")
+
+    g.add_node("coordinator", coordinator_node)
+    g.add_node("lodging_fix", lodging_fix_node)
+    g.add_conditional_edges(
+        "coordinator",
+        lambda s: "lodging_fix" if s.get("collab_requests") else "planner",
+        {"lodging_fix": "lodging_fix", "planner": "planner"},
+    )
+    g.add_edge("lodging_fix", "planner")
     g.add_edge("planner", "critic")
 
     g.add_node("negotiation", negotiation_node)

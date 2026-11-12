@@ -32,5 +32,8 @@ class TripState(TypedDict, total=False):
     negotiated: bool
     forced_drops: list[str]
     force_cheaper_hotel: bool
+    collab_done: bool
+    collab_requests: list[dict]
+    focus_poi_ids: list[str]
     log: Annotated[list[LogEntry], operator.add]
     errors: Annotated[list[str], operator.add]

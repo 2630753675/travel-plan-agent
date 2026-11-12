@@ -70,6 +70,9 @@ class Hotel(BaseModel):
     rating: float = Field(ge=0, le=5)
     tags: list[str] = Field(default_factory=list)
     distance_to_center_km: float = Field(ge=0)
+    # 有了坐标，住宿 agent 才能算"离用户想去的景点有多远"
+    lat: float = 0.0
+    lng: float = 0.0
 
 
 class POI(BaseModel):

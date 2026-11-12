@@ -36,6 +36,7 @@ ACTOR_LABEL: dict[str, str] = {
 GROUP_LABEL: dict[str, str] = {
     "clarify": "需求澄清",
     "retrieval": "并行检索",
+    "collab": "检索结果校对",
     "plan": "行程规划",
     "check": "可行性校验",
     "negotiation": "预算与体验协商",
@@ -49,6 +50,8 @@ NODE_GROUP: dict[str, str] = {
     "lodging": "retrieval",
     "poi": "retrieval",
     "weather": "retrieval",
+    "coordinator": "collab",
+    "lodging_fix": "collab",
     "planner": "plan",
     "critic": "check",
     "negotiation": "negotiation",
@@ -57,7 +60,7 @@ NODE_GROUP: dict[str, str] = {
 }
 
 # 只有这些节点产生"阶段标题"行；并行检索的四路共用一个阶段块，不各发标题
-STAGE_NODES = {"clarify", "planner", "critic", "negotiation", "ask", "confirm"}
+STAGE_NODES = {"clarify", "coordinator", "planner", "critic", "negotiation", "ask", "confirm"}
 
 
 def now() -> str:
