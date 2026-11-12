@@ -143,7 +143,7 @@ $env:PYTHONPATH=(Get-Location).Path
 `verify_timeline` 里同时做了正反两侧验证——真实行程必须自洽，
 人为构造的违规必须被抓到。
 
-### 4.6 统一事件契约
+### 4.7 统一事件契约
 
 编排过程只有一条数据流，而不是三套（LangGraph 自定义事件、state 里的日志、SQLite 里的投影）。
 每条记录都是 `RunEvent`：
@@ -176,6 +176,22 @@ SSE 只有一种事件名 `run_event`，用 `payload.event_type` 区分语义，
   否则界面上会出现两次"确认开始"，因果链也断在半路。
 - **先落库再发完成事件**。否则前端收到 `run_completed` 立刻刷新分享链接，
   可能读到还没写入的记录。
+
+### 4.8 版本只追加，不覆盖
+
+每次生成、单日重排、降配、回滚都写一条 `plan_versions` 记录，当前结果只是最后一条。
+这样"改坏了"永远回得去，而且能看清这一步是谁触发的：
+
+```
+v1  首次生成                     6840 元
+v2  单日重排  重排 2026-11-22：这天太赶…   6980 元   ← 当前
+```
+
+两条不变量由 `verify_versions` 断言，而不是靠"看起来对"：
+
+- **未编辑的日期必须逐字节一致**。比较的是每天的完整 JSON（`sort_keys` 后），
+  不是"景点标题列表"——后者会把时间、费用、备注的变化全部漏掉。
+- **回滚结果必须等于目标版本**。回滚本身也记一个新版本，历史不被覆盖。
 
 ## 5. 执行轨迹（右侧抽屉，流式）
 
@@ -264,8 +280,7 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_interrupt.py    # 人工介入：accept / downgrade / abort（需先起服务）
 .venv/Scripts/python.exe scripts/verify_interrupt_ui.py # 中断面板交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_negotiation.py  # 协商轨迹结构（需先起服务）
-.venv/Scripts/python.exe scripts/verify_negotiation_loop.py # 协商多轮闭环（假模型驱动，不需服务）
-.venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
+.venv/Scripts/python.exe scripts/verify_negotiation_loop.py # 协商多轮闭环（假模型驱动，不需服务）.venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
 .venv/Scripts/python.exe scripts/verify_mediation.py    # 协商裁决逻辑（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_trace_drawer.py # 轨迹抽屉与流式输出（需先起服务）
 .venv/Scripts/python.exe scripts/verify_collaboration.py # 检索 agent 按需协作（纯单元，不需服务）
@@ -299,6 +314,9 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_timeline | 4 组 17 项 | 通过 |
 | verify_event_contract | 6 组 21 项 | 通过 |
 | verify_event_resume | 6 组 16 项 | 通过 |
+| verify_versions | 9 组 21 项 | 通过 |
+| verify_versions_ui | 4 组 12 项 | 通过 |
+| verify_restart | 2 阶段 8 项 | 通过（需人工重启一次后端） |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
@@ -310,6 +328,11 @@ $env:PYTHONPATH=(Get-Location).Path
 协商覆盖：三条发言的角色与顺序、每条主张都带工具计算的证据、
 预算严重超支才触发协商（小额超支不打扰用户）、协商无进展时仍升级给用户、
 被砍景点不进最终行程、轨迹可持久化并回放。
+
+版本覆盖：首版记录、重排后新增版本且带备注、未编辑日期逐字节一致、历史版本可单独取回、
+回滚结果等于目标版本、回滚本身也留历史、不存在的版本返回 404。
+
+恢复覆盖：服务重启后仍能 resume 未确认的中断（`verify_restart` 分两次运行，中间真的重启进程）。
 
 裁决覆盖（纯单元，不依赖模型）：体验官让步即采纳、全高价值项目时僵持升级、
 存在低价值项时折中且只砍低价值、用户已表态的最后一轮必须给方案、
@@ -396,7 +419,6 @@ $env:PYTHONPATH=(Get-Location).Path
 
 
 ## 9. 已知限制
-
 - **模型只负责「去哪」，不负责「怎么排」**。时间轴、时长上限、预算校验仍是确定性规则。
   让模型直接产出完整行程（含时段、费用）没有做，因为那样模型的一次幻觉就会变成一张不可执行的表。
 - **LLM 链路是用假服务验证的**。正常响应、500 故障、非 JSON 输出、超时都覆盖了，但没接真实
@@ -409,8 +431,10 @@ $env:PYTHONPATH=(Get-Location).Path
 - **协商第 2 轮的「强制出方案」在图层依赖数据**：`mediator` 只有在"被砍项全部高价值"时才走
   `final_round` 强制采纳分支。mock 景点池里最多只能凑出一个高价值付费景点，因此图层的这条分支
   没有被端到端触发（它由 `verify_mediation` 的单元断言覆盖）。真实模型选景点时更容易命中。
-- **中断用的 checkpointer 是进程内的**（`MemorySaver`）：服务重启后，尚未确认的中断会失效，
-  需要重新规划。已完成的行程存在 SQLite 里，不受影响。
+- **中断用的 checkpointer 落在单个快照文件上**（`backend/data/checkpoints.pkl`）：
+  服务重启后未确认的中断仍可恢复（`verify_restart` 分两阶段实测）。
+  它不是数据库级方案——只适用于单进程写入，多进程同时写会互相覆盖；
+  快照损坏时丢弃并继续启动，已完成的行程在 SQLite 里不受影响。
 - **超支阈值 20% 是代码常量**，暂未做成界面配置项。
 - **数据默认全为 mock**，不含真实价格与余票。HTTP 适配器已写好但本机没有接口可测，标注为未验证。
 - **密钥在库里是明文**，且没有登录与权限——知道地址就能改配置。仅适合本机演示。

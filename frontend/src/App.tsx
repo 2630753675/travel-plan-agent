@@ -51,6 +51,26 @@ type Result = {
   events?: RunEvent[]
   activity?: LogEntry[]
   decision?: string | null
+  version?: number
+}
+
+type VersionInfo = {
+  version: number
+  created_at: string
+  source: string
+  note: string
+  total_cost: number
+  day_count: number
+  passed: boolean
+  blockers: number
+}
+
+const VERSION_SOURCE: Record<string, string> = {
+  initial: '首次生成',
+  refine: '单日重排',
+  downgrade: '按你的选择降配',
+  resume: '中断后继续',
+  rollback: '回滚',
 }
 
 const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
@@ -467,6 +487,7 @@ export default function App() {
   const [llmOn, setLlmOn] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
+  const [versions, setVersions] = useState<VersionInfo[]>([])
   const drawerRef = useRef<HTMLDivElement>(null)
   const liveLogs = useMemo(() => projectEvents(liveEvents), [liveEvents])
 
@@ -491,6 +512,7 @@ export default function App() {
           revision: rec.revision ?? 0,
           errors: [],
           negotiation: rec.negotiation ?? null,
+          version: rec.version,
         })
         // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
         if (Array.isArray(rec.events) && rec.events.length > 0) {
@@ -499,6 +521,7 @@ export default function App() {
           setLiveEvents(activityToEvents(rec.activity))
         }
         setPhase('done')
+        void loadVersions(rec.id)
       })
       .catch(() => setError('该规划不存在或已失效'))
   }, [])
@@ -523,6 +546,7 @@ export default function App() {
           setResult(payload)
           setPhase('done')
           setInterruptInfo(null)
+          void loadVersions(payload.plan_id)
           const url = new URL(location.href)
           url.searchParams.set('plan', payload.plan_id)
           history.replaceState(null, '', url)
@@ -632,7 +656,14 @@ export default function App() {
       const before = sightsOf(result.itinerary, day)
       const after = sightsOf(data.itinerary, day)
       const changed = JSON.stringify(before) !== JSON.stringify(after)
-      setResult({ ...result, itinerary: data.itinerary, critique: data.critique, revision: data.revision ?? result.revision })
+      setResult({
+        ...result,
+        itinerary: data.itinerary,
+        critique: data.critique,
+        revision: data.revision ?? result.revision,
+        version: data.version ?? result.version,
+      })
+      await loadVersions(result.plan_id)
       setFeedback((f) => ({ ...f, [day]: '' }))
       setRefineNote((n) => ({
         ...n,
@@ -646,6 +677,39 @@ export default function App() {
       setError(String(e))
     } finally {
       setRefining(null)
+    }
+  }
+
+  async function loadVersions(pid: string) {
+    try {
+      const r = await fetch(`/api/plan/${pid}/versions`)
+      if (!r.ok) return
+      const data = await r.json()
+      setVersions(data.versions ?? [])
+    } catch {
+      // 版本面板拿不到不影响主流程
+    }
+  }
+
+  async function rollback(version: number) {
+    if (!result) return
+    try {
+      const r = await fetch(`/api/plan/${result.plan_id}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      setResult({
+        ...result,
+        itinerary: data.itinerary,
+        critique: data.critique,
+        version: data.version,
+      })
+      await loadVersions(result.plan_id)
+    } catch (e) {
+      setError(String(e))
     }
   }
 
@@ -922,6 +986,37 @@ export default function App() {
                     <li key={i}>{w}</li>
                   ))}
                 </ul>
+              )}
+
+              {versions.length > 0 && (
+                <section className="versions">
+                  <div className="section-head">
+                    <h2>版本</h2>
+                    <span className="hint">
+                      当前 v{result.version ?? versions[versions.length - 1].version} · 共 {versions.length} 个
+                    </span>
+                  </div>
+                  <ul className="version-list">
+                    {versions.map((v) => {
+                      const isCurrent = v.version === (result.version ?? -1)
+                      return (
+                        <li key={v.version} className={`version-row ${isCurrent ? 'current' : ''}`}>
+                          <span className="version-tag">v{v.version}</span>
+                          <span className="version-source">{VERSION_SOURCE[v.source] ?? v.source}</span>
+                          <span className="version-note">{v.note || '—'}</span>
+                          <span className="version-cost">{v.total_cost.toFixed(0)} 元</span>
+                          {isCurrent ? (
+                            <span className="version-current">当前</span>
+                          ) : (
+                            <button className="ghost" onClick={() => rollback(v.version)}>
+                              回到这一版
+                            </button>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </section>
               )}
 
               <div className="days">

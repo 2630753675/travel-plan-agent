@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS run_events (
     payload     TEXT NOT NULL,
     PRIMARY KEY (run_id, seq)
 );
+CREATE TABLE IF NOT EXISTS plan_versions (
+    plan_id     TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    itinerary   TEXT NOT NULL,
+    critique    TEXT NOT NULL,
+    negotiation TEXT,
+    PRIMARY KEY (plan_id, version)
+);
 """
 
 
@@ -89,7 +100,14 @@ def save(
     revision: int = 0,
     negotiation: dict | None = None,
     activity: list[dict] | None = None,
-) -> None:
+    *,
+    source: str = "initial",
+    note: str = "",
+) -> int:
+    """写入当前结果，并追加一个版本快照；返回新版本号。
+
+    版本是只追加的：重排、降配、回滚各自留一份，允许回看和回退。
+    """
     with closing(_connect()) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO plans "
@@ -107,7 +125,86 @@ def save(
                 json.dumps(activity, ensure_ascii=False) if activity else None,
             ),
         )
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM plan_versions WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchone()
+        version = int(row[0])
+        conn.execute(
+            "INSERT INTO plan_versions "
+            "(plan_id, version, created_at, source, note, itinerary, critique, negotiation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                plan_id,
+                version,
+                datetime.now(timezone.utc).isoformat(),
+                source,
+                note,
+                json.dumps(itinerary, ensure_ascii=False),
+                json.dumps(critique, ensure_ascii=False),
+                json.dumps(negotiation, ensure_ascii=False) if negotiation else None,
+            ),
+        )
         conn.commit()
+    return version
+
+
+def list_versions(plan_id: str) -> list[dict]:
+    """版本列表只给摘要，避免把整份行程塞进列表响应。"""
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT version, created_at, source, note, itinerary, critique "
+            "FROM plan_versions WHERE plan_id = ? ORDER BY version",
+            (plan_id,),
+        ).fetchall()
+    out = []
+    for version, created_at, source, note, itinerary, critique in rows:
+        it = json.loads(itinerary)
+        crit = json.loads(critique)
+        out.append(
+            {
+                "version": version,
+                "created_at": created_at,
+                "source": source,
+                "note": note,
+                "total_cost": it.get("total_cost", 0),
+                "day_count": len(it.get("days") or []),
+                "passed": crit.get("passed", False),
+                "blockers": len(
+                    [i for i in (crit.get("issues") or []) if i.get("severity") == "blocker"]
+                ),
+            }
+        )
+    return out
+
+
+def load_version(plan_id: str, version: int) -> dict | None:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT version, created_at, source, note, itinerary, critique, negotiation "
+            "FROM plan_versions WHERE plan_id = ? AND version = ?",
+            (plan_id, version),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "version": row[0],
+        "created_at": row[1],
+        "source": row[2],
+        "note": row[3],
+        "itinerary": json.loads(row[4]),
+        "critique": json.loads(row[5]),
+        "negotiation": json.loads(row[6]) if row[6] else None,
+    }
+
+
+def current_version(plan_id: str) -> int:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM plan_versions WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchone()
+    return int(row[0])
 
 
 def load(plan_id: str) -> dict | None:

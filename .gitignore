@@ -6,6 +6,9 @@ backend/.venv/
 # 运行期数据（每次规划都会写入，不入库）
 backend/data/plans.db
 backend/data/plans.db-journal
+backend/data/checkpoints.pkl
+backend/data/checkpoints.pkl.tmp
+backend/data/.restart_probe.json
 
 # Node
 frontend/node_modules/

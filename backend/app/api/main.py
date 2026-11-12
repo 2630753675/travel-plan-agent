@@ -16,16 +16,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from .. import settings as config_store
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
+from ..checkpoint import PersistentSaver
 from ..graph.build import build
 from ..llm import LLMClient, LLMError, TokenBudget
 from ..event_stream import EventFactory, legacy_activity
 from ..models import Critique, Itinerary, TripBrief
+from ..paths import DATA_DIR
 from ..settings import AppSettings
 from ..tools.factory import make_source
 from . import store
@@ -51,9 +52,13 @@ class ResumeRequest(BaseModel):
     decision: str
 
 
-# interrupt/resume 需要 checkpointer。这里用进程内存储：
-# 服务重启后未完成的待确认规划会失效，已完成的结果在 SQLite 里不受影响。
-_CHECKPOINTER = MemorySaver()
+class RollbackRequest(BaseModel):
+    version: int
+
+
+# interrupt/resume 需要 checkpointer。这里落在磁盘快照上：
+# 服务重启后未确认的规划仍可恢复；已完成的结果在 SQLite 里。
+_CHECKPOINTER = PersistentSaver(DATA_DIR / "checkpoints.pkl")
 
 
 def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
@@ -161,7 +166,13 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     }
     # 先落库再发完成事件：否则前端收到 run_completed 立刻刷新分享链接，
     # 可能读到还没写入的记录（404）或上一版结果。
-    store.save(
+    if decision == "downgrade":
+        source, note = "downgrade", "按你的选择降配重排"
+    elif seq_start > 1:
+        source, note = "resume", "中断后继续执行"
+    else:
+        source, note = "initial", ""
+    version = store.save(
         plan_id,
         brief.model_dump(mode="json"),
         itinerary.model_dump(mode="json"),
@@ -170,13 +181,17 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         revision,
         negotiation.model_dump(mode="json") if negotiation else None,
         activity,
+        source=source,
+        note=note,
     )
+    result["version"] = version
     yield publish(
         factory.make(
             "run_completed",
             actor="system",
             payload={
                 "revision": revision,
+                "version": version,
                 "passed": critique.passed,
                 "total_cost": itinerary.total_cost,
                 "result": result,
@@ -215,6 +230,7 @@ async def get_plan(plan_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
     record["events"] = store.list_events(plan_id)
+    record["version"] = store.current_version(plan_id)
     return record
 
 
@@ -340,13 +356,70 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         + [{"phase": "refine", "node": "planner", "target": str(target),
             "feedback": body.feedback, "source": refine_source}],
         record.get("revision", 0),
+        # 单日重排不该抹掉协商轨迹与既有事件投影
+        record.get("negotiation"),
+        record.get("activity"),
+        source="refine",
+        note=f"重排 {target}：{body.feedback or '无具体意见'}",
     )
     return {
         "plan_id": plan_id,
         "itinerary": new_itinerary.model_dump(mode="json"),
         "critique": new_critique.model_dump(mode="json"),
         "revision": record.get("revision", 0),
+        "version": store.current_version(plan_id),
         "refine_source": refine_source,
+    }
+
+
+@app.get("/api/plan/{plan_id}/versions")
+async def list_plan_versions(plan_id: str):
+    if store.load(plan_id) is None:
+        raise HTTPException(status_code=404, detail="规划不存在")
+    return {
+        "plan_id": plan_id,
+        "current": store.current_version(plan_id),
+        "versions": store.list_versions(plan_id),
+    }
+
+
+@app.get("/api/plan/{plan_id}/versions/{version}")
+async def get_plan_version(plan_id: str, version: int):
+    record = store.load_version(plan_id, version)
+    if record is None:
+        raise HTTPException(status_code=404, detail="该版本不存在")
+    record["plan_id"] = plan_id
+    return record
+
+
+@app.post("/api/plan/{plan_id}/rollback")
+async def rollback_plan(plan_id: str, body: RollbackRequest):
+    """回滚到历史版本。回滚本身也记一个新版本，历史不被覆盖。"""
+    record = store.load(plan_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="规划不存在")
+    target = store.load_version(plan_id, body.version)
+    if target is None:
+        raise HTTPException(status_code=404, detail="该版本不存在")
+
+    new_version = store.save(
+        plan_id,
+        record["brief"],
+        target["itinerary"],
+        target["critique"],
+        record["trace"] + [{"phase": "rollback", "to": body.version}],
+        record.get("revision", 0),
+        target["negotiation"] if target["negotiation"] is not None else record.get("negotiation"),
+        record.get("activity"),
+        source="rollback",
+        note=f"回滚到 v{body.version}",
+    )
+    return {
+        "plan_id": plan_id,
+        "version": new_version,
+        "rolled_back_to": body.version,
+        "itinerary": target["itinerary"],
+        "critique": target["critique"],
     }
 
 
