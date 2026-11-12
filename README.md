@@ -264,6 +264,7 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_interrupt.py    # 人工介入：accept / downgrade / abort（需先起服务）
 .venv/Scripts/python.exe scripts/verify_interrupt_ui.py # 中断面板交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_negotiation.py  # 协商轨迹结构（需先起服务）
+.venv/Scripts/python.exe scripts/verify_negotiation_loop.py # 协商多轮闭环（假模型驱动，不需服务）
 .venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
 .venv/Scripts/python.exe scripts/verify_mediation.py    # 协商裁决逻辑（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_trace_drawer.py # 轨迹抽屉与流式输出（需先起服务）
@@ -290,6 +291,7 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_interrupt | 3 组 18 项 | 通过 |
 | verify_interrupt_ui | 3 组 9 项 | 通过 |
 | verify_negotiation | 5 组 20 项 | 通过 |
+| verify_negotiation_loop | 5 组 22 项 | 通过 |
 | verify_negotiation_ui | 3 组 8 项 | 通过 |
 | verify_mediation | 7 组 18 项 | 通过 |
 | verify_trace_drawer | 6 组 16 项 | 通过 |
@@ -339,7 +341,9 @@ $env:PYTHONPATH=(Get-Location).Path
 - 重选时位置优先：先圈出离目标景点最近的 3 家，再在里面挑性价比最高的。
   只调权重是不够的——权重差几百分之一结果不会变，协作就成了走过场
 
-## 8. 协商细节预算严重超支（>20%）时，不是让一个模型自己决定怎么省，而是两个**有明确立场**的角色各说各话：
+## 8. 协商细节
+
+预算严重超支（>20%）时，不是让一个模型自己决定怎么省，而是两个**有明确立场**的角色各说各话：
 
 ```
 预算官（只对钱负责）   → 提议砍掉 X、换便宜酒店，可省 N 元
@@ -371,6 +375,26 @@ $env:PYTHONPATH=(Get-Location).Path
 
 多轮上限刻意设成 2 轮——在"预算 vs 体验"这个二维冲突上，第三轮不会产生新信息。
 
+### 轮次和用户倾向必须是图状态的显式通道
+
+`neg_round`、`user_hint` 一旦漏在 `TripState` 之外，LangGraph 会**静默丢弃**节点返回值：
+轮次永远停在 1，`final_round` 不生效，僵持后还会反复追问用户。
+这类错误不会报错、只会表现成"协商好像谈了两次但结论不对"，所以 `verify_negotiation_loop`
+把它当成一条显式断言固定下来。
+
+协商的每条分支都用可控假模型跑过，不依赖真实模型的随机性：
+
+| 场景 | 期望 |
+|---|---|
+| 体验官让步 | 第 1 轮直接采纳，不打扰用户 |
+| 全高价值项目 | 僵持 → 暂停追问用户倾向 |
+| 用户表态后第 2 轮 | 必须给出可执行方案，且用户倾向不被丢弃 |
+| 第 2 轮后仍超支 | 再次交回用户拍板，不替用户接受 |
+| 没有任何可削减项 | 仍然要问用户，不能把超支行程静默交付 |
+
+假模型只替换 `LLMClient.chat_json`，证据计算、裁决规则、图路由全部走真实代码。
+
+
 ## 9. 已知限制
 
 - **模型只负责「去哪」，不负责「怎么排」**。时间轴、时长上限、预算校验仍是确定性规则。
@@ -382,6 +406,9 @@ $env:PYTHONPATH=(Get-Location).Path
 - **推理模型需要更大的 max_tokens**：`deepseek-flash` 这类模型会先把 token 花在 `reasoning_content`，
   `content` 才是答案。额度不足时会返回空 `content` 且 `finish_reason=length`，
   系统明确报"输出被截断"并降级，不会拿半截 JSON 去用。
+- **协商第 2 轮的「强制出方案」在图层依赖数据**：`mediator` 只有在"被砍项全部高价值"时才走
+  `final_round` 强制采纳分支。mock 景点池里最多只能凑出一个高价值付费景点，因此图层的这条分支
+  没有被端到端触发（它由 `verify_mediation` 的单元断言覆盖）。真实模型选景点时更容易命中。
 - **中断用的 checkpointer 是进程内的**（`MemorySaver`）：服务重启后，尚未确认的中断会失效，
   需要重新规划。已完成的行程存在 SQLite 里，不受影响。
 - **超支阈值 20% 是代码常量**，暂未做成界面配置项。

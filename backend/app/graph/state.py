@@ -30,6 +30,10 @@ class TripState(TypedDict, total=False):
     decision: str
     negotiation: NegotiationLog
     negotiated: bool
+    # 协商轮次与用户倾向必须声明成通道：否则 LangGraph 会静默丢弃节点返回值，
+    # 第二轮永远退化成第一轮，僵持后也会反复追问用户。
+    neg_round: int
+    user_hint: str
     forced_drops: list[str]
     force_cheaper_hotel: bool
     collab_done: bool
