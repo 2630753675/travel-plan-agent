@@ -13,11 +13,15 @@ E 没有待确认中断时 resume 返回 400
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from sse_protocol import final_result, interrupt_info  # noqa: E402
 
 BASE = "http://127.0.0.1:8848"
 failures: list[str] = []
@@ -87,13 +91,12 @@ def resume(plan_id: str, decision: str) -> tuple[int, list[tuple[str, dict]]]:
 def run_case(label: str, decision: str) -> tuple[dict, dict] | None:
     print(f"\n[{label}]")
     events = plan(LOW_BUDGET)
-    kinds = [e for e, _ in events]
-    print(f"  事件: {kinds[-4:]}")
-    check("被中断而不是直接完成", "interrupt" in kinds and "done" not in kinds, str(kinds[-3:]))
-    if "interrupt" not in kinds:
+    print(f"  事件: {[e for e, _ in events][-4:]}")
+    info = interrupt_info(events)
+    check("被中断而不是直接完成", info is not None and final_result(events) is None)
+    if info is None:
         return None
 
-    info = next(d for e, d in events if e == "interrupt")
     print(f"  超支 {info['over']} 元 / 预算 {info['budget']}（{info['ratio']:.0%}）")
     check("中断类型正确", info.get("type") == "budget_overrun", str(info.get("type")))
     check("带 plan_id", bool(info.get("plan_id")), str(info.get("plan_id")))
@@ -102,7 +105,7 @@ def run_case(label: str, decision: str) -> tuple[dict, dict] | None:
 
     status, resumed = resume(info["plan_id"], decision)
     check("恢复返回 200", status == 200, str(status))
-    done = next((d for e, d in resumed if e == "done"), None)
+    done = final_result(resumed)
     check("恢复后产出结果", done is not None)
     if done:
         it = done["itinerary"]

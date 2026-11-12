@@ -7,11 +7,22 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from sse_protocol import (  # noqa: E402
+    final_result,
+    is_completed,
+    is_failed,
+    normalized_event_types,
+    parse_sse,
+    run_events,
+)
 
 BASE = "http://127.0.0.1:8848"
 failures: list[str] = []
@@ -47,7 +58,8 @@ def get(path: str) -> tuple[int, str]:
         return e.code, e.read().decode()
 
 
-def parse_sse(text: str) -> list[tuple[str, dict]]:
+def parse_sse_legacy(text: str) -> list[tuple[str, dict]]:
+    """本文件早先自带的解析器，保留给旧断言使用。"""
     events = []
     for block in text.split("\n\n"):
         if not block.strip():
@@ -85,30 +97,53 @@ def main() -> int:
     status, text = post("/api/plan", BRIEF)
     check("返回 200", status == 200, str(status))
     events = parse_sse(text)
-    kinds = [e for e, _ in events]
+    kinds = normalized_event_types(events)
     print(f"  事件数 {len(events)}: {kinds[:6]} ... {kinds[-3:]}")
-    check("有 trace 事件", kinds.count("trace") >= 7, f"{kinds.count('trace')}")
-    check("有 done 事件", "done" in kinds)
-    check("无 error 事件", "error" not in kinds, str([d for e, d in events if e == "error"]))
-    check("出现过回退事件或一轮通过", True)
+    check("有过程事件", kinds.count("trace") >= 7, f"{kinds.count('trace')}")
+    check("有完成事件", is_completed(events))
+    check("无错误事件", not is_failed(events))
+    check("事件协议统一为 run_event", all(e == "run_event" for e, _ in events))
 
-    done = next((d for e, d in events if e == "done"), None)
+    done = final_result(events)
     if done is None:
-        print("  FAIL  缺少 done 事件，后续用例无法执行")
+        print("  FAIL  缺少完成事件，后续用例无法执行")
         return 1
     plan_id = done["plan_id"]
     print(f"  plan_id={plan_id}, 天数={len(done['itinerary']['days'])}, "
           f"总花费={done['itinerary']['total_cost']:.0f}, 重排={done['revision']}")
     check("行程 5 天", len(done["itinerary"]["days"]) == 5)
-    check("包含 trace 摘要", any(e == "trace" and d.get("phase") == "end" for e, d in events))
+    check("完成载荷自带结果", "itinerary" in done and "critique" in done)
+
+    print("\n[2b] 事件契约")
+    evs = run_events(events)
+    seqs = [e["seq"] for e in evs]
+    ids = [e["event_id"] for e in evs]
+    check("序号严格递增", seqs == sorted(seqs) and len(set(seqs)) == len(seqs), str(seqs[:5]))
+    check("event_id 不重复", len(set(ids)) == len(ids), f"{len(ids)} ids")
+    check("全部带 run_id", all(e["run_id"] == plan_id for e in evs))
+    agent_started = [e for e in evs if e["event_type"] == "agent_started"]
+    check("记录 agent 启动", len(agent_started) >= 5, str(len(agent_started)))
+    tool_calls = [e for e in evs if e["event_type"] == "tool_call"]
+    tool_results = [e for e in evs if e["event_type"] == "tool_result"]
+    check("记录真实工具调用", len(tool_calls) >= 4, str(len(tool_calls)))
+    call_ids = {e["event_id"] for e in tool_calls}
+    check("工具结果挂在调用下", all(e.get("parent_id") in call_ids for e in tool_results), str(len(tool_results)))
+    check("包含校验事件", any(e["event_type"] == "validation_result" for e in evs))
 
     print("\n[3] GET /api/plan/{id} 取回结果")
     status, body = get(f"/api/plan/{plan_id}")
     check("返回 200", status == 200, str(status))
     record = json.loads(body)
     check("行程一致", record["itinerary"]["days"][0]["date"] == done["itinerary"]["days"][0]["date"])
-    check("trace 已持久化", len(record["trace"]) >= 7, str(len(record["trace"])))
+    check("事件已持久化", len(record.get("events") or []) >= len(evs), str(len(record.get("events") or [])))
     check("brief 已持久化", record["brief"]["destination"] == "成都")
+
+    print("\n[3b] GET /api/plan/{id}/events 增量回放")
+    status, body = get(f"/api/plan/{plan_id}/events?after_seq=3")
+    check("返回 200", status == 200, str(status))
+    tail = json.loads(body)
+    check("只返回游标之后的事件", all(e["seq"] > 3 for e in tail["events"]), str([e["seq"] for e in tail["events"]][:5]))
+    check("last_seq 正确", tail["last_seq"] == evs[-1]["seq"], str(tail.get("last_seq")))
 
     print("\n[4] 不存在的 plan")
     status, _ = get("/api/plan/doesnotexist")

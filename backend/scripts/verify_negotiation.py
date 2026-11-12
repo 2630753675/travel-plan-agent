@@ -14,11 +14,15 @@ F 中断时轨迹也一并下发，用户能据此判断
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from sse_protocol import final_result, interrupt_info  # noqa: E402
 
 BASE = "http://127.0.0.1:8848"
 failures: list[str] = []
@@ -101,7 +105,7 @@ def main() -> int:
     print(f"  事件: {kinds[-5:]}")
 
     print("\n[2] 轨迹结构")
-    payload = next((d for e, d in events if e in ("done", "interrupt")), None)
+    payload = final_result(events) or interrupt_info(events)
     check("拿到结果或中断", payload is not None)
     if payload is None:
         return 1
@@ -157,7 +161,7 @@ def main() -> int:
         check("升级时不给调整方案", not neg["adjustment"]["drop_poi_ids"], str(neg["adjustment"]))
 
     print("\n[5] 若已采纳，被砍景点不应出现；轨迹应可回放")
-    if "done" in kinds:
+    if final_result(events) is not None:
         plan_id = payload["plan_id"]
         titles = [
             i["title"]

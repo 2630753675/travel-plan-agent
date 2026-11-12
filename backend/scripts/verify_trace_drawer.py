@@ -76,13 +76,19 @@ def main() -> int:
 
         print("\n[4] 工具调用可见")
         tools = page.locator(".log-row.kind-tool .log-text").all_inner_texts()
-        print(f"  工具调用 {len(tools)} 条：{tools[:3]}")
+        print(f"  工具调用 {len(tools)} 条：{tools[:4]}")
         check("记录了工具调用", len(tools) >= 3, str(len(tools)))
         check(
-            "带函数名与返回",
-            any("search_flights" in t and "→" in t for t in tools)
-            or any("list_pois" in t and "→" in t for t in tools),
+            "带函数名与入参",
+            any(t.startswith("search_flights(") or t.startswith("list_pois(") for t in tools),
             str(tools[:3]),
+        )
+        check("有返回摘要行", any(t.startswith("→ ") for t in tools), str(tools[:4]))
+        # 同一工具不应同时出现真实事件和旧的摘要行
+        check(
+            "工具事件未重复",
+            not any("→ " in t and "(" in t for t in tools),
+            str([t for t in tools if "→ " in t and "(" in t][:3]),
         )
 
         print("\n[5] 阶段可折叠")

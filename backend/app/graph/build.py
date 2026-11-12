@@ -12,6 +12,9 @@ planner 收到全部四路结果后才开始排程。
 
 from __future__ import annotations
 
+from datetime import date
+from uuid import uuid4
+
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -37,6 +40,82 @@ def _emit(payload: dict) -> None:
         get_stream_writer()(payload)
     except Exception:
         pass
+
+
+class _ObservedSource:
+    """Wrap real data-source calls with truthful call/result stream events."""
+
+    def __init__(self, source: TravelSource, actor: str, stage: str):
+        self._source = source
+        self._actor = actor
+        self._stage = stage
+
+    def _call(self, tool: str, arguments: dict, fn):
+        call_id = uuid4().hex
+        _emit({
+            "phase": "tool_call",
+            "tool_call_id": call_id,
+            "node": self._actor,
+            "stage": self._stage,
+            "actor": self._actor,
+            "tool": tool,
+            "arguments": arguments,
+        })
+        try:
+            result = fn()
+        except Exception as exc:
+            _emit({
+                "phase": "tool_result",
+                "tool_call_id": call_id,
+                "node": self._actor,
+                "stage": self._stage,
+                "actor": self._actor,
+                "tool": tool,
+                "status": "error",
+                "summary": type(exc).__name__,
+            })
+            raise
+        count = len(result) if hasattr(result, "__len__") else None
+        _emit({
+            "phase": "tool_result",
+            "tool_call_id": call_id,
+            "node": self._actor,
+            "stage": self._stage,
+            "actor": self._actor,
+            "tool": tool,
+            "status": "success",
+            "summary": f"{count} 条结果" if count is not None else "调用成功",
+            "result_count": count,
+        })
+        return result
+
+    def search_flights(self, origin: str, destination: str, dep_date: date):
+        return self._call(
+            "search_flights",
+            {"origin": origin, "destination": destination, "date": dep_date.isoformat()},
+            lambda: self._source.search_flights(origin, destination, dep_date),
+        )
+
+    def search_hotels(self, city: str, checkin: date, nights: int):
+        return self._call(
+            "search_hotels",
+            {"city": city, "checkin": checkin.isoformat(), "nights": nights},
+            lambda: self._source.search_hotels(city, checkin, nights),
+        )
+
+    def list_pois(self, city: str):
+        return self._call("list_pois", {"city": city}, lambda: self._source.list_pois(city))
+
+    def get_weather(self, city: str, start: date, days: int):
+        return self._call(
+            "get_weather",
+            {"city": city, "start": start.isoformat(), "days": days},
+            lambda: self._source.get_weather(city, start, days),
+        )
+
+
+def _observed_source(source: TravelSource, actor: str, stage: str) -> _ObservedSource:
+    return _ObservedSource(source, actor, stage)
 
 
 def _summarize(node: str, upd: dict) -> str:
@@ -232,7 +311,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     async def transport_node(state: TripState) -> dict:
         try:
-            plan = transport.run(state["brief"], source)
+            plan = transport.run(state["brief"], _observed_source(source, "transport", "retrieval"))
         except Exception as e:  # 节点异常不抛穿整图
             return {
                 "transport": transport.TransportPlan(error=f"交通 agent 异常：{e}"),
@@ -242,7 +321,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     async def lodging_node(state: TripState) -> dict:
         try:
-            plan = lodging.run(state["brief"], source)
+            plan = lodging.run(state["brief"], _observed_source(source, "lodging", "retrieval"))
         except Exception as e:
             return {
                 "lodging": lodging.LodgingPlan(error=f"住宿 agent 异常：{e}"),
@@ -252,7 +331,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     async def poi_node(state: TripState) -> dict:
         try:
-            plan = poi.run(state["brief"], source)
+            plan = poi.run(state["brief"], _observed_source(source, "poi", "retrieval"))
         except Exception as e:
             return {
                 "poi": poi.PoiPlan(error=f"景点 agent 异常：{e}"),
@@ -262,7 +341,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     async def weather_node(state: TripState) -> dict:
         try:
-            plan = weather.run(state["brief"], source)
+            plan = weather.run(state["brief"], _observed_source(source, "weather", "retrieval"))
         except Exception as e:
             return {
                 "weather": weather.WeatherPlan(error=f"天气 agent 异常：{e}"),
@@ -333,7 +412,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         focus_ids = set(state.get("focus_poi_ids") or [])
         focus = [p for p in state["poi"].candidates if p.id in focus_ids]
         before = state["lodging"].chosen
-        plan = lodging.run(state["brief"], source, focus_pois=focus)
+        plan = lodging.run(state["brief"], _observed_source(source, "lodging", "collab"), focus_pois=focus)
 
         lines = [stage("collab")]
         if plan.error:
@@ -401,6 +480,14 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             transport=state["transport"],
             weather=state["weather"],
         )
+        _emit({
+            "phase": "validation",
+            "node": "critic",
+            "stage": "check",
+            "passed": critique.passed,
+            "issues": [issue.model_dump(mode="json") for issue in critique.issues],
+            "suggestions": critique.suggestions,
+        })
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
 
     async def negotiation_node(state: TripState) -> dict:

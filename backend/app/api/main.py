@@ -24,6 +24,7 @@ from .. import settings as config_store
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..graph.build import build
 from ..llm import LLMClient, LLMError, TokenBudget
+from ..event_stream import EventFactory, legacy_activity
 from ..models import Critique, Itinerary, TripBrief
 from ..settings import AppSettings
 from ..tools.factory import make_source
@@ -55,25 +56,43 @@ class ResumeRequest(BaseModel):
 _CHECKPOINTER = MemorySaver()
 
 
-def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
+    prefix = f"id: {event_id}\n" if event_id else ""
+    return f"{prefix}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief):
-    """消费图的事件流，并把「中断待确认」也作为一类事件推给前端。"""
+    """Stream, persist, and replay one normalized event sequence per run."""
     trace: list[dict] = []
     final: dict = {}
+    seq_start = store.next_event_seq(plan_id)
+    factory = EventFactory(plan_id, seq_start=seq_start)
+
+    def publish(event) -> str:
+        payload = event.model_dump(mode="json")
+        store.append_event(payload)
+        return _sse("run_event", payload, event_id=f"{plan_id}:{event.seq}")
+
+    lifecycle = "run_started" if seq_start == 1 else "run_resumed"
+    yield publish(factory.make(lifecycle, actor="system", payload={"plan_id": plan_id}))
     try:
         async for mode, payload in graph.astream(
             graph_input, config=config, stream_mode=["custom", "values"]
         ):
             if mode == "custom":
                 trace.append(payload)
-                yield _sse("trace", payload)
+                for event in factory.from_custom(payload):
+                    yield publish(event)
             else:
                 final = payload
     except Exception as e:  # 任何未预期异常都要让前端收到，而不是静默断开
-        yield _sse("error", {"message": f"规划过程异常：{e}"})
+        yield publish(
+            factory.make(
+                "run_failed",
+                actor="system",
+                payload={"message": f"规划过程异常：{e}"},
+            )
+        )
         return
 
     snapshot = await graph.aget_state(config)
@@ -82,17 +101,32 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         info = dict(pending[0].value or {})
         info["plan_id"] = plan_id
         info["revision"] = final.get("revision", 0)
-        # 中断前若发生过协商，把轨迹一并给出，否则用户无从判断该选哪个
         negotiation = final.get("negotiation")
         if negotiation is not None:
             info["negotiation"] = negotiation.model_dump(mode="json")
         activity = final.get("log") or []
         info["activity"] = [e.model_dump(mode="json") for e in activity]
-        yield _sse("interrupt", info)
+        yield publish(
+            factory.make(
+                "run_interrupted",
+                actor="system",
+                payload={
+                    "interrupt": info,
+                    "interrupt_type": info.get("type"),
+                    "revision": info["revision"],
+                },
+            )
+        )
         return
 
     if "draft" not in final or "critique" not in final:
-        yield _sse("error", {"message": "规划未产出结果"})
+        yield publish(
+            factory.make(
+                "run_failed",
+                actor="system",
+                payload={"message": "规划未产出结果"},
+            )
+        )
         return
 
     itinerary: Itinerary = final["draft"]
@@ -108,6 +142,30 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     elif decision == "downgrade":
         itinerary.warnings.append("已按你的选择降配重排")
 
+    activity = [e.model_dump(mode="json") for e in (final.get("log") or [])]
+    result = {
+        "plan_id": plan_id,
+        "brief": brief.model_dump(mode="json"),
+        "itinerary": itinerary.model_dump(mode="json"),
+        "critique": critique.model_dump(mode="json"),
+        "revision": revision,
+        "decision": decision,
+        "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
+        "activity": activity,
+        "errors": final.get("errors") or [],
+    }
+    yield publish(
+        factory.make(
+            "run_completed",
+            actor="system",
+            payload={
+                "revision": revision,
+                "passed": critique.passed,
+                "total_cost": itinerary.total_cost,
+                "result": result,
+            },
+        )
+    )
     store.save(
         plan_id,
         brief.model_dump(mode="json"),
@@ -116,22 +174,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         trace,
         revision,
         negotiation.model_dump(mode="json") if negotiation else None,
-        [e.model_dump(mode="json") for e in (final.get("log") or [])],
-    )
-    negotiation = final.get("negotiation")
-    yield _sse(
-        "done",
-        {
-            "plan_id": plan_id,
-            "brief": brief.model_dump(mode="json"),
-            "itinerary": itinerary.model_dump(mode="json"),
-            "critique": critique.model_dump(mode="json"),
-            "revision": revision,
-            "decision": decision,
-            "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
-            "activity": [e.model_dump(mode="json") for e in (final.get("log") or [])],
-            "errors": final.get("errors") or [],
-        },
+        activity,
     )
 
 
@@ -164,7 +207,17 @@ async def get_plan(plan_id: str):
     record = store.load(plan_id)
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
+    record["events"] = store.list_events(plan_id)
     return record
+
+
+@app.get("/api/plan/{plan_id}/events")
+async def get_plan_events(plan_id: str, after_seq: int = 0):
+    """增量拉取事件，用于断点续看与回放。"""
+    if after_seq < 0:
+        raise HTTPException(status_code=400, detail="after_seq 不能小于 0")
+    events = store.list_events(plan_id, after_seq)
+    return {"run_id": plan_id, "events": events, "last_seq": events[-1]["seq"] if events else after_seq}
 
 
 @app.post("/api/plan/{plan_id}/resume")

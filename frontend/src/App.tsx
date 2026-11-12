@@ -1,22 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import SettingsPanel from './Settings'
 
-type Trace = {
-  phase: 'start' | 'end' | 'edge' | 'refine'
-  node?: string
-  summary?: string
-  from?: string
-  to?: string
-  reason?: string
-}
-
-type Card = {
-  key: string
-  kind: 'node' | 'edge'
-  node: string
-  status: 'waiting' | 'running' | 'done'
-  summary?: string
-  reason?: string
+type RunEvent = {
+  schema_version: number
+  run_id: string
+  plan_version: number
+  event_id: string
+  seq: number
+  occurred_at: string
+  event_type: string
+  stage: string
+  actor: string
+  parent_id: string | null
+  payload: Record<string, any>
 }
 
 type Item = {
@@ -52,7 +48,9 @@ type Result = {
   revision: number
   errors: string[]
   negotiation?: Negotiation | null
+  events?: RunEvent[]
   activity?: LogEntry[]
+  decision?: string | null
 }
 
 const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
@@ -191,6 +189,7 @@ function NegotiationTrail({ neg }: { neg: Negotiation }) {
 }
 
 type LogEntry = {
+  event_id?: string
   ts: string
   actor: string
   kind: string
@@ -298,6 +297,140 @@ function ActivityLog({ entries }: { entries: LogEntry[] }) {
   )
 }
 
+const ACTOR_LABEL: Record<string, string> = {
+  system: '系统',
+  clarify: '需求澄清',
+  transport: '交通',
+  lodging: '住宿',
+  poi: '景点',
+  weather: '天气',
+  planner: '行程规划',
+  critic: '可行性校验',
+  negotiation: '协商',
+  budget_officer: '预算官',
+  experience_officer: '体验官',
+  mediator: '调解者',
+  confirm: '等待确认',
+  ask: '等待确认',
+  user: '你',
+}
+
+function fmtArgs(args: unknown): string {
+  if (!args || typeof args !== 'object') return ''
+  const entries = Object.entries(args as Record<string, unknown>)
+  if (entries.length === 0) return ''
+  return entries.map(([k, v]) => `${k}=${String(v)}`).join(', ')
+}
+
+function fmtClock(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+/** 把统一事件投影成展示行；只影响渲染，不改变存储与回放的原事件。 */
+function eventToLogEntry(ev: RunEvent): LogEntry | null {
+  const p = ev.payload ?? {}
+  const base: Omit<LogEntry, 'kind' | 'text' | 'depth'> = {
+    event_id: ev.event_id,
+    ts: (p.ts as string) ?? fmtClock(ev.occurred_at),
+    actor: ACTOR_LABEL[ev.actor] ?? ev.actor,
+    group: ev.stage,
+    detail: '',
+    tool: '',
+  }
+  switch (ev.event_type) {
+    case 'stage_started':
+      return { ...base, kind: 'stage', text: p.text ?? `阶段: ${GROUP_LABEL[ev.stage] ?? ev.stage}`, depth: 0 }
+    case 'agent_message':
+    case 'route_decision':
+      return {
+        ...base,
+        kind: (p.kind as string) ?? (ev.event_type === 'route_decision' ? 'decision' : 'action'),
+        text: p.text ?? '',
+        depth: (p.depth as number) ?? 1,
+      }
+    case 'user_question':
+      return { ...base, kind: 'question', text: p.text ?? '', depth: 1 }
+    case 'user_answer':
+      return { ...base, kind: 'answer', text: p.text ?? '', depth: 1 }
+    case 'tool_call':
+      return {
+        ...base,
+        kind: 'tool',
+        text: `${p.tool_name}(${fmtArgs(p.arguments)})`,
+        depth: 2,
+        tool: String(p.tool_name ?? ''),
+      }
+    case 'tool_result':
+      return {
+        ...base,
+        kind: 'tool',
+        text: `→ ${p.summary ?? p.status ?? ''}`,
+        depth: 2,
+        tool: String(p.tool_name ?? ''),
+      }
+    case 'tool_exchange':
+      return { ...base, kind: 'tool', text: p.text ?? '', depth: 2, tool: String(p.tool ?? '') }
+    case 'agent_completed':
+      return p.summary ? { ...base, kind: 'action', text: String(p.summary), depth: 1 } : null
+    case 'validation_result': {
+      const issues = Array.isArray(p.issues) ? p.issues : []
+      const blockers = issues.filter((i: any) => i?.severity === 'blocker')
+      return {
+        ...base,
+        kind: 'decision',
+        text: p.passed ? `校验通过（${issues.length} 条提醒）` : `校验未通过，${blockers.length} 个阻断项`,
+        depth: 1,
+      }
+    }
+    default:
+      return null
+  }
+}
+
+function projectEvents(events: RunEvent[]): LogEntry[] {
+  const rows: LogEntry[] = []
+  for (const ev of events) {
+    const row = eventToLogEntry(ev)
+    if (row) rows.push(row)
+  }
+  return rows
+}
+
+/** 历史记录只有 activity 投影；这里把它还原成同一套事件，保证回放视图一致。 */
+function activityToEvent(row: LogEntry, seq: number): RunEvent {
+  const type =
+    row.kind === 'stage'
+      ? 'stage_started'
+      : row.kind === 'tool'
+        ? 'tool_exchange'
+        : row.kind === 'question'
+          ? 'user_question'
+          : row.kind === 'answer'
+            ? 'user_answer'
+            : row.kind === 'decision'
+              ? 'route_decision'
+              : 'agent_message'
+  return {
+    schema_version: 1,
+    run_id: 'legacy',
+    plan_version: 1,
+    event_id: `legacy-${seq}-${row.ts}-${row.text.slice(0, 8)}`,
+    seq,
+    occurred_at: new Date().toISOString(),
+    event_type: type,
+    stage: row.group,
+    actor: row.actor,
+    parent_id: null,
+    payload: { ts: row.ts, text: row.text, detail: row.detail, kind: row.kind, depth: row.depth, tool: row.tool },
+  }
+}
+
+function activityToEvents(activity: LogEntry[]): RunEvent[] {
+  return activity.map((row, i) => activityToEvent(row, i + 1))
+}
+
 type InterruptOption = { value: string; label: string }
 
 type InterruptInfo = {
@@ -310,13 +443,13 @@ type InterruptInfo = {
   options: InterruptOption[]
   plan_id: string
   negotiation?: Negotiation | null
+  events?: RunEvent[]
   activity?: LogEntry[]
 }
 
 export default function App() {
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
   const [phase, setPhase] = useState<'form' | 'running' | 'interrupt' | 'done' | 'error'>('form')
-  const [cards, setCards] = useState<Card[]>([])
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
@@ -326,8 +459,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [llmOn, setLlmOn] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [liveLogs, setLiveLogs] = useState<LogEntry[]>([])
+  const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
   const drawerRef = useRef<HTMLDivElement>(null)
+  const liveLogs = useMemo(() => projectEvents(liveEvents), [liveEvents])
 
   useEffect(() => {
     fetch('/api/config')
@@ -349,21 +483,15 @@ export default function App() {
           critique: rec.critique,
           revision: rec.revision ?? 0,
           errors: [],
+          negotiation: rec.negotiation ?? null,
         })
-        setCards(
-          (rec.trace as Trace[])
-            .filter((t) => t.phase === 'end' || t.phase === 'edge')
-            .map((t, i) => ({
-              key: `${i}`,
-              kind: t.phase === 'edge' ? ('edge' as const) : ('node' as const),
-              node: t.node ?? t.from ?? '',
-              status: 'done' as const,
-              summary: t.summary,
-              reason: t.reason,
-            })),
-        )
+        // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
+        if (Array.isArray(rec.events) && rec.events.length > 0) {
+          setLiveEvents(rec.events)
+        } else if (Array.isArray(rec.activity)) {
+          setLiveEvents(activityToEvents(rec.activity))
+        }
         setPhase('done')
-        if (rec.activity) setLiveLogs(rec.activity)
       })
       .catch(() => setError('该规划不存在或已失效'))
   }, [])
@@ -374,67 +502,51 @@ export default function App() {
     drawerRef.current?.scrollTo({ top: drawerRef.current.scrollHeight, behavior: 'smooth' })
   }, [liveLogs, drawerOpen])
 
-  function pushTrace(ev: Trace) {
-    if (ev.phase === 'start') {
-      setCards((prev) => {
-        // 优先复用预置骨架里尚未完成的槽位；回退重跑时再追加新卡片
-        const idx = prev.findIndex((c) => c.kind === 'node' && c.node === ev.node && c.status !== 'done')
-        if (idx >= 0) {
-          const next = [...prev]
-          next[idx] = { ...next[idx], status: 'running' }
-          return next
-        }
-        return [
-          ...prev,
-          { key: `${Date.now()}-${Math.random()}`, kind: 'node', node: ev.node!, status: 'running' },
-        ]
-      })
-    } else if (ev.phase === 'end') {
-      setCards((prev) => {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          const c = prev[i]
-          if (c.kind === 'node' && c.node === ev.node && c.status === 'running') {
-            const next = [...prev]
-            next[i] = { ...c, status: 'done', summary: ev.summary }
-            return next
-          }
-        }
-        return prev
-      })
-    } else if (ev.phase === 'edge') {
-      setCards((prev) => [
-        ...prev,
-        {
-          key: `${Date.now()}-${Math.random()}`,
-          kind: 'edge',
-          node: ev.from ?? '',
-          status: 'done',
-          reason: ev.reason,
-        },
-      ])
-    }
+  function appendEvent(ev: RunEvent) {
+    setLiveEvents((prev) => (prev.some((e) => e.event_id === ev.event_id) ? prev : [...prev, ev]))
   }
 
   function handleEvent(name: string, data: any) {
+    if (name === 'run_event') {
+      const ev = data as RunEvent
+      appendEvent(ev)
+      if (ev.event_type === 'run_completed') {
+        const payload = ev.payload?.result as Result | undefined
+        if (payload) {
+          setResult(payload)
+          setPhase('done')
+          setInterruptInfo(null)
+          const url = new URL(location.href)
+          url.searchParams.set('plan', payload.plan_id)
+          history.replaceState(null, '', url)
+        }
+      } else if (ev.event_type === 'run_interrupted') {
+        setInterruptInfo((ev.payload?.interrupt ?? null) as InterruptInfo | null)
+        setPhase('interrupt')
+      } else if (ev.event_type === 'run_failed') {
+        setError(String(ev.payload?.message ?? '规划失败'))
+        setPhase('error')
+      }
+      return
+    }
+
+    // 兼容旧服务端（trace/done/interrupt/error）
     if (name === 'trace') {
       if (data.phase === 'log' && data.entry) {
-        // 流式追加：每条轨迹在产生的瞬间就出现
-        setLiveLogs((prev) => [...prev, data.entry])
-      } else {
-        pushTrace(data)
+        setLiveEvents((prev) => [...prev, activityToEvent(data.entry, prev.length + 1)])
       }
     } else if (name === 'done') {
       setResult(data)
       setPhase('done')
       setInterruptInfo(null)
-      if (data.activity) setLiveLogs(data.activity)
+      if (Array.isArray(data.activity)) setLiveEvents(activityToEvents(data.activity))
       const url = new URL(location.href)
       url.searchParams.set('plan', data.plan_id)
       history.replaceState(null, '', url)
     } else if (name === 'interrupt') {
       setInterruptInfo(data)
       setPhase('interrupt')
-      if (data.activity) setLiveLogs(data.activity)
+      if (Array.isArray(data.activity)) setLiveEvents(activityToEvents(data.activity))
     } else if (name === 'error') {
       setError(data.message)
       setPhase('error')
@@ -463,17 +575,9 @@ export default function App() {
 
   async function runPlan() {
     setPhase('running')
-    setCards(
-      ['clarify', 'transport', 'lodging', 'poi', 'weather', 'planner', 'critic'].map((n) => ({
-        key: `slot-${n}`,
-        kind: 'node' as const,
-        node: n,
-        status: 'waiting' as const,
-      })),
-    )
     setResult(null)
     setInterruptInfo(null)
-    setLiveLogs([])
+    setLiveEvents([])
     setError('')
     const body = {
       origin: form.origin,
@@ -538,7 +642,9 @@ export default function App() {
     }
   }
 
-  const doneCount = cards.filter((c) => c.kind === 'node' && c.status === 'done').length
+  const doneCount = new Set(
+    liveEvents.filter((e) => e.event_type === 'agent_completed').map((e) => e.actor),
+  ).size
 
   return (
     <div className="shell">
@@ -758,9 +864,9 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              {interruptInfo.activity && interruptInfo.activity.length > 0 && (
+              {liveLogs.length > 0 && (
                 <button className="ghost" onClick={() => setDrawerOpen(true)}>
-                  查看执行轨迹（{interruptInfo.activity.length} 步）
+                  查看执行轨迹（{liveLogs.length} 步）
                 </button>
               )}
               {interruptInfo.negotiation && <NegotiationTrail neg={interruptInfo.negotiation} />}
@@ -883,7 +989,7 @@ export default function App() {
             </section>
           )}
 
-          {phase === 'form' && cards.length === 0 && (
+          {phase === 'form' && liveEvents.length === 0 && (
             <div className="empty">
               <p>填写左侧需求后开始规划。</p>
               <p className="muted">

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, time
-from typing import Literal
+from datetime import date, datetime, time
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -139,16 +139,30 @@ class Issue(BaseModel):
     message: str
 
 
+class RunEvent(BaseModel):
+    """统一编排事件契约，用于实时流、持久化、回放与 UI 展示。"""
+
+    schema_version: int = 1
+    run_id: str
+    plan_version: int = Field(default=1, ge=1)
+    event_id: str
+    seq: int = Field(ge=1)
+    occurred_at: datetime
+    event_type: Literal[
+        "run_started", "run_resumed", "stage_started", "agent_started", "agent_message",
+        "agent_completed", "tool_call", "tool_result", "tool_exchange", "validation_result", "route_decision",
+        "user_question", "user_answer", "artifact_created", "run_interrupted",
+        "run_completed", "run_failed",
+    ]
+    stage: str = ""
+    actor: str = "system"
+    parent_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+# 过渡兼容：现有前端展示字段继续从事件派生，完成前端迁移后移除。
 class LogEntry(BaseModel):
-    """执行轨迹的一行：谁、在什么时候、做了什么。
-
-    层级由 (group, depth) 决定：
-    - group: 所属阶段（clarify / retrieval / plan / check / negotiation / confirm）
-    - depth: 0=阶段标题，1=agent 动作或主张，2=工具调用或证据
-
-    记录原则：只写具体事实（选中哪个航班、砍掉哪个景点、超了多少），
-    不写"执行中/已完成"这类没有信息量的行。
-    """
+    """旧版轨迹视图模型；新数据以 RunEvent 为准。"""
 
     ts: str
     actor: str
@@ -158,6 +172,7 @@ class LogEntry(BaseModel):
     group: str = ""
     depth: int = 1
     tool: str = ""
+
 
 
 class Critique(BaseModel):

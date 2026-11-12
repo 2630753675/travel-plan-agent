@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import pathlib
 import re
 import sys
 import threading
@@ -18,6 +19,9 @@ import urllib.error
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from sse_protocol import final_result  # noqa: E402
 
 BASE = "http://127.0.0.1:8848"
 failures: list[str] = []
@@ -64,7 +68,7 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
 
 
 def plan_once(brief: dict) -> dict:
-    """POST /api/plan 是 SSE，取 done 事件；失败返回 {'error': ...}。"""
+    """POST /api/plan 是 SSE，取完成事件；失败返回 {'error': ...}。"""
     req = urllib.request.Request(
         BASE + "/api/plan",
         data=json.dumps(brief).encode(),
@@ -76,10 +80,9 @@ def plan_once(brief: dict) -> dict:
             events = parse_sse(r.read().decode())
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}: {e.read().decode()[:120]}"}
-    done = next((d for e, d in events if e == "done"), None)
+    done = final_result(events)
     if done is None:
-        err = next((d for e, d in events if e == "error"), None)
-        return {"error": str(err or "没有 done 事件")}
+        return {"error": "没有完成事件（可能被中断或失败）"}
     return done
 
 
