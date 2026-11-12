@@ -30,6 +30,8 @@ LUNCH_END = 13 * 60
 DINNER_START = 18 * 60 + 30
 
 MAX_POI_MINUTES_LAST_DAY = 120
+# 超过这个时长算"半天级"项目：单日已经超时时，这类项目要先让路
+HALF_DAY_MINUTES = 240
 AIRPORT_LEAD_MIN = 150
 POI_PER_DAY = {"轻松": 2, "适中": 3, "紧凑": 4}
 
@@ -55,6 +57,19 @@ def _pick_hotel(lodging: LodgingPlan, brief: TripBrief, budget_pressure: bool) -
     return lodging.cheaper_than(lodging.chosen) or lodging.chosen
 
 
+def _preference_score(poi: POI, preferences: list[str]) -> int:
+    """偏好命中打分：类别命中权重最高，标签命中累积。
+
+    类别（人文/自然/美食/购物）是粗粒度主题，标签是细粒度特征；
+    用户勾"人文"时，一个 category=人文 的景点比"碰巧有个相关标签"的更该选中。
+    """
+    if not preferences:
+        return 0
+    score = 2 if poi.category in preferences else 0
+    score += len(set(poi.tags) & set(preferences))
+    return score
+
+
 def _select_for_day(
     pool: list[POI],
     used: set[str],
@@ -63,7 +78,10 @@ def _select_for_day(
     want: int,
     prefer_free: bool,
     is_last_day: bool,
+    preferences: list[str] | None = None,
+    duration_pressure: bool = False,
 ) -> list[POI]:
+    preferences = preferences or []
     avail = [p for p in pool if p.id not in used and p.is_open_on(d)]
     # 夜间才开门的项目在本版不排（会和晚餐/入住冲突）
     avail = [p for p in avail if _minutes(p.open_time) < DAY_LATEST_POI_START]
@@ -74,12 +92,24 @@ def _select_for_day(
             for p in avail
             if p.duration_min <= MAX_POI_MINUTES_LAST_DAY and "需半天" not in p.tags
         ]
+    if duration_pressure:
+        # 上一轮被判单日超时：只减数量不够，半天级项目也要让路，
+        # 否则 300 分钟的山加上两三个景点永远压不进 600 分钟上限。
+        avail = [p for p in avail if p.duration_min <= HALF_DAY_MINUTES and "需半天" not in p.tags]
     if rainy:
         indoor = [p for p in avail if p.indoor]
         if indoor:
             avail = indoor + [p for p in avail if not p.indoor]
-    if prefer_free:
-        avail.sort(key=lambda p: (p.ticket_price, -p.duration_min))
+
+    # 排序决定选哪些：先看偏好命中，再（预算吃紧时）看票价。
+    # 只用这两个键、不追加时长排序——sort 是稳定的，其余保持数据原序，
+    # 这样"没有任何偏好"时选出来的景点和改动前完全一致。
+    def sort_key(p: POI) -> tuple:
+        pref = -_preference_score(p, preferences)
+        price = p.ticket_price if prefer_free else 0
+        return (pref, price)
+
+    avail.sort(key=sort_key)
     picked: list[POI] = []
     for p in avail:
         if len(picked) >= want:
@@ -229,7 +259,11 @@ def run(
             picked = _picked_by_llm(pool, used, d, llm_selection[d], want)
         else:
             picked = _select_for_day(
-                pool, used, d, rainy, want, prefer_free=budget_pressure, is_last_day=is_last
+                pool, used, d, rainy, want,
+                prefer_free=budget_pressure,
+                is_last_day=is_last,
+                preferences=brief.preferences,
+                duration_pressure=duration_pressure,
             )
 
         # 协商结果：被点名的景点一律不排

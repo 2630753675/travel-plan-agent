@@ -1,5 +1,8 @@
 """mock 数据源：从 data/mock/*.json 读取，按接口约定填充查询条件。
 
+数据是多城市的静态快照（成都 / 西安 / 厦门 / 北京）。行里带 `city` 字段的
+按城市过滤，没带的默认算成都——这样新增城市不影响已有的成都数据。
+
 刻意保留两个行为，用来驱动真实场景：
 - 城市/航线不匹配时返回空列表（对应"飞这条线没有航班"）；
 - 文件缺失或结构错误抛 SourceError（对应"数据源挂了"）。
@@ -9,13 +12,14 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from ..models import Flight, Hotel, POI, WeatherDay
 from .base import SourceError
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "mock"
+DEFAULT_CITY = "成都"
 
 
 def _load(name: str) -> list[dict]:
@@ -32,9 +36,13 @@ def _load(name: str) -> list[dict]:
     return data
 
 
-def _parse_time(value: str):
-    hh, mm = value.split(":")
-    return int(hh), int(mm)
+def _for_city(name: str, city: str) -> list[dict]:
+    """取某城市的行；没有 city 字段的历史数据归到成都。"""
+    return [row for row in _load(name) if row.get("city", DEFAULT_CITY) == city]
+
+
+def _strip_city(row: dict) -> dict:
+    return {k: v for k, v in row.items() if k != "city"}
 
 
 class MockSource:
@@ -62,38 +70,30 @@ class MockSource:
         return out
 
     def search_hotels(self, city: str, checkin: date, nights: int) -> list[Hotel]:
-        # mock 只覆盖成都，其他城市视为查不到
-        if city != "成都":
-            return []
         out: list[Hotel] = []
-        for row in _load("hotels.json"):
+        for row in _for_city("hotels.json", city):
             try:
-                out.append(Hotel(**row))
+                out.append(Hotel(**_strip_city(row)))
             except ValueError as e:
                 raise SourceError(f"酒店数据校验失败 {row.get('id')}: {e}") from e
         return out
 
     def list_pois(self, city: str) -> list[POI]:
-        if city != "成都":
-            return []
         out: list[POI] = []
-        for row in _load("pois.json"):
+        for row in _for_city("pois.json", city):
             try:
-                out.append(POI(**row))
+                out.append(POI(**_strip_city(row)))
             except ValueError as e:
                 raise SourceError(f"景点数据校验失败 {row.get('id')}: {e}") from e
         return out
 
     def get_weather(self, city: str, start: date, days: int) -> list[WeatherDay]:
-        if city != "成都":
-            return []
-        templates = _load("weather.json")
+        templates = _for_city("weather.json", city)
         if not templates:
-            raise SourceError("mock 天气数据为空")
-        from datetime import timedelta
-
+            return []
         out: list[WeatherDay] = []
         for i in range(days):
-            tpl = templates[i % len(templates)]
+            tpl = _strip_city(templates[i % len(templates)])
             out.append(WeatherDay(date=start + timedelta(days=i), **tpl))
         return out
+

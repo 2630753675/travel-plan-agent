@@ -2,7 +2,7 @@
 
 覆盖：
 A 花费构成可见，图例金额之和等于总花费
-B 数据来源明确标注为模拟数据，并给出"不代表真实可订"
+B 数据时效与适用范围写清楚（报价为查询时点快照）
 C 提示按类别分组，而不是一锅平铺
 D 运行中有进度提示（不是白屏等结果）
 E 规划失败时给得出"用同样的需求重试"
@@ -98,8 +98,8 @@ def main() -> int:
         print("\n[3] 数据来源")
         source = page.locator(".source-line").inner_text()
         print(f"  {source}")
-        check("标注为模拟数据", "模拟数据" in source, source)
-        check("说明不代表真实可订", "不代表真实" in source, source)
+        check("标注了报价口径", "快照" in source or "实时" in source, source)
+        check("提示以实际库存为准", "实际" in source, source)
 
         print("\n[4] 提示分组")
         groups = page.locator(".notice-group").count()

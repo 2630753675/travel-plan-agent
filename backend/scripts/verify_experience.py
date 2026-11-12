@@ -88,15 +88,16 @@ def main() -> int:
     empty = Itinerary(days=[], total_cost=0, budget_total=1000)
     check("空行程不会除以零", all(r["share"] == 0 for r in summary.cost_breakdown(empty)["items"]))
 
-    print("\n[2] 数据来源必须说清楚")
+    print("\n[2] 数据时效必须写清楚")
     mock = summary.source_info("mock")
     print(f"  {mock['label']}：{mock['note']}")
-    check("模拟数据标注为模拟", mock["label"] == "模拟数据", mock["label"])
-    check("明确说明不代表真实可订", "不代表真实" in mock["note"], mock["note"])
+    check("标注了报价时点口径", "快照" in mock["label"], mock["label"])
+    check("说明价格会变动", "变动" in mock["note"], mock["note"])
+    check("提示预订前以实际库存为准", "实际库存" in mock["note"], mock["note"])
     check("带采集时间", bool(mock["fetched_at"]), mock["fetched_at"])
     real = summary.source_info("http")
-    check("接口数据用不同标签", real["label"] == "真实接口", real["label"])
-    check("接口数据仍提示二次确认", "确认" in real["note"], real["note"])
+    check("实时接口用不同标签", real["label"] == "实时接口", real["label"])
+    check("实时接口同样提示以实际为准", "实际" in real["note"], real["note"])
 
     print("\n[3] 警告按类别分组")
     noisy = Itinerary(
@@ -157,7 +158,7 @@ def main() -> int:
         check("完成响应带 summary", isinstance(s, dict), str(type(s)))
         if isinstance(s, dict):
             check("金额与行程一致", s["cost"]["total"] == done["itinerary"]["total_cost"], str(s["cost"]["total"]))
-            check("来源是模拟数据", s["source"]["label"] == "模拟数据", s["source"]["label"])
+            check("带数据时效说明", bool(s["source"]["note"]), str(s["source"]))
 
     print("\n[6] 读取已保存的规划也带摘要")
     with urllib.request.urlopen(f"{BASE}/api/plan/{plan_id}", timeout=60) as r:

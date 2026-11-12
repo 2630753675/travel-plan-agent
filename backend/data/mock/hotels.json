@@ -4,5 +4,28 @@
   {"id": "h3", "name": "锦江宾馆", "district": "人民南路", "price_per_night": 620, "rating": 4.5, "tags": ["老牌", "房间大", "老人友好"], "distance_to_center_km": 2.0, "lat": 30.6570, "lng": 104.0658},
   {"id": "h4", "name": "环球中心洲际酒店", "district": "高新区", "price_per_night": 1080, "rating": 4.8, "tags": ["亲子", "泳池", "商场一体"], "distance_to_center_km": 8.5, "lat": 30.5720, "lng": 104.0640},
   {"id": "h5", "name": "春熙里和颐", "district": "春熙路", "price_per_night": 260, "rating": 4.2, "tags": ["经济", "地铁近"], "distance_to_center_km": 0.8, "lat": 30.6530, "lng": 104.0800},
-  {"id": "h6", "name": "青城山下道隐民宿", "district": "都江堰", "price_per_night": 460, "rating": 4.4, "tags": ["山景", "安静", "适合休整"], "distance_to_center_km": 55.0, "lat": 30.8997, "lng": 103.5722}
+  {"id": "h6", "name": "青城山下道隐民宿", "district": "都江堰", "price_per_night": 460, "rating": 4.4, "tags": ["山景", "安静", "适合休整"], "distance_to_center_km": 55.0, "lat": 30.8997, "lng": 103.5722},
+
+  {"id": "xa1", "city": "西安", "name": "西安钟楼饭店", "district": "碑林区", "price_per_night": 420, "rating": 4.4, "tags": ["地铁近", "老牌", "近钟楼"], "distance_to_center_km": 0.3, "lat": 34.2610, "lng": 108.9450},
+  {"id": "xa2", "city": "西安", "name": "西安威斯汀大酒店", "district": "曲江新区", "price_per_night": 1180, "rating": 4.8, "tags": ["高端", "近大唐不夜城", "泳池"], "distance_to_center_km": 7.8, "lat": 34.2118, "lng": 108.9670},
+  {"id": "xa3", "city": "西安", "name": "亚朵酒店(大雁塔店)", "district": "雁塔区", "price_per_night": 480, "rating": 4.6, "tags": ["近景点", "安静", "早餐好"], "distance_to_center_km": 5.6, "lat": 34.2205, "lng": 108.9555},
+  {"id": "xa4", "city": "西安", "name": "如家精选(钟楼地铁站店)", "district": "碑林区", "price_per_night": 260, "rating": 4.1, "tags": ["经济", "地铁近"], "distance_to_center_km": 0.6, "lat": 34.2593, "lng": 108.9438},
+  {"id": "xa5", "city": "西安", "name": "西安W酒店", "district": "曲江新区", "price_per_night": 1420, "rating": 4.7, "tags": ["设计感", "夜景", "亲子"], "distance_to_center_km": 8.2, "lat": 34.2085, "lng": 108.9720},
+  {"id": "xa6", "city": "西安", "name": "汉庭酒店(火车站店)", "district": "新城区", "price_per_night": 210, "rating": 4.0, "tags": ["经济", "近车站"], "distance_to_center_km": 3.1, "lat": 34.2780, "lng": 108.9650},
+  {"id": "xa7", "city": "西安", "name": "西安索菲特人民大厦", "district": "新城区", "price_per_night": 720, "rating": 4.5, "tags": ["老牌", "花园", "房间大"], "distance_to_center_km": 1.8, "lat": 34.2700, "lng": 108.9520},
+
+  {"id": "xm1", "city": "厦门", "name": "厦门鼓浪屿海上花园酒店", "district": "鼓浪屿", "price_per_night": 980, "rating": 4.7, "tags": ["海景", "近轮渡", "安静"], "distance_to_center_km": 3.4, "lat": 24.4462, "lng": 118.0663},
+  {"id": "xm2", "city": "厦门", "name": "厦门康莱德酒店", "district": "思明区", "price_per_night": 1280, "rating": 4.8, "tags": ["高端", "海景", "泳池"], "distance_to_center_km": 1.6, "lat": 24.4790, "lng": 118.1240},
+  {"id": "xm3", "city": "厦门", "name": "亚朵酒店(中山路店)", "district": "思明区", "price_per_night": 520, "rating": 4.6, "tags": ["步行街", "地铁近", "早餐好"], "distance_to_center_km": 0.7, "lat": 24.4525, "lng": 118.0835},
+  {"id": "xm4", "city": "厦门", "name": "鹭江宾馆", "district": "思明区", "price_per_night": 760, "rating": 4.5, "tags": ["老牌", "海景", "近轮渡"], "distance_to_center_km": 0.4, "lat": 24.4537, "lng": 118.0790},
+  {"id": "xm5", "city": "厦门", "name": "如家酒店(厦大店)", "district": "思明区", "price_per_night": 240, "rating": 4.0, "tags": ["经济", "近厦大"], "distance_to_center_km": 2.8, "lat": 24.4392, "lng": 118.0925},
+  {"id": "xm6", "city": "厦门", "name": "厦门万丽酒店", "district": "湖里区", "price_per_night": 880, "rating": 4.6, "tags": ["亲子", "泳池", "商场一体"], "distance_to_center_km": 6.5, "lat": 24.5120, "lng": 118.1680},
+  {"id": "xm7", "city": "厦门", "name": "汉庭酒店(火车站店)", "district": "思明区", "price_per_night": 220, "rating": 3.9, "tags": ["经济", "交通方便"], "distance_to_center_km": 3.9, "lat": 24.4680, "lng": 118.1030},
+
+  {"id": "bj1", "city": "北京", "name": "北京饭店", "district": "东城区", "price_per_night": 1080, "rating": 4.6, "tags": ["老牌", "近天安门", "房间大"], "distance_to_center_km": 0.9, "lat": 39.9088, "lng": 116.4010},
+  {"id": "bj2", "city": "北京", "name": "王府井希尔顿酒店", "district": "东城区", "price_per_night": 1380, "rating": 4.7, "tags": ["高端", "购物方便", "泳池"], "distance_to_center_km": 1.3, "lat": 39.9152, "lng": 116.4105},
+  {"id": "bj3", "city": "北京", "name": "亚朵酒店(前门店)", "district": "西城区", "price_per_night": 620, "rating": 4.6, "tags": ["近景点", "安静", "早餐好"], "distance_to_center_km": 1.8, "lat": 39.8990, "lng": 116.3980},
+  {"id": "bj4", "city": "北京", "name": "如家精选(西单店)", "district": "西城区", "price_per_night": 320, "rating": 4.1, "tags": ["经济", "地铁近"], "distance_to_center_km": 2.4, "lat": 39.9130, "lng": 116.3740},
+  {"id": "bj5", "city": "北京", "name": "北京瑰丽酒店", "district": "朝阳区", "price_per_night": 1680, "rating": 4.8, "tags": ["高端", "设计感", "泳池"], "distance_to_center_km": 5.6, "lat": 39.9255, "lng": 116.4610},
+  {"id": "bj6", "city": "北京", "name": "汉庭酒店(国贸店)", "district": "朝阳区", "price_per_night": 280, "rating": 4.0, "tags": ["经济", "近商务区"], "distance_to_center_km": 6.8, "lat": 39.9085, "lng": 116.4590}
 ]

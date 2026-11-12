@@ -78,8 +78,8 @@ def main() -> int:
         f"实际 {plan.chosen_inbound.dep_time}",
     )
 
-    print("\n[4] 无此航线 广州→成都")
-    plan2 = transport.run(brief(origin="广州"), src)
+    print("\n[4] 无此航线 上海→拉萨")
+    plan2 = transport.run(brief(destination="拉萨"), src)
     print(f"  error = {plan2.error}")
     check("无候选", plan2.chosen_outbound is None)
     check("给出明确提示而非异常", plan2.error is not None and "未查到" in plan2.error)

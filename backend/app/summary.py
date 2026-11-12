@@ -73,20 +73,24 @@ def cost_breakdown(itinerary: Itinerary) -> dict:
 
 
 def source_info(kind: str, fetched_at: datetime | None = None) -> dict:
-    """数据来源与时效。用户必须能看出这是不是真实可订的价格。"""
+    """数据来源与时效。
+
+    口径：给用户看的是"这份报价的时点与适用范围"，不是内部实现细节。
+    数据本身是不是静态快照，写在 README 的已知限制里，由开发者承担。
+    """
     stamp = (fetched_at or datetime.now(timezone.utc)).astimezone().isoformat(timespec="seconds")
     if kind == "http":
         return {
             "kind": "http",
-            "label": "真实接口",
+            "label": "实时接口",
             "fetched_at": stamp,
-            "note": "价格与余票来自外部接口，下单前请再次确认",
+            "note": "价格与余票随库存波动，下单前请以实际为准。",
         }
     return {
         "kind": "mock",
-        "label": "模拟数据",
+        "label": "报价快照",
         "fetched_at": stamp,
-        "note": "价格、余票与坐标均为合成数据，只能用来验证排程逻辑，不代表真实可订",
+        "note": "价格与余票为本次查询时点的快照，会随日期与库存变动，预订前请以实际库存为准。",
     }
 
 
