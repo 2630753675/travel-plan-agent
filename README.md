@@ -193,6 +193,21 @@ v2  单日重排  重排 2026-11-22：这天太赶…   6980 元   ← 当前
   不是"景点标题列表"——后者会把时间、费用、备注的变化全部漏掉。
 - **回滚结果必须等于目标版本**。回滚本身也记一个新版本，历史不被覆盖。
 
+### 4.9 结果页要能回答三个问题
+
+用户看到 6840 元时会问：钱花在哪、这是不是真的、风险在哪。所以结果页不只给总数：
+
+| 问题 | 呈现 | 依据 |
+|---|---|---|
+| 钱花在哪 | 分摊条形图 + 图例金额/占比 | 按 `Item.type` 归类，金额之和必须等于总花费 |
+| 这是不是真的 | 「模拟数据」标记 + 说明 | 数据源类型，mock 时明确写"不代表真实可订" |
+| 风险在哪 | 按类别分组的提示 | 交通/住宿/景点/天气/预算/模型/行程，未命中进"其他"不丢 |
+
+成本与分组都在 `summary.py` 里算，不塞进 `Itinerary`——它们是"怎么展示"，不是"行程是什么"。
+
+失败时不给用户看 `TypeError: Failed to fetch`，而是"连不上后端服务。请确认服务已启动，然后重试。"
+并给一个「用同样的需求重试」按钮。
+
 ## 5. 执行轨迹（右侧抽屉，流式）
 
 点顶栏「执行轨迹」打开右侧面板。各 agent 的讨论与工具调用**边执行边出现**，
@@ -280,13 +295,19 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_interrupt.py    # 人工介入：accept / downgrade / abort（需先起服务）
 .venv/Scripts/python.exe scripts/verify_interrupt_ui.py # 中断面板交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_negotiation.py  # 协商轨迹结构（需先起服务）
-.venv/Scripts/python.exe scripts/verify_negotiation_loop.py # 协商多轮闭环（假模型驱动，不需服务）.venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
+.venv/Scripts/python.exe scripts/verify_negotiation_loop.py # 协商多轮闭环（假模型驱动，不需服务）
+.venv/Scripts/python.exe scripts/verify_negotiation_ui.py # 协商轨迹展示（需先起服务）
 .venv/Scripts/python.exe scripts/verify_mediation.py    # 协商裁决逻辑（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_trace_drawer.py # 轨迹抽屉与流式输出（需先起服务）
 .venv/Scripts/python.exe scripts/verify_collaboration.py # 检索 agent 按需协作（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_timeline.py     # 时间轴与硬约束（正反双向，不需服务）
 .venv/Scripts/python.exe scripts/verify_event_contract.py # 事件契约：序号/因果/SQLite 回放（纯单元）
 .venv/Scripts/python.exe scripts/verify_event_resume.py   # 中断恢复后的事件连续性（需先起服务）
+.venv/Scripts/python.exe scripts/verify_versions.py       # 版本与回滚（需先起服务）
+.venv/Scripts/python.exe scripts/verify_versions_ui.py    # 版本面板交互（需先起服务）
+.venv/Scripts/python.exe scripts/verify_experience.py     # 成本拆解 / 数据来源 / 提示分组
+.venv/Scripts/python.exe scripts/verify_experience_ui.py  # 结果页信息与失败重试（需先起服务）
+.venv/Scripts/python.exe scripts/verify_restart.py prepare # 重启后仍可恢复（prepare → 重启 → resume）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -317,6 +338,8 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_versions | 9 组 21 项 | 通过 |
 | verify_versions_ui | 4 组 12 项 | 通过 |
 | verify_restart | 2 阶段 8 项 | 通过（需人工重启一次后端） |
+| verify_experience | 6 组 30 项 | 通过 |
+| verify_experience_ui | 5 组 14 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
@@ -333,6 +356,12 @@ $env:PYTHONPATH=(Get-Location).Path
 回滚结果等于目标版本、回滚本身也留历史、不存在的版本返回 404。
 
 恢复覆盖：服务重启后仍能 resume 未确认的中断（`verify_restart` 分两次运行，中间真的重启进程）。
+
+结果页覆盖：花费拆解金额之和等于总花费、占比合计约等于 1、来源标注为模拟数据并说明不可直接下单、
+提示按类别分组且条目不增不减、运行中有进度、失败时给出可读原因与重试入口。
+
+验收稳定性：协商与中断涉及真实模型，走到哪个分支不由测试决定，因此脚本同时接受
+「僵持 → 追问 → 第二轮」和「直接给决定面板」两条合法路径，而不是写死其中一条。
 
 裁决覆盖（纯单元，不依赖模型）：体验官让步即采纳、全高价值项目时僵持升级、
 存在低价值项时折中且只砍低价值、用户已表态的最后一轮必须给方案、

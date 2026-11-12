@@ -28,6 +28,7 @@ from ..event_stream import EventFactory, legacy_activity
 from ..models import Critique, Itinerary, TripBrief
 from ..paths import DATA_DIR
 from ..settings import AppSettings
+from .. import summary
 from ..tools.factory import make_source
 from . import store
 
@@ -66,7 +67,7 @@ def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
     return f"{prefix}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief):
+async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief, source_kind: str = "mock"):
     """Stream, persist, and replay one normalized event sequence per run."""
     trace: list[dict] = []
     final: dict = {}
@@ -163,6 +164,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
         "activity": activity,
         "errors": final.get("errors") or [],
+        "summary": summary.build_summary(itinerary, source_kind),
     }
     # 先落库再发完成事件：否则前端收到 run_completed 立刻刷新分享链接，
     # 可能读到还没写入的记录（404）或上一版结果。
@@ -204,7 +206,8 @@ async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
     graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
     config = {"configurable": {"thread_id": plan_id}}
     async for chunk in _run_graph(
-        graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief
+        graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief,
+        cfg.datasource.kind,
     ):
         yield chunk
 
@@ -231,6 +234,9 @@ async def get_plan(plan_id: str):
         raise HTTPException(status_code=404, detail="规划不存在")
     record["events"] = store.list_events(plan_id)
     record["version"] = store.current_version(plan_id)
+    record["summary"] = summary.build_summary(
+        Itinerary(**record["itinerary"]), config_store.load().datasource.kind
+    )
     return record
 
 
@@ -267,7 +273,8 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
 
     async def stream():
         async for chunk in _run_graph(
-            graph, config, Command(resume=body.decision), plan_id, brief
+            graph, config, Command(resume=body.decision), plan_id, brief,
+            cfg.datasource.kind,
         ):
             yield chunk
 
@@ -369,6 +376,7 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         "revision": record.get("revision", 0),
         "version": store.current_version(plan_id),
         "refine_source": refine_source,
+        "summary": summary.build_summary(new_itinerary, cfg.datasource.kind),
     }
 
 
@@ -420,6 +428,9 @@ async def rollback_plan(plan_id: str, body: RollbackRequest):
         "rolled_back_to": body.version,
         "itinerary": target["itinerary"],
         "critique": target["critique"],
+        "summary": summary.build_summary(
+            Itinerary(**target["itinerary"]), config_store.load().datasource.kind
+        ),
     }
 
 

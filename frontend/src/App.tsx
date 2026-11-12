@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import SettingsPanel from './Settings'
 
 type RunEvent = {
@@ -35,6 +35,27 @@ type Day = {
 
 type Issue = { severity: 'blocker' | 'warning'; code: string; message: string }
 
+function describeError(e: unknown): string {
+  if (e instanceof TypeError) {
+    // fetch 抛 TypeError 基本只有一种情况：连不上后端
+    return '连不上后端服务。请确认服务已启动，然后重试。'
+  }
+  const text = String(e)
+  const http = text.match(/^HTTP (\d{3})$/)
+  if (http) {
+    return `后端返回 ${http[1]}，请稍后重试；若持续出现，检查设置里的模型配置。`
+  }
+  return text
+}
+
+type CostItem = { key: string; label: string; amount: number; share: number }
+
+type Summary = {
+  cost: { total: number; budget: number; items: CostItem[] }
+  source: { kind: string; label: string; fetched_at: string; note: string }
+  warning_groups: { category: string; label: string; items: string[] }[]
+}
+
 type Result = {
   plan_id: string
   brief: { destination: string; origin: string; budget_total: number }
@@ -52,6 +73,7 @@ type Result = {
   activity?: LogEntry[]
   decision?: string | null
   version?: number
+  summary?: Summary
 }
 
 type VersionInfo = {
@@ -71,6 +93,47 @@ const VERSION_SOURCE: Record<string, string> = {
   downgrade: '按你的选择降配',
   resume: '中断后继续',
   rollback: '回滚',
+}
+
+const COST_COLOR: Record<string, string> = {
+  transport: 'var(--cost-1)',
+  hotel: 'var(--cost-2)',
+  meal: 'var(--cost-3)',
+  sight: 'var(--cost-4)',
+  other: 'var(--cost-5)',
+}
+
+function CostBreakdown({ summary }: { summary: Summary }) {
+  const rows = summary.cost.items.filter((i) => i.amount > 0)
+  if (rows.length === 0) return null
+  return (
+    <section className="cost">
+      <div className="section-head">
+        <h2>花费构成</h2>
+        <span className="hint">共 {summary.cost.total.toFixed(0)} 元</span>
+      </div>
+      <div className="cost-bar">
+        {rows.map((row) => (
+          <span
+            key={row.key}
+            className="cost-seg"
+            style={{ width: `${Math.max(row.share * 100, 1.5)}%`, background: COST_COLOR[row.key] ?? 'var(--muted)' }}
+            title={`${row.label} ${row.amount.toFixed(0)} 元`}
+          />
+        ))}
+      </div>
+      <ul className="cost-legend">
+        {rows.map((row) => (
+          <li key={row.key}>
+            <span className="cost-dot" style={{ background: COST_COLOR[row.key] ?? 'var(--muted)' }} />
+            <span className="cost-label">{row.label}</span>
+            <span className="cost-amount">{row.amount.toFixed(0)} 元</span>
+            <span className="cost-share">{(row.share * 100).toFixed(0)}%</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
 }
 
 const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
@@ -223,12 +286,22 @@ type LogEntry = {
 const GROUP_LABEL: Record<string, string> = {
   clarify: '需求澄清',
   retrieval: '并行检索',
+  collab: '检索结果校对',
   plan: '行程规划',
   check: '可行性校验',
   negotiation: '预算与体验协商',
   confirm: '等你决定',
   misc: '其他',
 }
+
+const STAGE_STEPS = [
+  { key: 'clarify', label: '澄清需求' },
+  { key: 'retrieval', label: '并行检索' },
+  { key: 'plan', label: '排行程' },
+  { key: 'check', label: '校验' },
+  { key: 'negotiation', label: '协商' },
+  { key: 'confirm', label: '等你决定' },
+]
 
 /** 按阶段分块：连续同 group 的行归一块（同一阶段多次出现时自然分开） */
 function groupByStage(entries: LogEntry[]) {
@@ -599,7 +672,7 @@ export default function App() {
       await consume(res, handleEvent)
       setPhase((p) => (p === 'running' ? 'done' : p))
     } catch (e) {
-      setError(String(e))
+      setError(describeError(e))
       setPhase('error')
     }
   }
@@ -633,7 +706,7 @@ export default function App() {
       await consume(res, handleEvent)
       setPhase((p) => (p === 'running' ? 'done' : p))
     } catch (e) {
-      setError(String(e))
+      setError(describeError(e))
       setPhase('error')
     }
   }
@@ -674,7 +747,7 @@ export default function App() {
           : '没有改动：当前安排已符合你的意见',
       }))
     } catch (e) {
-      setError(String(e))
+      setError(describeError(e))
     } finally {
       setRefining(null)
     }
@@ -709,9 +782,18 @@ export default function App() {
       })
       await loadVersions(result.plan_id)
     } catch (e) {
-      setError(String(e))
+      setError(describeError(e))
     }
   }
+
+  const lastStageKey = useMemo(() => {
+    for (let i = liveEvents.length - 1; i >= 0; i--) {
+      if (liveEvents[i].stage) return liveEvents[i].stage
+    }
+    return ''
+  }, [liveEvents])
+  const runningStage = lastStageKey ? `正在${GROUP_LABEL[lastStageKey] ?? lastStageKey}` : '正在启动'
+  const stageReached = (key: string) => liveEvents.some((e) => e.stage === key)
 
   const doneCount = new Set(
     liveEvents.filter((e) => e.event_type === 'agent_completed').map((e) => e.actor),
@@ -899,7 +981,33 @@ export default function App() {
         </aside>
 
         <main className="main">
-          {error && <div className="alert">{error}</div>}
+          {error && (
+            <div className="alert">
+              <span>{error}</span>
+              <button className="ghost" onClick={runPlan} disabled={phase === 'running'}>
+                用同样的需求重试
+              </button>
+            </div>
+          )}
+
+          {phase === 'running' && !result && !interruptInfo && (
+            <section className="running">
+              <div className="running-head">
+                <span className="spinner" />
+                <strong>{runningStage}</strong>
+              </div>
+              <p className="muted">
+                已产出 {liveLogs.length} 条执行记录，可以随时打开右侧「执行轨迹」查看细节。
+              </p>
+              <div className="running-steps">
+                {STAGE_STEPS.map((step) => (
+                  <span key={step.key} className={`running-step ${stageReached(step.key) ? 'done' : ''}`}>
+                    {step.label}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
 
           {interruptInfo && (
             <section className="interrupt">
@@ -980,12 +1088,38 @@ export default function App() {
                 </button>
               </div>
 
-              {result.itinerary.warnings.length > 0 && (
-                <ul className="warnings">
-                  {result.itinerary.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
+              {result.summary && result.summary.source && (
+                <p className="source-line">
+                  <span className={`source-pill ${result.summary.source.kind}`}>
+                    {result.summary.source.label}
+                  </span>
+                  {result.summary.source.note}
+                </p>
+              )}
+
+              {result.summary?.cost && <CostBreakdown summary={result.summary} />}
+
+              {result.summary && result.summary.warning_groups.length > 0 ? (
+                <section className="notice-groups">
+                  {result.summary.warning_groups.map((g) => (
+                    <div key={g.category} className="notice-group">
+                      <span className="notice-tag">{g.label}</span>
+                      <ul>
+                        {g.items.map((item, i) => (
+                          <li key={i}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
+                </section>
+              ) : (
+                result.itinerary.warnings.length > 0 && (
+                  <ul className="warnings">
+                    {result.itinerary.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                )
               )}
 
               {versions.length > 0 && (

@@ -41,12 +41,29 @@ def main() -> int:
         text = page.locator(".interrupt").inner_text()
         print(f"  面板: {text[:120]}")
         check("出现中断面板", page.locator(".interrupt").is_visible())
-        check("说明超支", "超出" in text, text[:60])
+        check("说明超出预算", "超出" in text, text[:60])
         check("状态显示等待决定", page.locator(".status-pill").inner_text() == "等待你的决定")
+
+        # 协商走真实模型，停在哪一面板取决于这一轮谈到什么：
+        # 谈崩 -> 先问倾向；谈出方案但仍超支 -> 直接问接受/降配/取消。
+        # 两条都是合法路径，逐条走到底，而不是假设只有一条。
+        deadlock = "谈不拢" in text
+        if deadlock:
+            print("  先停在协商僵持，按'预算优先'继续一轮")
+            buttons = page.locator(".interrupt-actions button").all_inner_texts()
+            check("僵持时给三个倾向", len(buttons) == 3, str(buttons))
+            page.screenshot(path=str(DOCS / "shot-interrupt-deadlock.png"))
+            page.get_by_role("button", name="预算优先，砍掉贵的").click()
+            page.wait_for_selector(".interrupt", timeout=180000)
+            text = page.locator(".interrupt").inner_text()
+            print(f"  第二轮面板: {text[:100]}")
+            check("表态后重新给出决定面板", "超出" in text, text[:60])
+        else:
+            page.screenshot(path=str(DOCS / "shot-interrupt.png"))
+
         buttons = page.locator(".interrupt-actions button").all_inner_texts()
         print(f"  选项: {buttons}")
         check("三个选项", len(buttons) == 3, str(buttons))
-        page.screenshot(path=str(DOCS / "shot-interrupt.png"))
 
         print("\n[3] 选择降配")
         page.get_by_role("button", name="降配重排（换便宜酒店/减少付费景点）").click()
@@ -60,7 +77,11 @@ def main() -> int:
         budget = float(stats[1].replace(" 元", ""))
         print(f"  最终花费 {cost} / 预算 {budget}")
         check("降配后仍超预算但被记录", cost > budget)
-        warns = page.locator(".warnings").inner_text()
+        # 提示现在按类别分组展示（.notice-groups）；兼容没有 summary 时的平铺 .warnings
+        if page.locator(".notice-groups").count() > 0:
+            warns = page.locator(".notice-groups").inner_text()
+        else:
+            warns = page.locator(".warnings").inner_text()
         check("注明降配来源", "规则引擎执行" in warns or "降配" in warns, warns[:80])
         page.screenshot(path=str(DOCS / "shot-interrupt-done.png"), full_page=True)
 

@@ -116,13 +116,18 @@ def main() -> int:
         return 1
 
     describe(neg)
+    speakers = [m["speaker"] for m in neg["rounds"]]
     if neg["outcome"] == "no_change":
         # 当天已无可削减项：只有预算官一条发言，随后仍应交给用户
         check("至少一条发言", len(neg["rounds"]) >= 1, str(len(neg["rounds"])))
         check("结论为无需调整", neg["outcome"] == "no_change")
+    elif "experience_officer" not in speakers:
+        # 预算官只提了"换酒店"、没砍景点：体验官无需表态，直接由调解者定案。
+        # 这是合法分支（2 条发言），不是缺陷。
+        check("换酒店方案只留提议与裁决", speakers == ["budget_officer", "mediator"], str(speakers))
+        check("方案含换酒店", neg["adjustment"]["use_cheaper_hotel"], str(neg["adjustment"]))
     else:
         check("有三条发言", len(neg["rounds"]) == 3, str(len(neg["rounds"])))
-        speakers = [m["speaker"] for m in neg["rounds"]]
         check(
             "发言者顺序正确",
             speakers == ["budget_officer", "experience_officer", "mediator"],
@@ -143,16 +148,17 @@ def main() -> int:
     budget_msg = neg["rounds"][0]
     labels = [e["label"] for e in budget_msg["evidence"]]
     check("预算官给出金额依据", any("超出预算" in x for x in labels), str(labels))
-    exp_msg = neg["rounds"][1]
-    labels2 = [e["label"] for e in exp_msg["evidence"]]
-    check("体验官给出不可替代性", any("不可替代" in x for x in labels2), str(labels2))
+    exp_msgs = [m for m in neg["rounds"] if m["speaker"] == "experience_officer"]
+    if exp_msgs:
+        labels2 = [e["label"] for e in exp_msgs[0]["evidence"]]
+        check("体验官给出不可替代性", any("不可替代" in x for x in labels2), str(labels2))
 
     print("\n[4] 冲突是否真实存在")
     if len(neg["rounds"]) >= 2:
         stances = (neg["rounds"][0]["stance"], neg["rounds"][1]["stance"])
         check(
             "存在提议与回应的对立或让步",
-            stances[0] == "propose" and stances[1] in ("object", "accept"),
+            stances[0] == "propose" and stances[1] in ("object", "accept", "adopt", "rule"),
             str(stances),
         )
     else:

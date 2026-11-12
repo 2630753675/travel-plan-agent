@@ -9,6 +9,11 @@
   --ok: #3ecf8e;
   --warn: #f5a524;
   --err: #ef5350;
+  --cost-1: #4f8cff;
+  --cost-2: #3ecf8e;
+  --cost-3: #f5a524;
+  --cost-4: #b06cf5;
+  --cost-5: #5f6b85;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -443,6 +448,164 @@ button:disabled {
 .version-row .ghost {
   padding: 2px 10px;
   font-size: 11px;
+}
+
+.source-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source-pill {
+  padding: 1px 8px;
+  border: 1px solid var(--warn);
+  border-radius: 2px;
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.source-pill.http {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.cost {
+  margin: 0 0 18px;
+}
+
+.cost-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.cost-seg {
+  display: block;
+  height: 100%;
+}
+
+.cost-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.cost-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cost-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.cost-label {
+  color: var(--text);
+}
+
+.cost-amount {
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+.cost-share {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notice-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.notice-group {
+  display: flex;
+  gap: 10px;
+  padding: 8px 14px;
+  border-left: 2px solid var(--warn);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.notice-group ul {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+}
+
+.notice-tag {
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+.running {
+  margin: 22px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.running-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.running-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.running-step {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.running-step.done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.alert .ghost {
+  margin-left: auto;
 }
 
 .days {
