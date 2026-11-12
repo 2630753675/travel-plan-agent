@@ -208,6 +208,31 @@ v2  单日重排  重排 2026-11-22：这天太赶…   6980 元   ← 当前
 失败时不给用户看 `TypeError: Failed to fetch`，而是"连不上后端服务。请确认服务已启动，然后重试。"
 并给一个「用同样的需求重试」按钮。
 
+### 4.10 访问门禁：本机免口令，外部要口令
+
+演示时这套东西可能被隧道暴露到公网，所以加了一层最小门禁，而不是做账号体系。
+
+| 谁 | 能做什么 |
+|---|---|
+| 本机直连（127.0.0.1，且没有 `X-Forwarded-For`） | 全部放行，零摩擦 |
+| 外部访客 | 除 `/api/health` 外都要 `X-Access-Token` |
+| 拿着分享链接的人 | 只能 `GET /api/plan/{id}?share=<签名>`，读这一份 |
+
+几个刻意的选择：
+
+- **一旦看到 `X-Forwarded-For` 就不当本机**。隧道和反向代理都会加这个头，
+  否则"本机免口令"会被端口转发绕过。
+- **分享用 HMAC 签名，不共用总口令**。泄漏一条链接不等于交出口令，
+  而且签名只对那一个 `plan_id` 有效——拿它去读 `/versions` 或发 `rollback` 都是 401。
+- **`/api/config/test` 对所有非本机调用都拒绝内网地址**。这个接口会带着你的 API Key
+  去请求任意 URL，错误信息还区分「域名无法解析」和「无法连接」——等于一个内网探测器和密钥外发器。
+  这条不靠认证兜，认证通过也不允许。
+- **口令与签名密钥首次启动时随机生成**，落在 `backend/data/`，不进代码、不读环境变量、
+  不打印到日志（日志只打印文件路径）。
+
+局限：这是演示级门禁，不是账号体系——没有用户、没有会话、没法按人撤销。
+口令一旦泄漏只能删文件重启。
+
 ## 5. 执行轨迹（右侧抽屉，流式）
 
 点顶栏「执行轨迹」打开右侧面板。各 agent 的讨论与工具调用**边执行边出现**，
@@ -307,6 +332,8 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_versions_ui.py    # 版本面板交互（需先起服务）
 .venv/Scripts/python.exe scripts/verify_experience.py     # 成本拆解 / 数据来源 / 提示分组
 .venv/Scripts/python.exe scripts/verify_experience_ui.py  # 结果页信息与失败重试（需先起服务）
+.venv/Scripts/python.exe scripts/verify_access.py         # 口令 / 分享签名 / SSRF / CORS（需先起服务）
+.venv/Scripts/python.exe scripts/verify_access_ui.py      # 外部访客口令流程（需先起服务）
 .venv/Scripts/python.exe scripts/verify_restart.py prepare # 重启后仍可恢复（prepare → 重启 → resume）
 ```
 
@@ -340,6 +367,8 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_restart | 2 阶段 8 项 | 通过（需人工重启一次后端） |
 | verify_experience | 6 组 30 项 | 通过 |
 | verify_experience_ui | 5 组 14 项 | 通过 |
+| verify_access | 5 组 22 项 | 通过 |
+| verify_access_ui | 4 组 8 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、
@@ -466,8 +495,12 @@ $env:PYTHONPATH=(Get-Location).Path
   快照损坏时丢弃并继续启动，已完成的行程在 SQLite 里不受影响。
 - **超支阈值 20% 是代码常量**，暂未做成界面配置项。
 - **数据默认全为 mock**，不含真实价格与余票。HTTP 适配器已写好但本机没有接口可测，标注为未验证。
-- **密钥在库里是明文**，且没有登录与权限——知道地址就能改配置。仅适合本机演示。
-- **分享链接是隐式公开的**：知道 `plan_id` 就能读。
+- **密钥在库里是明文**（本地演示项目，未加密）。**不要填生产密钥。**
+  门禁只挡"谁能调用接口"，挡不住拿到 `plans.db` 文件的人。
+- **分享链接用签名，但签名不过期**：泄漏后只能靠换 `data/share_secret.txt` 让所有旧链接失效。
+- **门禁是演示级**：没有账号体系，口令泄漏只能删 `data/access_token.txt` 重启。
+- **通过隧道转发时依赖 `X-Forwarded-For` 判定外部**：若自建代理剥掉了这个头，
+  外部访问会被误判为本机。用 ngrok / cloudflared 这类默认带头的工具是安全的。
 - **无并发压力测试**，SQLite 单文件写入在演示规模下够用。
 
 ## 10. 如果继续做

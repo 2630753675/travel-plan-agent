@@ -12,13 +12,14 @@ import json
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from .. import access
 from .. import settings as config_store
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..checkpoint import PersistentSaver
@@ -34,12 +35,51 @@ from . import store
 
 app = FastAPI(title="旅行规划多 agent 编排助手", version="0.1.0")
 
+# 只允许同源与本地开发端口。认证走自定义头，不靠宽松 CORS。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:8848",
+        "http://localhost:8848",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_ACCESS_TOKEN = access.load_token()
+_SHARE_SECRET = access.load_share_secret()
+
+# 需要放行的路径：健康检查与只读分享
+_OPEN_PATHS = {"/api/health"}
+
+
+@app.middleware("http")
+async def access_guard(request: Request, call_next):
+    """本机免口令；外部访问需要口令，或带合法签名读单个分享。"""
+    path = request.url.path
+    if not path.startswith("/api/") or path in _OPEN_PATHS:
+        return await call_next(request)
+
+    client_host = request.client.host if request.client else None
+    forwarded = request.headers.get("x-forwarded-for")
+    if access.is_local_client(client_host, forwarded):
+        return await call_next(request)
+
+    supplied = request.headers.get("x-access-token") or request.query_params.get("token")
+    if access.token_matches(supplied, _ACCESS_TOKEN):
+        return await call_next(request)
+
+    if request.method == "GET" and path.count("/") == 3 and path.startswith("/api/plan/"):
+        plan_id = path.rsplit("/", 1)[-1]
+        if access.verify_share(plan_id, request.query_params.get("share"), _SHARE_SECRET):
+            return await call_next(request)
+
+    return JSONResponse(
+        {"detail": "这个服务需要访问口令。请向提供者索取，或在浏览器里输入。"},
+        status_code=401,
+    )
 
 
 class RefineRequest(BaseModel):
@@ -165,6 +205,8 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         "activity": activity,
         "errors": final.get("errors") or [],
         "summary": summary.build_summary(itinerary, source_kind),
+        # 只读分享用的签名：拿到它就能看这一份行程，但动不了别的
+        "share": access.share_signature(plan_id, _SHARE_SECRET),
     }
     # 先落库再发完成事件：否则前端收到 run_completed 立刻刷新分享链接，
     # 可能读到还没写入的记录（404）或上一版结果。
@@ -451,8 +493,37 @@ def put_config(body: dict):
     return config_store.public_view(merged)
 
 
+def _reject_unsafe_endpoint(base_url: str) -> str | None:
+    """挡住指向内网/回环的接口地址，避免把服务器当探测器用。
+
+    只对非本机调用方生效：本机开发时要指向 127.0.0.1 的假服务验证链路。
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return "接口地址必须以 http:// 或 https:// 开头"
+    host = parsed.hostname
+    if not host:
+        return "接口地址缺少主机名"
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443)
+    except OSError:
+        return f"无法解析主机 {host}"
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return "接口地址指向内网或本机，出于安全考虑不允许"
+    return None
+
+
 @app.post("/api/config/test")
-async def test_config(body: dict | None = None):
+async def test_config(request: Request, body: dict | None = None):
     """连通性检测。body 可带尚未保存的表单值，先合再测。
 
     只要求凭据齐全，不要求「启用模型」——先测通再决定是否启用是更自然的顺序。
@@ -477,6 +548,12 @@ async def test_config(body: dict | None = None):
     if missing:
         return {"ok": False, "error": "请先填写：" + "、".join(missing)}
 
+    client_host = request.client.host if request.client else None
+    if not access.is_local_client(client_host, request.headers.get("x-forwarded-for")):
+        unsafe = _reject_unsafe_endpoint(cfg.llm.base_url)
+        if unsafe:
+            return {"ok": False, "error": unsafe}
+
     client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s)
     try:
         reply = await client.ping()
@@ -488,6 +565,13 @@ async def test_config(body: dict | None = None):
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
+
+@app.on_event("startup")
+async def _announce_access():
+    # 只打印路径，不打印口令本身——口令不进日志。
+    print(f"[access] 外部访问口令文件：{access.ACCESS_TOKEN_PATH}")
+    print(f"[access] 分享签名密钥文件：{access.SHARE_SECRET_PATH}")
 
 
 # 生产模式：单端口同时提供 UI 与 API，必须放在所有 API 路由之后

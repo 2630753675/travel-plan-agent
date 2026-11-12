@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import SettingsPanel from './Settings'
 
 type RunEvent = {
@@ -34,6 +34,20 @@ type Day = {
 }
 
 type Issue = { severity: 'blocker' | 'warning'; code: string; message: string }
+
+const TOKEN_KEY = 'trip.accessToken'
+
+let onAuthRequired: (() => void) | null = null
+
+/** 所有接口请求都从这里走：带上访问口令，遇到 401 就提示补录。 */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = localStorage.getItem(TOKEN_KEY) ?? ''
+  const headers = new Headers(init?.headers ?? {})
+  if (token) headers.set('X-Access-Token', token)
+  const res = await fetch(input, { ...init, headers })
+  if (res.status === 401) onAuthRequired?.()
+  return res
+}
 
 function describeError(e: unknown): string {
   if (e instanceof TypeError) {
@@ -74,6 +88,7 @@ type Result = {
   decision?: string | null
   version?: number
   summary?: Summary
+  share?: string
 }
 
 type VersionInfo = {
@@ -561,20 +576,33 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
   const [versions, setVersions] = useState<VersionInfo[]>([])
+  const [needToken, setNeedToken] = useState(false)
+  const [tokenDraft, setTokenDraft] = useState('')
   const drawerRef = useRef<HTMLDivElement>(null)
   const liveLogs = useMemo(() => projectEvents(liveEvents), [liveEvents])
 
   useEffect(() => {
-    fetch('/api/config')
+    onAuthRequired = () => setNeedToken(true)
+    return () => {
+      onAuthRequired = null
+    }
+  }, [])
+
+  useEffect(() => {
+    apiFetch('/api/config')
       .then((r) => r.json())
       .then((c) => setLlmOn(Boolean(c?.llm?.enabled)))
       .catch(() => undefined)
   }, [])
 
   useEffect(() => {
-    const id = new URLSearchParams(location.search).get('plan')
+    const params = new URLSearchParams(location.search)
+    const id = params.get('plan')
     if (!id) return
-    fetch(`/api/plan/${id}`)
+    // 分享链接带签名，外部访问时不需要总口令
+    const share = params.get('share')
+    const url = share ? `/api/plan/${id}?share=${encodeURIComponent(share)}` : `/api/plan/${id}`
+    apiFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
       .then((rec) => {
         setResult({
@@ -586,6 +614,7 @@ export default function App() {
           errors: [],
           negotiation: rec.negotiation ?? null,
           version: rec.version,
+          share: share ?? undefined,
         })
         // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
         if (Array.isArray(rec.events) && rec.events.length > 0) {
@@ -663,7 +692,7 @@ export default function App() {
     setInterruptInfo(null)
     setPhase('running')
     try {
-      const res = await fetch(`/api/plan/${pid}/resume`, {
+      const res = await apiFetch(`/api/plan/${pid}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
@@ -697,7 +726,7 @@ export default function App() {
       pace: form.pace,
     }
     try {
-      const res = await fetch('/api/plan', {
+      const res = await apiFetch('/api/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -715,7 +744,7 @@ export default function App() {
     if (!result) return
     setRefining(day)
     try {
-      const res = await fetch(`/api/plan/${result.plan_id}/refine`, {
+      const res = await apiFetch(`/api/plan/${result.plan_id}/refine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: day, feedback: feedback[day] ?? '' }),
@@ -755,7 +784,7 @@ export default function App() {
 
   async function loadVersions(pid: string) {
     try {
-      const r = await fetch(`/api/plan/${pid}/versions`)
+      const r = await apiFetch(`/api/plan/${pid}/versions`)
       if (!r.ok) return
       const data = await r.json()
       setVersions(data.versions ?? [])
@@ -767,7 +796,7 @@ export default function App() {
   async function rollback(version: number) {
     if (!result) return
     try {
-      const r = await fetch(`/api/plan/${result.plan_id}/rollback`, {
+      const r = await apiFetch(`/api/plan/${result.plan_id}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version }),
@@ -801,6 +830,28 @@ export default function App() {
 
   return (
     <div className="shell">
+      {needToken && (
+        <div className="token-bar">
+          <span>这个服务需要访问口令才能使用。</span>
+          <input
+            type="password"
+            placeholder="粘贴访问口令"
+            value={tokenDraft}
+            onChange={(e) => setTokenDraft(e.target.value)}
+          />
+          <button
+            className="ghost"
+            onClick={() => {
+              localStorage.setItem(TOKEN_KEY, tokenDraft.trim())
+              setNeedToken(false)
+              location.reload()
+            }}
+            disabled={!tokenDraft.trim()}
+          >
+            使用
+          </button>
+        </div>
+      )}
       <header className="topbar">
         <div>
           <h1>旅行规划多 Agent 编排</h1>
@@ -975,8 +1026,8 @@ export default function App() {
             ))}
           </div>
 
-          <button className="primary" onClick={runPlan} disabled={phase === 'running'}>
-            {phase === 'running' ? '规划中…' : phase === 'form' ? '开始规划' : '重新规划'}
+          <button className="primary" onClick={runPlan} disabled={phase === 'running' || needToken}>
+            {needToken ? '先输入访问口令' : phase === 'running' ? '规划中…' : phase === 'form' ? '开始规划' : '重新规划'}
           </button>
         </aside>
 
@@ -1081,8 +1132,13 @@ export default function App() {
                 </div>
                 <button
                   className="ghost"
-                  onClick={() => navigator.clipboard.writeText(location.href)}
-                  title="复制分享链接"
+                  onClick={() => {
+                    const url = result.share
+                      ? `${location.origin}/?plan=${result.plan_id}&share=${encodeURIComponent(result.share)}`
+                      : location.href
+                    navigator.clipboard.writeText(url)
+                  }}
+                  title="复制只读分享链接（不需要访问口令）"
                 >
                   复制链接
                 </button>
