@@ -171,6 +171,11 @@ SSE 只有一种事件名 `run_event`，用 `payload.event_type` 区分语义，
   在真正调用前后各发一条事件；旧的摘要式 `tool` 行会被丢弃，避免同一次调用显示两遍。
 - **旧数据仍然可打开**。历史规划只有 `activity` 投影，前端把它还原成同构事件再渲染，
   分享链接不会因为协议升级而失效。
+- **恢复不是重新开始**。中断后 `resume` 会先把历史事件读回来重建上下文：
+  序号接着往下走、`run_id` 不变、未闭合的节点发 `agent_resumed` 并指回中断前那次启动。
+  否则界面上会出现两次"确认开始"，因果链也断在半路。
+- **先落库再发完成事件**。否则前端收到 `run_completed` 立刻刷新分享链接，
+  可能读到还没写入的记录。
 
 ## 5. 执行轨迹（右侧抽屉，流式）
 
@@ -265,6 +270,7 @@ $env:PYTHONPATH=(Get-Location).Path
 .venv/Scripts/python.exe scripts/verify_collaboration.py # 检索 agent 按需协作（纯单元，不需服务）
 .venv/Scripts/python.exe scripts/verify_timeline.py     # 时间轴与硬约束（正反双向，不需服务）
 .venv/Scripts/python.exe scripts/verify_event_contract.py # 事件契约：序号/因果/SQLite 回放（纯单元）
+.venv/Scripts/python.exe scripts/verify_event_resume.py   # 中断恢复后的事件连续性（需先起服务）
 ```
 
 `verify_settings*` 用内置的假 OpenAI 兼容服务验证链路，不需要真实 key。
@@ -289,7 +295,8 @@ $env:PYTHONPATH=(Get-Location).Path
 | verify_trace_drawer | 6 组 16 项 | 通过 |
 | verify_collaboration | 5 组 13 项 | 通过 |
 | verify_timeline | 4 组 17 项 | 通过 |
-| verify_event_contract | 3 组 10 项 | 通过 |
+| verify_event_contract | 6 组 21 项 | 通过 |
+| verify_event_resume | 6 组 16 项 | 通过 |
 
 配置相关覆盖：默认值、修改回读、越界拒绝、密钥掩码、掩码回传不覆盖、
 测试连接成功/失败、数据源缺地址报错、模型开启后景点来自模型、

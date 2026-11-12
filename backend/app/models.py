@@ -150,7 +150,7 @@ class RunEvent(BaseModel):
     occurred_at: datetime
     event_type: Literal[
         "run_started", "run_resumed", "stage_started", "agent_started", "agent_message",
-        "agent_completed", "tool_call", "tool_result", "tool_exchange", "validation_result", "route_decision",
+        "agent_completed", "agent_resumed", "tool_call", "tool_result", "tool_exchange", "validation_result", "route_decision",
         "user_question", "user_answer", "artifact_created", "run_interrupted",
         "run_completed", "run_failed",
     ]

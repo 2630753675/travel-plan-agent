@@ -65,8 +65,13 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     """Stream, persist, and replay one normalized event sequence per run."""
     trace: list[dict] = []
     final: dict = {}
-    seq_start = store.next_event_seq(plan_id)
-    factory = EventFactory(plan_id, seq_start=seq_start)
+    prior_events = store.list_events(plan_id)
+    seq_start = (prior_events[-1]["seq"] + 1) if prior_events else 1
+    factory = EventFactory(
+        plan_id,
+        seq_start=seq_start,
+        prior_events=prior_events,
+    )
 
     def publish(event) -> str:
         payload = event.model_dump(mode="json")
@@ -154,6 +159,18 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         "activity": activity,
         "errors": final.get("errors") or [],
     }
+    # 先落库再发完成事件：否则前端收到 run_completed 立刻刷新分享链接，
+    # 可能读到还没写入的记录（404）或上一版结果。
+    store.save(
+        plan_id,
+        brief.model_dump(mode="json"),
+        itinerary.model_dump(mode="json"),
+        critique.model_dump(mode="json"),
+        trace,
+        revision,
+        negotiation.model_dump(mode="json") if negotiation else None,
+        activity,
+    )
     yield publish(
         factory.make(
             "run_completed",
@@ -165,16 +182,6 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                 "result": result,
             },
         )
-    )
-    store.save(
-        plan_id,
-        brief.model_dump(mode="json"),
-        itinerary.model_dump(mode="json"),
-        critique.model_dump(mode="json"),
-        trace,
-        revision,
-        negotiation.model_dump(mode="json") if negotiation else None,
-        activity,
     )
 
 

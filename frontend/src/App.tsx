@@ -342,6 +342,12 @@ function eventToLogEntry(ev: RunEvent): LogEntry | null {
   switch (ev.event_type) {
     case 'stage_started':
       return { ...base, kind: 'stage', text: p.text ?? `阶段: ${GROUP_LABEL[ev.stage] ?? ev.stage}`, depth: 0 }
+    case 'agent_started':
+      // 每个 agent 的动作行已经说明了它在做什么，单独一条"开始"是噪音
+      return null
+    case 'agent_resumed':
+      // 恢复是值得看见的：同一个节点在中断后继续跑
+      return { ...base, kind: 'action', text: `${base.actor}继续执行（中断后恢复）`, depth: 1 }
     case 'agent_message':
     case 'route_decision':
       return {

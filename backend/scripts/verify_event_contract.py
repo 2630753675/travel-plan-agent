@@ -62,6 +62,48 @@ def main() -> int:
         finally:
             store.DB_PATH = old_path
 
+    print("\n[4] Resume keeps causality instead of restarting agents")
+    # 中断前留下一个未闭合的 agent 与一个未闭合的 stage（真实情况：
+    # confirm 节点发完 start 后调 interrupt() 抛异常，end 永远不会发出）
+    before = EventFactory("run-resume")
+    stage_a = before.make("stage_started", stage="confirm", payload={"stage": "confirm"})
+    open_start = before.make("agent_started", stage="confirm", actor="confirm", parent_id=stage_a.event_id)
+    expect = [e.model_dump(mode="json") for e in before.events]
+
+    after = EventFactory("run-resume", seq_start=3, prior_events=expect)
+    resumed = after.from_custom({"phase": "start", "node": "confirm"})
+    check("恢复时沿用同一 run_id", all(e.run_id == "run-resume" for e in resumed))
+    check("序号接着历史继续", [e.seq for e in resumed] == [3], str([e.seq for e in resumed]))
+    check("恢复的 agent 标记为 resumed", len(resumed) == 1 and resumed[0].event_type == "agent_resumed")
+    check("parent 指向中断前的启动事件", resumed[0].parent_id == open_start.event_id)
+
+    completed = after.from_custom({"phase": "end", "node": "confirm", "summary": "你选择：accept"})
+    check("闭合事件挂在恢复事件下", completed[0].parent_id == resumed[0].event_id)
+    check("恢复后不再产生第二个 stage", not any(e.event_type == "stage_started" for e in resumed))
+
+    print("\n[5] Duplicate lifecycle markers are idempotent")
+    dup = EventFactory("run-dup")
+    first = dup.from_custom({"phase": "start", "node": "planner"})
+    second = dup.from_custom({"phase": "start", "node": "planner"})
+    check("重复 start 不再产生事件", len(first) == 2 and second == [], str(len(second)))
+    ended = dup.from_custom({"phase": "end", "node": "planner", "summary": "x"})
+    again = dup.from_custom({"phase": "end", "node": "planner", "summary": "x"})
+    check("一次 start 只对应一个 end", len(ended) == 1 and again == [])
+
+    print("\n[6] Tool results survive a resume through payload tool_call_id")
+    t = EventFactory("run-tool")
+    t.from_custom({"phase": "start", "node": "lodging"})
+    t.from_custom({"phase": "tool_call", "node": "lodging", "tool_call_id": "abc", "tool": "search_hotels"})
+    saved = [e.model_dump(mode="json") for e in t.events]
+    check("tool_call 记录了 tool_call_id", saved[-1]["payload"]["tool_call_id"] == "abc")
+
+    replayed = EventFactory("run-tool", seq_start=len(saved) + 1, prior_events=saved)
+    result_events = replayed.from_custom(
+        {"phase": "tool_result", "node": "lodging", "tool_call_id": "abc", "tool": "search_hotels", "summary": "6 条结果"}
+    )
+    call_event = next(e for e in t.events if e.event_type == "tool_call")
+    check("恢复后 tool_result 仍挂在原调用下", result_events[0].parent_id == call_event.event_id)
+
     print()
     if failures:
         print(f"FAIL  {len(failures)} event-contract assertions")

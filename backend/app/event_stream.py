@@ -17,15 +17,49 @@ _SOURCE_TOOLS = {"search_flights", "search_hotels", "list_pois", "get_weather"}
 class EventFactory:
     """为一次 run 产生稳定、递增、可关联的事件。"""
 
-    def __init__(self, run_id: str, *, seq_start: int = 1, plan_version: int = 1):
+    def __init__(
+        self,
+        run_id: str,
+        *,
+        seq_start: int = 1,
+        plan_version: int = 1,
+        prior_events: list[dict] | None = None,
+    ):
         self.run_id = run_id
         self.plan_version = plan_version
         self._seq = seq_start - 1
         self.events: list[RunEvent] = []
         self._active_agents: dict[str, str] = {}
+        self._restored_agents: set[str] = set()
         self._active_stage: str | None = None
         self._active_stage_id: str | None = None
         self._tool_event_ids: dict[str, str] = {}
+        self._restore_context(prior_events or [])
+
+    def _restore_context(self, prior_events: list[dict]) -> None:
+        """Rebuild open stage/agent/tool relationships across a resumed stream."""
+        for raw in prior_events:
+            event = RunEvent.model_validate(raw)
+            if event.event_type == "stage_started":
+                self._active_stage = event.stage
+                self._active_stage_id = event.event_id
+            elif event.event_type == "agent_started":
+                self._active_agents[event.actor] = event.event_id
+                self._restored_agents.add(event.actor)
+            elif event.event_type == "agent_resumed":
+                self._active_agents[event.actor] = event.event_id
+                self._restored_agents.add(event.actor)
+            elif event.event_type == "agent_completed":
+                self._active_agents.pop(event.actor, None)
+                self._restored_agents.discard(event.actor)
+            elif event.event_type == "tool_call":
+                call_id = event.payload.get("tool_call_id")
+                if call_id:
+                    self._tool_event_ids[str(call_id)] = event.event_id
+            elif event.event_type == "tool_result":
+                call_id = event.payload.get("tool_call_id")
+                if call_id:
+                    self._tool_event_ids.pop(str(call_id), None)
 
     def make(
         self,
@@ -106,18 +140,29 @@ class EventFactory:
                 self._active_stage = stage
                 self._active_stage_id = stage_event.event_id
                 events.append(stage_event)
+            prior_agent_id = self._active_agents.get(node)
+            if prior_agent_id and node not in self._restored_agents:
+                # Some nodes emit lifecycle markers both internally and in wrap().
+                # Keep the first active marker and ignore its duplicate.
+                return events
+            if prior_agent_id:
+                self._restored_agents.discard(node)
+            event_type = "agent_resumed" if prior_agent_id else "agent_started"
             agent = self.make(
-                "agent_started",
+                event_type,
                 stage=stage,
                 actor=node,
-                parent_id=self._active_stage_id,
-                payload={"node": node},
+                parent_id=prior_agent_id or self._active_stage_id,
+                payload={"node": node, "resumed": prior_agent_id is not None},
             )
             self._active_agents[node] = agent.event_id
             events.append(agent)
             return events
         if phase == "end":
             parent_id = self._active_agents.pop(node, None)
+            if parent_id is None:
+                return []
+            self._restored_agents.discard(node)
             return [
                 self.make(
                     "agent_completed",
@@ -137,25 +182,35 @@ class EventFactory:
                 )
             ]
         if phase == "tool_call":
+            call_id = str(row.get("tool_call_id") or "")
             event = self.make(
                 "tool_call",
                 stage=stage,
                 actor=str(row.get("actor") or node),
                 parent_id=self._active_agents.get(node),
-                payload={"tool_name": row.get("tool"), "arguments": row.get("arguments", {})},
+                payload={
+                    "tool_name": row.get("tool"),
+                    "arguments": row.get("arguments", {}),
+                    "tool_call_id": call_id,
+                },
             )
-            call_id = row.get("tool_call_id")
             if call_id:
-                self._tool_event_ids[str(call_id)] = event.event_id
+                self._tool_event_ids[call_id] = event.event_id
             return [event]
         if phase == "tool_result":
+            call_id = str(row.get("tool_call_id") or "")
             return [
                 self.make(
                     "tool_result",
                     stage=stage,
                     actor=str(row.get("actor") or node),
-                    parent_id=self._tool_event_ids.get(str(row.get("tool_call_id") or "")),
-                    payload={"tool_name": row.get("tool"), "status": row.get("status", "success"), "summary": row.get("summary", "")},
+                    parent_id=self._tool_event_ids.get(call_id),
+                    payload={
+                        "tool_name": row.get("tool"),
+                        "tool_call_id": call_id,
+                        "status": row.get("status", "success"),
+                        "summary": row.get("summary", ""),
+                    },
                 )
             ]
         if phase == "validation":
@@ -185,6 +240,8 @@ def legacy_activity(events: list[RunEvent]) -> list[dict]:
             kind = "answer"
         elif event.event_type == "route_decision":
             kind = "decision"
+        elif event.event_type == "agent_resumed":
+            continue
         elif event.event_type == "agent_message":
             kind = payload.get("kind", "action")
         else:

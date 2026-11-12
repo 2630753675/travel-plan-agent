@@ -55,16 +55,6 @@ def new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def next_event_seq(run_id: str) -> int:
-    # 注意：sqlite3 的连接上下文只提交事务、不关闭连接；
-    # 用 closing 保证释放句柄，否则 Windows 上会锁住 db 文件。
-    with closing(_connect()) as conn:
-        row = conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = ?", (run_id,)
-        ).fetchone()
-    return int(row[0])
-
-
 def append_event(event: dict) -> None:
     with closing(_connect()) as conn:
         conn.execute(
