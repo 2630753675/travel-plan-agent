@@ -373,7 +373,8 @@ function eventToLogEntry(ev: RunEvent): LogEntry | null {
     case 'tool_exchange':
       return { ...base, kind: 'tool', text: p.text ?? '', depth: 2, tool: String(p.tool ?? '') }
     case 'agent_completed':
-      return p.summary ? { ...base, kind: 'action', text: String(p.summary), depth: 1 } : null
+      // 节点的具体动作已由日志行记录，这里不再重复一条摘要
+      return null
     case 'validation_result': {
       const issues = Array.isArray(p.issues) ? p.issues : []
       const blockers = issues.filter((i: any) => i?.severity === 'blocker')
