@@ -333,6 +333,24 @@ button:disabled {
   font-size: 12px;
 }
 
+.run-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: baseline;
+  margin: 16px 0 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-usage strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
 .stats {
   display: flex;
   flex-wrap: wrap;

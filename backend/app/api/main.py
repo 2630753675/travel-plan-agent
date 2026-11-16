@@ -98,9 +98,11 @@ class RefineRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    # 预算超支用 accept/downgrade/abort；
-    # 协商僵持时这里是用户选中的倾向文本，两种都在同一个恢复入口
+    # 兼容旧字符串；新确认使用 kind + decision + accepted_issue_codes。
     decision: str
+    kind: str | None = None
+    accepted_issue_codes: list[str] = []
+    note: str = ""
 
 
 class RollbackRequest(BaseModel):
@@ -171,6 +173,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             info["negotiation"] = negotiation.model_dump(mode="json")
         activity = final.get("log") or []
         info["activity"] = [e.model_dump(mode="json") for e in activity]
+        info["llm_stats"] = final.get("llm_stats") or {}
         store.save_run(
             plan_id,
             "interrupted",
@@ -196,7 +199,8 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
 
     if final.get("draft") is None or final.get("critique") is None or final.get("blocked"):
         reasons = final.get("peer_state", {}).get("warnings", [])
-        store.save_run(plan_id, "failed", {"message": "专业团队未产出可交付结果", "reasons": reasons})
+        stats = final.get("llm_stats") or {}
+        store.save_run(plan_id, "failed", {"message": "专业团队未产出可交付结果", "reasons": reasons, "llm_stats": stats})
         yield publish(
             factory.make(
                 "run_failed",
@@ -205,6 +209,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                     "plan_id": plan_id,
                     "message": "专业团队未产出可交付结果",
                     "reasons": reasons,
+                    "llm_stats": stats,
                 },
             )
         )
@@ -221,6 +226,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                 "message": "终局硬约束未通过，未保存为可交付行程。",
                 "blockers": blockers,
                 "critique": critique.model_dump(mode="json"),
+                "llm_stats": final.get("llm_stats") or {},
             },
         )
         yield publish(
@@ -232,6 +238,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                     "message": "终局硬约束未通过，未保存为可交付行程。",
                     "blockers": blockers,
                     "critique": critique.model_dump(mode="json"),
+                    "llm_stats": final.get("llm_stats") or {},
                 },
             )
         )
@@ -269,6 +276,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         "document": final.get("document"),
         "team_tasks": final.get("team_tasks") or {},
         "approved_version": final.get("approved_version"),
+        "llm_stats": final.get("llm_stats") or {},
         "errors": final.get("errors") or [],
         "summary": summary.build_summary(itinerary, source_kind),
         # 只读分享用的签名：拿到它就能看这一份行程，但动不了别的
@@ -312,6 +320,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                 "version": version,
                 "passed": critique.passed,
                 "total_cost": itinerary.total_cost,
+                "llm_stats": result["llm_stats"],
                 "result": result,
             },
         )
@@ -408,7 +417,16 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
 
     async def stream():
         async for chunk in _run_graph(
-            graph, config, Command(resume=body.decision), plan_id, brief,
+            graph,
+            config,
+            Command(resume={
+                "kind": body.kind or "legacy_decision",
+                "decision": body.decision,
+                "accepted_issue_codes": body.accepted_issue_codes,
+                "note": body.note,
+            }),
+            plan_id,
+            brief,
             cfg.datasource.kind,
             cfg.orchestration.max_runtime_s,
         ):

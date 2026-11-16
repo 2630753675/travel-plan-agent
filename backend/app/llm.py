@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -73,11 +74,29 @@ class LLMClient:
         self.calls = 0
         self.input_chars = 0
         self.output_chars = 0
+        self.latency_ms = 0
+        self.usage_calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
 
     def _reserve_call(self) -> None:
         if self.max_calls is not None and self.calls >= self.max_calls:
             raise LLMError(f"已达到本次运行模型调用上限 {self.max_calls}")
         self.calls += 1
+
+    def stats(self) -> dict:
+        return {
+            "calls": self.calls,
+            "max_calls": self.max_calls,
+            "input_chars": self.input_chars,
+            "output_chars": self.output_chars,
+            "latency_ms": self.latency_ms,
+            "usage_available": self.usage_calls > 0,
+            "usage_calls": self.usage_calls,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
 
     @property
     def _endpoint(self) -> str:
@@ -116,12 +135,21 @@ class LLMClient:
             payload["response_format"] = {"type": "json_object"}
 
         # urllib 是阻塞的，放线程里跑，避免阻塞事件循环
+        started = time.monotonic()
         data = await asyncio.wait_for(
             asyncio.to_thread(
                 _post, self._endpoint, payload, self.cfg.api_key, float(self.timeout_s), self._host
             ),
             timeout=self.timeout_s + 1,
         )
+        self.latency_ms += int((time.monotonic() - started) * 1000)
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+            self.usage_calls += 1
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
 
         try:
             choice = data["choices"][0]
@@ -189,8 +217,6 @@ class LLMClient:
         output_limit = max_tokens if max_tokens is not None else self.max_output_tokens
         if output_limit is not None:
             payload["max_tokens"] = output_limit
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -200,12 +226,21 @@ class LLMClient:
             if self.budget.exceeded():
                 raise LLMError(f"已超出 token 预算 {self.budget.budget}")
 
+        started = time.monotonic()
         data = await asyncio.wait_for(
             asyncio.to_thread(
                 _post, self._endpoint, payload, self.cfg.api_key, float(self.timeout_s), self._host
             ),
             timeout=self.timeout_s + 1,
         )
+        self.latency_ms += int((time.monotonic() - started) * 1000)
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+            self.usage_calls += 1
+            self.prompt_tokens += prompt_tokens
+            self.completion_tokens += completion_tokens
 
         try:
             choice = data["choices"][0]
@@ -230,6 +265,7 @@ class LLMClient:
         if not content.strip() and not calls:
             raise LLMError("模型既没有输出内容也没有调用工具")
 
+        self.output_chars += len(content) + len(json.dumps(calls, ensure_ascii=False))
         if self.budget:
             self.budget.add(content)
         return {"content": content, "tool_calls": calls}

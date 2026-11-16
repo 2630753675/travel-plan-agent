@@ -105,6 +105,18 @@ type Result = {
   document?: TeamDocument | null
   team_tasks?: Record<string, TeamTask>
   approved_version?: number | null
+  llm_stats?: {
+    calls?: number
+    max_calls?: number | null
+    input_chars?: number
+    output_chars?: number
+    latency_ms?: number
+    usage_available?: boolean
+    usage_calls?: number
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+  }
   share?: string
 }
 
@@ -843,6 +855,7 @@ export default function App() {
           document: rec.document,
           team_tasks: rec.team_tasks,
           approved_version: rec.approved_version,
+          llm_stats: rec.llm_stats,
         })
         // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
         if (Array.isArray(rec.events) && rec.events.length > 0) {
@@ -940,7 +953,12 @@ export default function App() {
       const res = await apiFetch(`/api/plan/${pid}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({
+          decision,
+          kind: interruptInfo?.type === 'peer_escalation' ? 'peer_review_risk' : interruptInfo?.type,
+          accepted_issue_codes: decision === 'accept_risk' ? ['REVIEW_RISK_ACCEPTED'] : [],
+          note: decision === 'accept_risk' ? '用户确认接受当前评审风险' : '',
+        }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await consume(res, handleEvent)
@@ -1429,6 +1447,16 @@ export default function App() {
                     </tbody>
                   </table>
                 </section>
+              )}
+              {result.llm_stats && result.llm_stats.calls !== undefined && (
+                <div className="run-usage" role="status">
+                  <strong>本次模型用量</strong>
+                  <span>{result.llm_stats.calls} 次请求{result.llm_stats.max_calls ? ` / 上限 ${result.llm_stats.max_calls}` : ''}</span>
+                  <span>{result.llm_stats.usage_available
+                    ? `供应商报告 ${result.llm_stats.total_tokens ?? 0} tokens（输入 ${result.llm_stats.prompt_tokens ?? 0} / 输出 ${result.llm_stats.completion_tokens ?? 0}）`
+                    : `供应商未返回 token usage；输入/输出 ${result.llm_stats.input_chars ?? 0}/${result.llm_stats.output_chars ?? 0} 字符`}</span>
+                  <span>模型等待 {(Math.max(0, result.llm_stats.latency_ms ?? 0) / 1000).toFixed(1)} 秒</span>
+                </div>
               )}
               <div className="stats">
                 <div className="stat">

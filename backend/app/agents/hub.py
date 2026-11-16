@@ -195,17 +195,23 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         return env
 
     if user_answer:
+        try:
+            answer = json.loads(user_answer)
+        except (TypeError, json.JSONDecodeError):
+            answer = {"decision": user_answer}
+        decision = str(answer.get("decision") or "") if isinstance(answer, dict) else user_answer
+        accepted_codes = answer.get("accepted_issue_codes") or [] if isinstance(answer, dict) else []
         post("user", ["orchestrator"], "note", f"用户答复：{user_answer}")
         for task in tasks.values():
             if task["status"] == "running":
                 task["status"] = "pending"
-        if user_answer.startswith("accept_risk"):
-            # 用户明确接受未解决评审项：允许 Writer 整合当前版本，但保留风险提示。
+        if decision == "accept_risk":
+            if not accepted_codes:
+                raise ValueError("接受评审风险时必须指定 issue code")
             ctx.approved_version = ctx.plan_version
             ctx.document = None
             accepted_risk = True
-        elif user_answer.startswith("revise"):
-            # 用户选择再改一轮：给一次额外复审额度。
+        elif decision == "revise":
             reviews = max(0, reviews - 1)
     if finalize_feedback:
         post("hard_constraint_workflow", ["orchestrator"], "objection", finalize_feedback)

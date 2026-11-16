@@ -304,14 +304,15 @@ def _log_lines(node: str, upd: dict, state: TripState) -> list:
 def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None):
     settings = settings or AppSettings()
     max_revisions = settings.orchestration.max_revisions
+    selected_mode = settings.orchestration.agent_mode
+    if selected_mode == "legacy":
+        selected_mode = "expert"
     # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"
     enable_interrupt = checkpointer is not None
     # fast/expert 都走受控规则图；只有显式 peer 才启动五角色团队。
     # legacy 保留旧协商图，仅用于历史轨迹兼容，不作为默认路径。
-    selected_mode = settings.orchestration.agent_mode
-    if selected_mode == "legacy":
-        selected_mode = "expert"
     peer_mode = settings.llm.configured and selected_mode == "peer"
+    fast_mode = selected_mode == "fast"
     mode_call_limit = {
         "fast": 1,
         "expert": min(3, settings.orchestration.max_model_calls),
@@ -527,7 +528,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         )
 
         llm_selection = None
-        if settings.llm.configured and not budget_pressure and settings.orchestration.agent_mode in {"fast", "expert"}:
+        if settings.llm.configured and not budget_pressure and selected_mode in {"fast", "expert"}:
             client = shared_llm
             llm_selection = await llm_selector.select_pois(
                 state["brief"], state["poi"].candidates, state["weather"].days, client
@@ -551,6 +552,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         if budget_pressure and settings.llm.enabled:
             itinerary.warnings.append("降配重排由规则引擎执行，以保证确实省钱")
         summary = f"我排出 {len(itinerary.days)} 天行程，总花费 {itinerary.total_cost:.0f} 元。"
+        # fast 只需硬校验，不构造评审消息链，避免把确定性路径伪装成多 Agent 工作流。
+        if fast_mode:
+            return {"draft": itinerary, "llm_stats": shared_llm.stats() if shared_llm else {}}
         constraints = ["单日活动不超过 600 分钟", "景点必须在开放时间内", "返程日预留机场时间"]
         proposals = []
         messages = []
@@ -644,6 +648,29 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         })
         # 预算/体验评审是 Agent；这里是确定性的硬约束 Workflow，合并结果并决定路由。
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
+
+    async def fast_review_node(state: TripState) -> dict:
+        """快速路径只运行确定性硬约束校验，不调用模型评审或协商。"""
+        result = critic.run(
+            brief=state["brief"],
+            itinerary=state["draft"],
+            poi_plan=state["poi"],
+            transport=state["transport"],
+            weather=state["weather"],
+        )
+        _emit({
+            "phase": "validation",
+            "node": "critic",
+            "stage": "check",
+            "passed": result.passed,
+            "issues": [issue.model_dump(mode="json") for issue in result.issues],
+            "suggestions": result.suggestions,
+        })
+        return {
+            "critique": result,
+            "revision": state.get("revision", 0) + 1,
+            "llm_stats": shared_llm.stats() if shared_llm else {},
+        }
 
     async def negotiation_node(state: TripState) -> dict:
         """预算官 vs 体验官，由调解者裁决。支持多轮：谈崩时交给用户表态后重谈。"""
@@ -744,6 +771,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         _emit({"phase": "start", "node": "ask"})
         choice = interrupt(
             {
+                "kind": "negotiation_deadlock",
                 "type": "negotiation_deadlock",
                 "message": deadlock,
                 "total": round(draft.total_cost),
@@ -759,8 +787,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         )
         _emit({"phase": "end", "node": "ask", "summary": f"你选择：{choice}"})
 
+        raw_choice = choice.get("decision") if isinstance(choice, dict) else choice
         return {
-            "user_hint": str(choice),
+            "user_hint": str(raw_choice),
             "log": [
                 entry(
                     "negotiation",
@@ -788,6 +817,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         _emit({"phase": "start", "node": "confirm"})
         decision = interrupt(
             {
+                "kind": "budget_overrun",
                 "type": "budget_overrun",
                 "total": round(draft.total_cost),
                 "budget": round(brief.budget_total),
@@ -809,11 +839,12 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 ),
             }
         )
+        raw_decision = decision.get("decision") if isinstance(decision, dict) else decision
         picked = {"accept": "接受超支", "downgrade": "要求降配重排", "abort": "取消"}.get(
-            str(decision), str(decision)
+            str(raw_decision), str(raw_decision)
         )
         return {
-            "decision": str(decision),
+            "decision": str(raw_decision),
             "log": [
                 stage("confirm"),
                 entry(
@@ -1004,6 +1035,8 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
         updates: dict = {
             "peer_state": result.session,
+            "llm_stats": shared_llm.stats() if shared_llm else {},
+
             "peer_trace": result.trace,
             "peer_document": result.ctx.document or {},
             "team_tasks": result.session.get("tasks", {}),
@@ -1047,13 +1080,29 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         q = state.get("peer_question") or {}
         answer = interrupt(
             {
+                "kind": "peer_review_risk",
                 "type": "peer_escalation",
                 "question": q.get("question") or "需要你确认一件事",
                 "from": q.get("from"),
                 "options": q.get("options") or [],
             }
         )
-        return {"peer_answer": str(answer)}
+        if isinstance(answer, dict):
+            decision = str(answer.get("decision") or "")
+            issue_codes = answer.get("accepted_issue_codes") or []
+            accepted = set(issue_codes) if isinstance(issue_codes, list) else set()
+            question = (state.get("peer_question") or {}).get("question", "")
+            if decision == "accept_risk" and not accepted:
+                raise ValueError("接受评审风险时必须明确接受的 issue code")
+            answer_text = json.dumps(
+                {"kind": answer.get("kind", "peer_review_risk"), "decision": decision,
+                 "accepted_issue_codes": sorted(str(code) for code in accepted),
+                 "note": str(answer.get("note") or ""), "question": question},
+                ensure_ascii=False,
+            )
+        else:
+            answer_text = str(answer)
+        return {"peer_answer": answer_text}
 
     async def peer_finalize_node(state: TripState) -> dict:
         """确定性校验器终审：Agent 谈成什么都可以，能不能执行由这里说了算。"""
@@ -1091,7 +1140,12 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         feedback = "；".join(i.message for i in critique.issues if i.severity == "blocker")
         if not critique.passed and feedback:
             _emit({"phase": "peer_finalize_feedback", "text": feedback})
-        return {"critique": critique, "revision": int(state.get("revision", 0)) + 1, "peer_finalize_feedback": feedback if not critique.passed else ""}
+        return {
+            "critique": critique,
+            "revision": int(state.get("revision", 0)) + 1,
+            "peer_finalize_feedback": feedback if not critique.passed else "",
+            "llm_stats": shared_llm.stats() if shared_llm else {},
+        }
 
     def route_after_peer(state: TripState) -> str:
         return "peer_ask" if state.get("peer_question") else "peer_finalize"
@@ -1177,7 +1231,19 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             )
         return g.compile(checkpointer=checkpointer)
 
-    # 未配置模型：走确定性规则链路（界面会明示"规则模式"，不冒充 Agent）。
+    # fast 使用最小图：并行查事实 -> 一次选景点/排程 -> 一次硬校验。
+    if fast_mode:
+        g.add_node("fast_planner", wrap("planner", planner_node))
+        g.add_node("fast_review", wrap("critic", fast_review_node))
+        for name in ("transport", "lodging", "poi", "weather"):
+            g.add_node(name, wrap(name, {"transport": transport_node, "lodging": lodging_node, "poi": poi_node, "weather": weather_node}[name]))
+            g.add_edge("clarify", name)
+            g.add_edge(name, "fast_planner")
+        g.add_edge("fast_planner", "fast_review")
+        g.add_edge("fast_review", END)
+        return g.compile(checkpointer=checkpointer)
+
+    # expert/legacy 使用受控规则链路；未配置模型时也明确作为规则规划运行。
     g.add_node("transport", wrap("transport", transport_node))
     g.add_node("lodging", wrap("lodging", lodging_node))
     g.add_node("poi", wrap("poi", poi_node))
