@@ -24,7 +24,7 @@ from .. import settings as config_store
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..checkpoint import PersistentSaver
 from ..graph.build import build
-from ..llm import LLMClient, LLMError, TokenBudget
+from ..llm import LLMClient, LLMError
 from ..event_stream import EventFactory, legacy_activity
 from ..models import Critique, Itinerary, TripBrief
 from ..paths import DATA_DIR
@@ -33,7 +33,7 @@ from .. import summary
 from ..tools.factory import make_source
 from . import store
 
-app = FastAPI(title="旅行规划多 agent 编排助手", version="0.1.0")
+app = FastAPI(title="旅行规划助手", version="0.2.0")
 
 # 只允许同源与本地开发端口。认证走自定义头，不靠宽松 CORS。
 app.add_middleware(
@@ -82,6 +82,16 @@ async def access_guard(request: Request, call_next):
     )
 
 
+@app.middleware("http")
+async def static_cache_headers(request: Request, call_next):
+    """入口 HTML 不缓存：前端重新构建后文件名会变，缓存旧入口会白屏。"""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith("index.html"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 class RefineRequest(BaseModel):
     date: date
     feedback: str = ""
@@ -107,8 +117,9 @@ def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
     return f"{prefix}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief, source_kind: str = "mock"):
+async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief, source_kind: str = "mock", max_runtime_s: int = 180):
     """Stream, persist, and replay one normalized event sequence per run."""
+    import asyncio
     trace: list[dict] = []
     final: dict = {}
     prior_events = store.list_events(plan_id)
@@ -127,21 +138,24 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     lifecycle = "run_started" if seq_start == 1 else "run_resumed"
     yield publish(factory.make(lifecycle, actor="system", payload={"plan_id": plan_id}))
     try:
-        async for mode, payload in graph.astream(
-            graph_input, config=config, stream_mode=["custom", "values"]
-        ):
-            if mode == "custom":
-                trace.append(payload)
-                for event in factory.from_custom(payload):
-                    yield publish(event)
-            else:
-                final = payload
+        async with asyncio.timeout(max_runtime_s):
+            async for mode, payload in graph.astream(
+                graph_input, config=config, stream_mode=["custom", "values"]
+            ):
+                if mode == "custom":
+                    trace.append(payload)
+                    for event in factory.from_custom(payload):
+                        yield publish(event)
+                else:
+                    final = payload
     except Exception as e:  # 任何未预期异常都要让前端收到，而不是静默断开
+        message = f"规划过程异常：{e}"
+        store.save_run(plan_id, "failed", {"message": message})
         yield publish(
             factory.make(
                 "run_failed",
                 actor="system",
-                payload={"message": f"规划过程异常：{e}"},
+                payload={"plan_id": plan_id, "message": message},
             )
         )
         return
@@ -157,11 +171,21 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             info["negotiation"] = negotiation.model_dump(mode="json")
         activity = final.get("log") or []
         info["activity"] = [e.model_dump(mode="json") for e in activity]
+        store.save_run(
+            plan_id,
+            "interrupted",
+            {
+                "interrupt": info,
+                "revision": info["revision"],
+                "created_at": None,
+            },
+        )
         yield publish(
             factory.make(
                 "run_interrupted",
                 actor="system",
                 payload={
+                    "plan_id": plan_id,
                     "interrupt": info,
                     "interrupt_type": info.get("type"),
                     "revision": info["revision"],
@@ -170,18 +194,57 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         )
         return
 
-    if "draft" not in final or "critique" not in final:
+    if final.get("draft") is None or final.get("critique") is None or final.get("blocked"):
+        reasons = final.get("peer_state", {}).get("warnings", [])
+        store.save_run(plan_id, "failed", {"message": "专业团队未产出可交付结果", "reasons": reasons})
         yield publish(
             factory.make(
                 "run_failed",
                 actor="system",
-                payload={"message": "规划未产出结果"},
+                payload={
+                    "plan_id": plan_id,
+                    "message": "专业团队未产出可交付结果",
+                    "reasons": reasons,
+                },
             )
         )
         return
 
     itinerary: Itinerary = final["draft"]
     critique: Critique = final["critique"]
+    if not critique.passed:
+        blockers = [issue.message for issue in critique.issues if issue.severity == "blocker"]
+        store.save_run(
+            plan_id,
+            "failed",
+            {
+                "message": "终局硬约束未通过，未保存为可交付行程。",
+                "blockers": blockers,
+                "critique": critique.model_dump(mode="json"),
+            },
+        )
+        yield publish(
+            factory.make(
+                "run_failed",
+                actor="system",
+                payload={
+                    "plan_id": plan_id,
+                    "message": "终局硬约束未通过，未保存为可交付行程。",
+                    "blockers": blockers,
+                    "critique": critique.model_dump(mode="json"),
+                },
+            )
+        )
+        return
+    team_session = final.get("peer_state") or {}
+    if team_session.get("architecture") == "professional_team":
+        context = team_session.get("context") or {}
+        if (final.get("approved_version") != context.get("plan_version")
+                or final.get("approved_version") is None or not final.get("document")):
+            message = "方案尚未完成版本评审或 Writer 整合，拒绝交付"
+            store.save_run(plan_id, "failed", {"message": message})
+            yield publish(factory.make("run_failed", actor="system", payload={"plan_id": plan_id, "message": message}))
+            return
     revision = final.get("revision", 0)
     decision = final.get("decision")
     negotiation = final.get("negotiation")
@@ -203,6 +266,9 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         "decision": decision,
         "negotiation": negotiation.model_dump(mode="json") if negotiation else None,
         "activity": activity,
+        "document": final.get("document"),
+        "team_tasks": final.get("team_tasks") or {},
+        "approved_version": final.get("approved_version"),
         "errors": final.get("errors") or [],
         "summary": summary.build_summary(itinerary, source_kind),
         # 只读分享用的签名：拿到它就能看这一份行程，但动不了别的
@@ -216,6 +282,14 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         source, note = "resume", "中断后继续执行"
     else:
         source, note = "initial", ""
+    if team_session.get("architecture") == "professional_team":
+        trace.append({
+            "phase": "team_deliverable",
+            "itinerary": itinerary.model_dump(mode="json"),
+            "document": result["document"],
+            "team_tasks": result["team_tasks"],
+            "approved_version": result["approved_version"],
+        })
     version = store.save(
         plan_id,
         brief.model_dump(mode="json"),
@@ -245,11 +319,14 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
 
 
 async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
+    # 请求级模式优先于全局配置：普通请求默认 fast，peer 必须由用户显式选择。
+    cfg.orchestration.agent_mode = brief.planning_mode
     graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
     config = {"configurable": {"thread_id": plan_id}}
     async for chunk in _run_graph(
         graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief,
         cfg.datasource.kind,
+        cfg.orchestration.max_runtime_s,
     ):
         yield chunk
 
@@ -269,11 +346,25 @@ async def create_plan(brief: TripBrief):
     )
 
 
+@app.get("/api/run/{run_id}")
+async def get_run(run_id: str):
+    """失败或中断的运行摘要：页面刷新后据此恢复原因/确认面板。"""
+    record = store.load_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    return record
+
+
 @app.get("/api/plan/{plan_id}")
 async def get_plan(plan_id: str):
     record = store.load(plan_id)
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
+    deliverable = next((row for row in reversed(record.get("trace") or [])
+                        if row.get("phase") == "team_deliverable"
+                        and row.get("itinerary") == record["itinerary"]), None)
+    if deliverable:
+        record.update({key: deliverable.get(key) for key in ("document", "team_tasks", "approved_version")})
     record["events"] = store.list_events(plan_id)
     record["version"] = store.current_version(plan_id)
     record["summary"] = summary.build_summary(
@@ -299,9 +390,9 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
 
     # 中断时还没落库，因此从 checkpointer 里取原始 brief
     cfg = config_store.load()
-    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
     config = {"configurable": {"thread_id": plan_id}}
-    snapshot = await graph.aget_state(config)
+    probe_graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
+    snapshot = await probe_graph.aget_state(config)
     if not snapshot.next:
         raise HTTPException(status_code=400, detail="该规划没有待确认的中断")
 
@@ -312,11 +403,14 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
         if raw is None:
             raise HTTPException(status_code=400, detail="找不到该规划的原始需求")
         brief = raw
+    cfg.orchestration.agent_mode = brief.planning_mode
+    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
 
     async def stream():
         async for chunk in _run_graph(
             graph, config, Command(resume=body.decision), plan_id, brief,
             cfg.datasource.kind,
+            cfg.orchestration.max_runtime_s,
         ):
             yield chunk
 
@@ -370,11 +464,7 @@ async def refine_plan(plan_id: str, body: RefineRequest):
             if i.type == "sight" and i.ref_id
         }
         is_rainy = any(w.date == target and w.is_rainy for w in w_plan.days)
-        client = LLMClient(
-            cfg.llm,
-            cfg.orchestration.node_timeout_s,
-            TokenBudget(cfg.orchestration.token_budget),
-        )
+        client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s, budget=None)
         picked = await llm_refiner.refine_day(
             brief, target_day, body.feedback, p_plan.candidates, used_elsewhere, is_rainy, client
         )
@@ -395,6 +485,12 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         llm_selection=llm_selection,
     )
     new_critique = critic.run(brief, new_itinerary, p_plan, t_plan, w_plan)
+    if not new_critique.passed:
+        blockers = [i.message for i in new_critique.issues if i.severity == "blocker"]
+        raise HTTPException(
+            status_code=409,
+            detail="重排后的方案未通过硬校验，未保存：" + "；".join(blockers),
+        )
 
     store.save(
         plan_id,

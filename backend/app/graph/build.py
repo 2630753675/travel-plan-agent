@@ -21,7 +21,9 @@ from langgraph.types import interrupt
 
 from ..agents import clarify, critic, lodging, llm_selector, planner, poi, transport, weather
 from ..agents import negotiators
-from ..llm import LLMClient, TokenBudget
+from ..agents.protocol import AgentMessage, AgentProposal, CollaborationRequest
+from ..agents import reviewers
+from ..llm import LLMClient
 from ..settings import AppSettings
 from ..tools.base import TravelSource
 from .state import TripState
@@ -304,6 +306,28 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
     max_revisions = settings.orchestration.max_revisions
     # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"
     enable_interrupt = checkpointer is not None
+    # fast/expert 都走受控规则图；只有显式 peer 才启动五角色团队。
+    # legacy 保留旧协商图，仅用于历史轨迹兼容，不作为默认路径。
+    selected_mode = settings.orchestration.agent_mode
+    if selected_mode == "legacy":
+        selected_mode = "expert"
+    peer_mode = settings.llm.configured and selected_mode == "peer"
+    mode_call_limit = {
+        "fast": 1,
+        "expert": min(3, settings.orchestration.max_model_calls),
+        "peer": settings.orchestration.max_model_calls,
+    }.get(selected_mode, 1)
+    shared_llm = (
+        LLMClient(
+            settings.llm,
+            settings.orchestration.node_timeout_s,
+            budget=None,
+            max_calls=mode_call_limit,
+            max_output_tokens=settings.orchestration.max_output_tokens,
+        )
+        if settings.llm.configured
+        else None
+    )
 
     async def clarify_node(state: TripState) -> dict:
         result = clarify.run(state["brief"])
@@ -317,7 +341,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "transport": transport.TransportPlan(error=f"交通 agent 异常：{e}"),
                 "errors": [f"transport: {e}"],
             }
-        return {"transport": plan}
+        return {
+            "transport": plan,
+        }
 
     async def lodging_node(state: TripState) -> dict:
         try:
@@ -327,7 +353,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "lodging": lodging.LodgingPlan(error=f"住宿 agent 异常：{e}"),
                 "errors": [f"lodging: {e}"],
             }
-        return {"lodging": plan}
+        return {
+            "lodging": plan,
+        }
 
     async def poi_node(state: TripState) -> dict:
         try:
@@ -337,7 +365,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "poi": poi.PoiPlan(error=f"景点 agent 异常：{e}"),
                 "errors": [f"poi: {e}"],
             }
-        return {"poi": plan}
+        return {
+            "poi": plan,
+        }
 
     async def weather_node(state: TripState) -> dict:
         try:
@@ -347,7 +377,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "weather": weather.WeatherPlan(error=f"天气 agent 异常：{e}"),
                 "errors": [f"weather: {e}"],
             }
-        return {"weather": plan}
+        return {
+            "weather": plan,
+        }
 
     async def coordinator_node(state: TripState) -> dict:
         """四路检索跑完后校对一次：结果之间有没有对不上的地方。
@@ -372,15 +404,42 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             return {"collab_done": True, "log": lines}
 
         req = result.requests[0]
-        sender = ACTOR_LABEL.get(req.sender, req.sender)
-        receiver = ACTOR_LABEL.get(req.receiver, req.receiver)
+        request_id = uuid4().hex
+        sender = req.sender
+        receiver = req.receiver
+        sender_label = ACTOR_LABEL.get(sender, sender)
+        receiver_label = ACTOR_LABEL.get(receiver, receiver)
+        request_message = AgentMessage(
+            message_id=request_id,
+            sender=sender,
+            receiver=receiver,
+            intent="request",
+            content=req.question,
+            reason=req.reason,
+            evidence=[{"kind": "distance_check", **req.payload}],
+            payload=req.payload,
+        )
+        response_message = AgentMessage(
+            message_id=uuid4().hex,
+            sender=receiver,
+            receiver=sender,
+            intent="response",
+            content=(
+                f"我提供 {len(req.payload.get('poi_ids', []))} 个目标景点的坐标，"
+                "请据此重新评估酒店位置。"
+            ),
+            reason="回应住宿 Agent 的位置协作请求",
+            reply_to=request_id,
+            evidence=[{"kind": "poi_coordinates", "poi_ids": req.payload.get("poi_ids", [])}],
+            payload={"poi_ids": req.payload.get("poi_ids", [])},
+        )
         lines.append(
-            entry(req.sender, f"→ {receiver}：{req.question}", kind="speech", group="collab", depth=1)
+            entry(sender, f"→ {receiver_label}：{req.question}", kind="speech", group="collab", depth=1)
         )
         lines.append(
             entry(
-                req.receiver,
-                f"← {sender}：收到，提供 {len(req.payload.get('poi_ids', []))} 个景点的坐标",
+                receiver,
+                f"← {sender_label}：收到，提供 {len(req.payload.get('poi_ids', []))} 个景点的坐标",
                 kind="answer",
                 group="collab",
                 depth=1,
@@ -394,11 +453,21 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             "collab_done": True,
             "collab_requests": [
                 {
-                    "sender": sender,
-                    "receiver": receiver,
+                    "sender": sender_label,
+                    "receiver": receiver_label,
                     "question": req.question,
                     "reason": req.reason,
                 }
+            ],
+            "collaboration_requests": [
+                CollaborationRequest(
+                    request_id=request_id,
+                    sender=sender,
+                    receiver=receiver,
+                    question=req.question,
+                    reason=req.reason,
+                    payload=req.payload,
+                )
             ],
             "focus_poi_ids": req.payload.get("poi_ids", []),
             "log": lines,
@@ -439,16 +508,27 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     async def planner_node(state: TripState) -> dict:
         critique = state.get("critique")
+        review_feedback = state.get("messages") or []
+        budget_review_requested = any(
+            m.sender == "budget_reviewer" and any(e.get("action") == "downgrade" for e in m.evidence)
+            for m in review_feedback
+        )
+        experience_review_requested = any(
+            m.sender == "experience_reviewer" and any(e.get("action") == "revise" for e in m.evidence)
+            for m in review_feedback
+        )
+        # 预算评审是规划 Agent 的输入，不把评审意见仅仅作为聊天记录。
+        # 超预算时优先使用确定性降配策略，保证修订真实降低成本。
         # 预算已被判定超支时不再交给模型自由发挥：
         # 降配是用户明确的省钱诉求，规则层"换便宜酒店 + 优先免费景点"更可预测。
         budget_pressure = bool(
-            critique and any(i.code == "BUDGET_EXCEEDED" for i in critique.issues)
+            budget_review_requested
+            or critique and any(i.code == "BUDGET_EXCEEDED" for i in critique.issues)
         )
 
         llm_selection = None
-        if settings.llm.configured and not budget_pressure:
-            budget = TokenBudget(settings.orchestration.token_budget)
-            client = LLMClient(settings.llm, settings.orchestration.node_timeout_s, budget)
+        if settings.llm.configured and not budget_pressure and settings.orchestration.agent_mode in {"fast", "expert"}:
+            client = shared_llm
             llm_selection = await llm_selector.select_pois(
                 state["brief"], state["poi"].candidates, state["weather"].days, client
             )
@@ -470,7 +550,81 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             itinerary.warnings.append("模型选择不可用，本次行程由规则引擎生成")
         if budget_pressure and settings.llm.enabled:
             itinerary.warnings.append("降配重排由规则引擎执行，以保证确实省钱")
-        return {"draft": itinerary}
+        summary = f"我排出 {len(itinerary.days)} 天行程，总花费 {itinerary.total_cost:.0f} 元。"
+        constraints = ["单日活动不超过 600 分钟", "景点必须在开放时间内", "返程日预留机场时间"]
+        proposals = []
+        messages = []
+        prior_reviews = {
+            reviewer: next(
+                (m for m in reversed(state.get("messages") or []) if m.sender == reviewer),
+                None,
+            )
+            for reviewer in ("budget_reviewer", "experience_reviewer")
+        }
+        if experience_review_requested and critique is None:
+            itinerary.warnings.append("体验评审建议复核同行人群或每日景点安排")
+        for reviewer_name in ("budget_reviewer", "experience_reviewer"):
+            prior_review = prior_reviews[reviewer_name]
+            proposal = AgentProposal(
+                proposal_id=uuid4().hex,
+                sender="planner",
+                receiver=reviewer_name,
+                revision=state.get("revision", 0) + 1,
+                summary=summary,
+                constraints=constraints,
+                reply_to=prior_reviews[reviewer_name].message_id if prior_reviews[reviewer_name] else None,
+            )
+            proposals.append(proposal)
+            messages.append(
+                AgentMessage(
+                    message_id=proposal.proposal_id,
+                    sender="planner",
+                    receiver=reviewer_name,
+                    intent="revision" if prior_review else "proposal",
+                    content=summary,
+                    reason="根据用户约束与工具结果形成行程提案，请独立评审",
+                    evidence=[{"kind": "itinerary", "days": len(itinerary.days), "total_cost": itinerary.total_cost}],
+                    reply_to=proposal.reply_to,
+                    payload={"revision": proposal.revision, "constraints": constraints},
+                )
+            )
+        return {"draft": itinerary, "proposals": proposals, "messages": messages}
+
+    async def budget_review_node(state: TripState) -> dict:
+        content, reason, evidence = reviewers.budget_review(state["brief"], state["draft"])
+        proposal = next((p for p in reversed(state.get("proposals") or []) if p.receiver == "budget_reviewer"), None)
+        message = AgentMessage(
+            message_id=uuid4().hex,
+            sender="budget_reviewer",
+            receiver="planner",
+            intent="response",
+            content=content,
+            reason=reason,
+            evidence=evidence,
+            reply_to=proposal.proposal_id if proposal else None,
+            payload={"review": "budget"},
+        )
+        action = next((item.get("action") for item in evidence if item.get("kind") == "recommendation"), "accept")
+        return {"budget_review": {"content": content, "evidence": evidence}, "budget_review_action": action, "messages": [message]}
+
+    async def experience_review_node(state: TripState) -> dict:
+        content, reason, evidence = reviewers.experience_review(
+            state["brief"], state["draft"], state["poi"].candidates
+        )
+        proposal = next((p for p in reversed(state.get("proposals") or []) if p.receiver == "experience_reviewer"), None)
+        message = AgentMessage(
+            message_id=uuid4().hex,
+            sender="experience_reviewer",
+            receiver="planner",
+            intent="response",
+            content=content,
+            reason=reason,
+            evidence=evidence,
+            reply_to=proposal.proposal_id if proposal else None,
+            payload={"review": "experience"},
+        )
+        action = next((item.get("action") for item in evidence if item.get("kind") == "recommendation"), "accept")
+        return {"experience_review": {"content": content, "evidence": evidence}, "experience_review_action": action, "messages": [message]}
 
     async def critic_node(state: TripState) -> dict:
         critique = critic.run(
@@ -488,6 +642,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             "issues": [issue.model_dump(mode="json") for issue in critique.issues],
             "suggestions": critique.suggestions,
         })
+        # 预算/体验评审是 Agent；这里是确定性的硬约束 Workflow，合并结果并决定路由。
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
 
     async def negotiation_node(state: TripState) -> dict:
@@ -514,11 +669,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 ],
             }
 
-        client = LLMClient(
-            settings.llm,
-            settings.orchestration.node_timeout_s,
-            TokenBudget(settings.orchestration.token_budget),
-        )
+        client = shared_llm
+        if client is None:
+            return {"negotiated": True, "log": [entry("negotiation", "本次模式未启用模型协商", kind="decision")]}
         try:
             log, drops, cheaper = await negotiators.negotiate(
                 state["brief"],
@@ -683,8 +836,19 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         )
         is_budget_issue = any(i.code == "BUDGET_EXCEEDED" for i in critique.issues)
 
-        if critique.passed:
+        review_needs_revision = state.get("budget_review_action") == "downgrade" or state.get("experience_review_action") == "revise"
+        if critique.passed and not review_needs_revision:
             return END
+        if review_needs_revision and state.get("revision", 0) >= max_revisions:
+            return END
+        if critique.passed and review_needs_revision:
+            _emit({
+                "phase": "edge",
+                "from": "critic",
+                "to": "planner",
+                "reason": "评审 Agent 建议修订，回到规划 Agent",
+            })
+            return "planner"
 
         # 1. 预算严重超支且还没协商过：让两个角色先谈一轮
         #    （用和"是否打扰用户"相同的 20% 阈值，避免为几块钱惊动用户）
@@ -753,11 +917,222 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             return "planner"
         return END
 
+    def route_after_confirm_peer(state: TripState) -> str:
+        """协作模式下的"降配"不是重跑规则，而是把用户意见送回 Agent 继续谈。"""
+        if state.get("decision") == "downgrade":
+            _emit(
+                {
+                    "phase": "edge",
+                    "from": "confirm",
+                    "to": "peer_run",
+                    "reason": "用户要求降配，回到 Agent 协作继续调整",
+                }
+            )
+            return "peer_run"
+        return END
+
+    # ---- 对等多 Agent 协作（仅在配置了模型时启用）----
+    _peer_tool_ids: dict[str, str] = {}
+
+    def _peer_emit(kind: str, /, **payload) -> None:
+        """把 Agent 运行时的动作翻译成前端能读懂的事件。
+
+        工具调用沿用既有 tool_call/tool_result 契约，其余动作写成 agent_message，
+        这样对话抽屉、事件回放和 SQLite 落库都不用为多 Agent 单开一套。
+        """
+        agent = str(payload.get("agent") or "system")
+        if kind == "tool_call":
+            cid = uuid4().hex
+            _peer_tool_ids[agent] = cid
+            _emit(
+                {
+                    "phase": "tool_call",
+                    "node": agent,
+                    "actor": agent,
+                    "stage": "peer",
+                    "tool": payload.get("tool"),
+                    "arguments": payload.get("arguments") or {},
+                    "tool_call_id": cid,
+                }
+            )
+        elif kind == "tool_result":
+            _emit(
+                {
+                    "phase": "tool_result",
+                    "node": agent,
+                    "actor": agent,
+                    "stage": "peer",
+                    "tool": payload.get("tool"),
+                    "status": "success" if payload.get("ok") else "error",
+                    "summary": payload.get("summary", ""),
+                    "tool_call_id": _peer_tool_ids.get(agent) or uuid4().hex,
+                }
+            )
+        elif kind == "decide":
+            _emit(
+                {
+                    "phase": "peer_message",
+                    "agent": agent,
+                    "text": payload.get("text", ""),
+                    "kind": payload.get("kind", "note"),
+                    "to": payload.get("to") or [],
+                    "message_id": payload.get("message_id"),
+                    "reply_to": payload.get("reply_to"),
+                    "payload": payload.get("payload") or {},
+                }
+            )
+        else:
+            _emit({"phase": "peer_status", "step": kind, "agent": agent, **payload})
+
+    async def peer_run_node(state: TripState) -> dict:
+        """跑一场对等协作：Agent 互相唤醒、协商，僵持则请示用户。"""
+        from ..agents import hub as peer_hub
+
+        # 深度团队也受运行级请求数和单次输出上限保护，达到上限立即停止。
+        client = shared_llm
+        result = await peer_hub.run_session(
+            brief=state["brief"],
+            source=source,
+            client=client,
+            emit=_peer_emit,
+            max_rounds=max(1, settings.orchestration.max_revisions),
+            max_turns=min(settings.orchestration.max_agent_turns, settings.orchestration.max_model_calls),
+            resume=state.get("peer_state"),
+            user_answer=state.get("peer_answer") or "",
+            finalize_feedback=str(state.get("peer_finalize_feedback") or ""),
+        )
+
+        updates: dict = {
+            "peer_state": result.session,
+            "peer_trace": result.trace,
+            "peer_document": result.ctx.document or {},
+            "team_tasks": result.session.get("tasks", {}),
+            "peer_answer": "",
+            "blocked": result.blocked,
+            "transport": result.ctx.transport,
+            "lodging": result.ctx.lodging,
+            "poi": result.ctx.poi,
+            "weather": result.ctx.weather,
+        }
+        if result.escalation:
+            updates["peer_question"] = result.escalation
+            return updates
+        if result.blocked:
+            updates["blocked"] = True
+
+        updates["peer_question"] = None
+        if result.itinerary is not None:
+            for w in result.warnings:
+                result.itinerary.warnings.append(w)
+            updates["draft"] = result.itinerary
+        else:
+            updates["draft"] = None
+        if result.converged:
+            updates["approved_version"] = result.ctx.approved_version
+            updates["document"] = result.ctx.document
+        _emit(
+            {
+                "phase": "peer_status",
+                "step": "session_end",
+                "agent": "system",
+                "rounds": result.rounds,
+                "turns": result.turns,
+                "converged": result.converged,
+            }
+        )
+        return updates
+
+    async def peer_ask_node(state: TripState) -> dict:
+        """Agent 之间无法协调时，把选择权交回用户。"""
+        q = state.get("peer_question") or {}
+        answer = interrupt(
+            {
+                "type": "peer_escalation",
+                "question": q.get("question") or "需要你确认一件事",
+                "from": q.get("from"),
+                "options": q.get("options") or [],
+            }
+        )
+        return {"peer_answer": str(answer)}
+
+    async def peer_finalize_node(state: TripState) -> dict:
+        """确定性校验器终审：Agent 谈成什么都可以，能不能执行由这里说了算。"""
+        from ..models import Critique, Issue
+
+        draft = state.get("draft")
+        if draft is None:
+            return {
+                "critique": Critique(
+                    passed=False,
+                    issues=[
+                        Issue(severity="blocker", code="NO_PLAN", message="协作未能产出行程方案")
+                    ],
+                    suggestions=["检查模型配置后重试"],
+                ),
+                "revision": 1,
+            }
+        critique = critic.run(
+            brief=state["brief"],
+            itinerary=draft,
+            poi_plan=state["poi"],
+            transport=state["transport"],
+            weather=state["weather"],
+        )
+        _emit(
+            {
+                "phase": "validation",
+                "node": "critic",
+                "stage": "check",
+                "passed": critique.passed,
+                "issues": [i.model_dump(mode="json") for i in critique.issues],
+                "suggestions": critique.suggestions,
+            }
+        )
+        feedback = "；".join(i.message for i in critique.issues if i.severity == "blocker")
+        if not critique.passed and feedback:
+            _emit({"phase": "peer_finalize_feedback", "text": feedback})
+        return {"critique": critique, "revision": int(state.get("revision", 0)) + 1, "peer_finalize_feedback": feedback if not critique.passed else ""}
+
+    def route_after_peer(state: TripState) -> str:
+        return "peer_ask" if state.get("peer_question") else "peer_finalize"
+
+    def route_after_peer_finalize(state: TripState) -> str:
+        draft = state.get("draft")
+        critique = state.get("critique")
+        brief = state["brief"]
+        if draft is None or critique is None:
+            return END
+        if not critique.passed:
+            if state.get("revision", 0) + 1 >= max_revisions:
+                return END
+            return "peer_run"
+        approved = state.get("approved_version")
+        if approved is None or approved != state.get("peer_state", {}).get("context", {}).get("plan_version"):
+            return END
+        over_ratio = (
+            (draft.total_cost - brief.budget_total) / brief.budget_total if brief.budget_total else 0
+        )
+        if enable_interrupt and over_ratio > 0.2 and not state.get("decision"):
+            return "confirm"
+        return END
+
     def wrap(name: str, fn):
         async def node(state: TripState) -> dict:
             _emit({"phase": "start", "node": name})
             result = await fn(state)
             from ..activity import NODE_GROUP, STAGE_NODES, stage
+
+            # 状态中的 AgentMessage 是协作事实；只从这里统一发事件，避免某个节点
+            # 既手动 _emit 又被 wrapper 重复投影。
+            for message in result.get("messages") or []:
+                if isinstance(message, AgentMessage):
+                    _emit(
+                        {
+                            "phase": "message",
+                            "stage": NODE_GROUP.get(name, "collab"),
+                            "message": message.model_dump(mode="json"),
+                        }
+                    )
 
             lines = []
             if name in STAGE_NODES:
@@ -774,12 +1149,42 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     g = StateGraph(TripState)
     g.add_node("clarify", wrap("clarify", clarify_node))
+    g.add_node("critic", wrap("critic", critic_node))
+    g.add_edge(START, "clarify")
+
+    if peer_mode:
+        # 配置了模型：走真正的多 Agent 对等协作。
+        # 规则节点不参与，避免"Agent 谈完又被规则重排"这种自相矛盾的路径。
+        g.add_node("peer_run", wrap("peer_run", peer_run_node))
+        g.add_node("peer_ask", wrap("peer_ask", peer_ask_node))
+        g.add_node("peer_finalize", wrap("peer_finalize", peer_finalize_node))
+        g.add_edge("clarify", "peer_run")
+        g.add_conditional_edges(
+            "peer_run",
+            route_after_peer,
+            {"peer_ask": "peer_ask", "peer_finalize": "peer_finalize"},
+        )
+        g.add_edge("peer_ask", "peer_run")
+        peer_targets: dict = {END: END, "peer_run": "peer_run"}
+        if enable_interrupt:
+            peer_targets["confirm"] = "confirm"
+        g.add_conditional_edges("peer_finalize", route_after_peer_finalize, peer_targets)
+
+        if enable_interrupt:
+            g.add_node("confirm", confirm_node)
+            g.add_conditional_edges(
+                "confirm", route_after_confirm_peer, {"peer_run": "peer_run", END: END}
+            )
+        return g.compile(checkpointer=checkpointer)
+
+    # 未配置模型：走确定性规则链路（界面会明示"规则模式"，不冒充 Agent）。
     g.add_node("transport", wrap("transport", transport_node))
     g.add_node("lodging", wrap("lodging", lodging_node))
     g.add_node("poi", wrap("poi", poi_node))
     g.add_node("weather", wrap("weather", weather_node))
     g.add_node("planner", wrap("planner", planner_node))
-    g.add_node("critic", wrap("critic", critic_node))
+    g.add_node("budget_review", wrap("budget_review", budget_review_node))
+    g.add_node("experience_review", wrap("experience_review", experience_review_node))
 
     g.add_edge(START, "clarify")
     for name in ("transport", "lodging", "poi", "weather"):
@@ -794,7 +1199,10 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         {"lodging_fix": "lodging_fix", "planner": "planner"},
     )
     g.add_edge("lodging_fix", "planner")
-    g.add_edge("planner", "critic")
+    g.add_edge("planner", "budget_review")
+    g.add_edge("planner", "experience_review")
+    g.add_edge("budget_review", "critic")
+    g.add_edge("experience_review", "critic")
 
     g.add_node("negotiation", negotiation_node)
 

@@ -50,6 +50,7 @@ def cost_breakdown(itinerary: Itinerary) -> dict:
         for item in day.items:
             key = item.type if item.type in COST_LABELS else "other"
             buckets[key] += item.cost
+        buckets["meal"] += day.meal_estimate
 
     total = itinerary.total_cost or 0.0
     items = []

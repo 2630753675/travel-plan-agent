@@ -1,4 +1,4 @@
-"""S4 验收：设置页交互。
+﻿"""S4 验收：设置页交互。
 
 覆盖：打开设置 → 三个分组齐全 → 填模型连接 → 测试连接 → 保存 → 顶栏模式切换。
 需要后端已在 127.0.0.1:8848 运行。
@@ -52,7 +52,7 @@ def main() -> int:
             sections = page.locator(".cfg h3").all_inner_texts()
             print(f"  分组: {sections}")
             check("三个分组齐全", sections == ["模型连接", "编排参数", "数据源"], str(sections))
-            expect_mode = "模型生成" if initial["llm"]["enabled"] else "规则引擎"
+            expect_mode = "多 Agent 协作" if initial["llm"]["enabled"] else "规则模式 · 非 Agent"
             check(f"顶栏初始为{expect_mode}", page.locator(".mode-pill").inner_text() == expect_mode)
 
             if has_real_key:
@@ -103,7 +103,7 @@ def main() -> int:
                 check("保存成功", "已保存" in msg, msg)
                 page.screenshot(path=str(DOCS / "shot-settings.png"))
 
-                print("\n[5] 关闭后顶栏显示模型模式")
+                print("\n[5] 关闭后顶栏显示规则模式")
                 page.get_by_role("button", name="关闭").click()
                 page.wait_for_timeout(400)
                 mode = page.locator(".mode-pill").inner_text()

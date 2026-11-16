@@ -57,7 +57,7 @@ SETTINGS = AppSettings(
         model="fake-model",
         api_key="fake-key",
     ),
-    orchestration=OrchestrationSettings(max_revisions=3),
+    orchestration=OrchestrationSettings(max_revisions=3, agent_mode="legacy"),
 )
 
 BUDGET_SYSTEM = "你是行程预算官"

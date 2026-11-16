@@ -14,6 +14,7 @@ from ..agents.negotiators.protocol import NegotiationLog
 from ..agents.poi import PoiPlan
 from ..agents.transport import TransportPlan
 from ..agents.weather import WeatherPlan
+from ..agents.protocol import AgentMessage, AgentProposal, CollaborationRequest
 from ..models import Critique, Itinerary, LogEntry, TripBrief
 
 
@@ -26,6 +27,10 @@ class TripState(TypedDict, total=False):
     weather: WeatherPlan
     draft: Itinerary
     critique: Critique
+    budget_review: dict
+    experience_review: dict
+    budget_review_action: str
+    experience_review_action: str
     revision: int
     decision: str
     negotiation: NegotiationLog
@@ -39,5 +44,20 @@ class TripState(TypedDict, total=False):
     collab_done: bool
     collab_requests: list[dict]
     focus_poi_ids: list[str]
+    # Agent 之间真实交换的消息链；不是从日志反推出来的展示字段。
+    messages: Annotated[list[AgentMessage], operator.add]
+    proposals: Annotated[list[AgentProposal], operator.add]
+    collaboration_requests: Annotated[list[CollaborationRequest], operator.add]
+    # 对等协作会话的持久化状态：中断恢复时要接着谈，不能重跑已花的模型调用。
+    peer_state: dict
+    peer_question: dict
+    peer_answer: str
+    peer_trace: list[dict]
+    peer_document: dict
+    document: dict
+    approved_version: int
+    team_tasks: dict
+    blocked: bool
+    peer_finalize_feedback: str
     log: Annotated[list[LogEntry], operator.add]
     errors: Annotated[list[str], operator.add]

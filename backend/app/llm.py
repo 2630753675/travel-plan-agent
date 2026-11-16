@@ -64,10 +64,20 @@ def _post(url: str, payload: dict, api_key: str, timeout: float, host: str) -> d
 
 
 class LLMClient:
-    def __init__(self, cfg: LLMSettings, timeout_s: int = 60, budget: TokenBudget | None = None):
+    def __init__(self, cfg: LLMSettings, timeout_s: int = 60, budget: TokenBudget | None = None, max_calls: int | None = None, max_output_tokens: int | None = 1400):
         self.cfg = cfg
         self.timeout_s = timeout_s
         self.budget = budget
+        self.max_calls = max_calls
+        self.max_output_tokens = max_output_tokens
+        self.calls = 0
+        self.input_chars = 0
+        self.output_chars = 0
+
+    def _reserve_call(self) -> None:
+        if self.max_calls is not None and self.calls >= self.max_calls:
+            raise LLMError(f"已达到本次运行模型调用上限 {self.max_calls}")
+        self.calls += 1
 
     @property
     def _endpoint(self) -> str:
@@ -86,6 +96,8 @@ class LLMClient:
         if not self.cfg.has_credentials:
             raise LLMError("缺少 base_url / model / api_key")
 
+        self._reserve_call()
+        self.input_chars += len(system) + len(user)
         if self.budget:
             self.budget.add(system + user)
             if self.budget.exceeded():
@@ -137,14 +149,90 @@ class LLMClient:
             # 内容非空但被截断：JSON 大概率不完整，宁可降级也不要半截数据
             raise LLMError(f"输出被截断（max_tokens={max_tokens}），结果不可信")
 
+        self.output_chars += len(content)
         if self.budget:
             self.budget.add(content)
         return content
 
     async def chat_json(self, system: str, user: str, *, max_tokens: int = 4000) -> dict:
         """要求 JSON 输出。模型偶尔会用代码块包裹或加解释，这里做容错提取。"""
-        content = await self._complete(system, user, max_tokens=max_tokens, json_mode=True)
+        content = await self._complete(
+            system,
+            user,
+            max_tokens=min(max_tokens, self.max_output_tokens) if self.max_output_tokens else max_tokens,
+            json_mode=True,
+        )
         return _extract_json(content)
+
+    async def chat_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        *,
+        max_tokens: int | None = None,
+    ) -> dict:
+        """带工具的一轮对话，返回 {"content": str, "tool_calls": [...]}。
+
+        这是真 Agent 的基础：模型自己决定调哪个工具、传什么参数，
+        调用方执行工具后把结果作为 tool 消息回填，再让模型继续判断。
+        不支持 function calling 的模型会退化成纯文本，由调用方按协议解析。
+        """
+        if not self.cfg.has_credentials:
+            raise LLMError("缺少 base_url / model / api_key")
+
+        self._reserve_call()
+        payload: dict = {
+            "model": self.cfg.model,
+            "temperature": self.cfg.temperature,
+            "messages": messages,
+        }
+        output_limit = max_tokens if max_tokens is not None else self.max_output_tokens
+        if output_limit is not None:
+            payload["max_tokens"] = output_limit
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        if self.budget:
+            self.budget.add(json.dumps(payload, ensure_ascii=False)[:4000])
+            if self.budget.exceeded():
+                raise LLMError(f"已超出 token 预算 {self.budget.budget}")
+
+        data = await asyncio.wait_for(
+            asyncio.to_thread(
+                _post, self._endpoint, payload, self.cfg.api_key, float(self.timeout_s), self._host
+            ),
+            timeout=self.timeout_s + 1,
+        )
+
+        try:
+            choice = data["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise LLMError("响应结构不符合 OpenAI 兼容格式") from e
+
+        content = message.get("content") or ""
+        calls = []
+        for raw in message.get("tool_calls") or []:
+            fn = raw.get("function") or {}
+            name = fn.get("name")
+            if not name:
+                continue
+            args_raw = fn.get("arguments")
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            except json.JSONDecodeError:
+                args = {}
+            calls.append({"id": raw.get("id") or name, "name": name, "arguments": args})
+
+        if not content.strip() and not calls:
+            raise LLMError("模型既没有输出内容也没有调用工具")
+
+        if self.budget:
+            self.budget.add(content)
+        return {"content": content, "tool_calls": calls}
 
     async def ping(self) -> str:
         """设置页的连通性检测。

@@ -1,12 +1,7 @@
-"""执行轨迹：把编排过程写成有层级的时间线。
+"""执行轨迹：展示 Workflow 步骤、工具调用和 Agent 对话。
 
-层级约定（前端据此缩进与折叠）：
-    depth=0  阶段标题        例：阶段: 并行检索
-    depth=1  agent 的动作    例：交通 · 选中 MU5401
-    depth=2  工具调用/证据   例：search_flights(上海→成都 11-20) → 4 条
-
-group 决定归到哪个阶段块，前端按 group 分组、组内按 actor 分块，
-这样"谁做了什么、调了什么工具"是一眼可读的，而不是一锅平铺。
+查询工具的调用是工具事实，不代表天气/交通/住宿/景点是 Agent；
+Agent 对话由结构化消息协议单独流式投影。
 """
 
 from __future__ import annotations
@@ -17,33 +12,41 @@ from .models import LogEntry
 
 ACTOR_LABEL: dict[str, str] = {
     "system": "系统",
-    "clarify": "需求澄清",
-    "transport": "交通",
-    "lodging": "住宿",
-    "poi": "景点",
-    "weather": "天气",
-    "planner": "行程规划",
-    "critic": "可行性校验",
-    "negotiation": "协商",
-    "budget_officer": "预算官",
-    "experience_officer": "体验官",
-    "mediator": "调解者",
-    "confirm": "等待确认",
-    "ask": "等待确认",
+    "clarify": "需求澄清 Workflow",
+    "transport": "航班查询工具",
+    "lodging": "酒店查询工具",
+    "poi": "景点查询工具",
+    "weather": "天气查询工具",
+    "planner": "规划 Agent",
+    "critic": "硬约束校验 Workflow",
+    "budget_review": "预算评审 Agent",
+    "experience_review": "体验评审 Agent",
+    "negotiation": "预算与体验协商 Workflow",
+    "budget_officer": "预算评审 Agent",
+    "experience_officer": "体验评审 Agent",
+    "mediator": "规则裁决",
+    "confirm": "等待确认 Workflow",
+    "ask": "等待确认 Workflow",
     "user": "你",
+    "orchestrator": "团队统筹 Agent",
+    "logistics": "交通住宿 Agent",
+    "local_expert": "当地体验 Agent",
+    "critic_agent": "方案评审 Agent",
+    "writer": "行程撰稿 Agent",
+    "team_protocol": "协作协议校验",
 }
 
 GROUP_LABEL: dict[str, str] = {
-    "clarify": "需求澄清",
-    "retrieval": "并行检索",
-    "collab": "检索结果校对",
-    "plan": "行程规划",
-    "check": "可行性校验",
+    "clarify": "需求澄清 Workflow",
+    "retrieval": "查询工具",
+    "collab": "工具协作 Workflow",
+    "plan": "规划 Agent",
+    "review": "Agent 评审",
+    "check": "硬约束校验 Workflow",
     "negotiation": "预算与体验协商",
     "confirm": "等你决定",
 }
 
-# 节点 → 所属阶段块
 NODE_GROUP: dict[str, str] = {
     "clarify": "clarify",
     "transport": "retrieval",
@@ -54,13 +57,14 @@ NODE_GROUP: dict[str, str] = {
     "lodging_fix": "collab",
     "planner": "plan",
     "critic": "check",
+    "budget_review": "review",
+    "experience_review": "review",
     "negotiation": "negotiation",
     "ask": "negotiation",
     "confirm": "confirm",
 }
 
-# 只有这些节点产生"阶段标题"行；并行检索的四路共用一个阶段块，不各发标题
-STAGE_NODES = {"clarify", "coordinator", "planner", "critic", "negotiation", "ask", "confirm"}
+STAGE_NODES = {"clarify", "coordinator", "planner", "budget_review", "experience_review", "critic", "negotiation", "ask", "confirm"}
 
 
 def now() -> str:
@@ -94,7 +98,6 @@ def stage(group: str) -> LogEntry:
 
 
 def tool_call(actor: str, tool: str, args: str, result: str, *, group: str) -> LogEntry:
-    """一次工具调用的记录：函数名 + 入参摘要 → 返回摘要。"""
     return entry(
         actor,
         f"{tool}({args}) → {result}",

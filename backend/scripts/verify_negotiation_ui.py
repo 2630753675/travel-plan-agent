@@ -25,7 +25,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         failures.append(name)
 
 
-def main() -> int:
+def _run() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="msedge", headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 1100})
@@ -85,6 +85,19 @@ def main() -> int:
         return 1
     print("PASS  协商轨迹 UI 验收通过")
     return 0
+
+
+def main() -> int:
+    """旧协商 UI 验收自带模型：不依赖库里是否配了可用密钥。"""
+    from _legacy_llm import LegacyModel, configure, restore
+
+    model = LegacyModel()
+    backup = configure(model.base_url, agent_mode="legacy")
+    try:
+        return _run()
+    finally:
+        restore(backup)
+        model.stop()
 
 
 if __name__ == "__main__":

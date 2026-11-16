@@ -450,6 +450,179 @@ button:disabled {
   font-size: 11px;
 }
 
+/* Agent 对话抽屉：让用户先读懂结论，再按需展开证据 */
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.conversation-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(22, 25, 32, 0.72);
+  overflow: hidden;
+}
+
+.conversation-stage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.conversation-stage > span:first-child {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.conversation-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.conversation-group.collapsed .conversation-stage {
+  border-bottom: 0;
+}
+
+.conversation-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px;
+}
+
+.conversation-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  max-width: 100%;
+}
+
+.message-avatar {
+  display: grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.conversation-message.budget_officer .message-avatar { background: #d18a25; }
+.conversation-message.experience_officer .message-avatar { background: #3b9a78; }
+.conversation-message.mediator .message-avatar { background: #9670c9; }
+.conversation-message.user .message-avatar { background: #5574b8; }
+.conversation-message.system .message-avatar { background: #687187; }
+
+.message-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.message-meta strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.message-meta em {
+  color: var(--ok);
+  font-style: normal;
+}
+
+.message-route {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.message-reason {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.message-bubble {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 3px 8px 8px 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.conversation-message.kind-question .message-bubble {
+  border-color: var(--warn);
+  background: rgba(245, 165, 36, 0.09);
+}
+
+.conversation-message.kind-answer .message-bubble {
+  border-color: var(--accent);
+  background: rgba(79, 140, 255, 0.10);
+}
+
+.conversation-message.kind-decision .message-bubble {
+  border-color: var(--ok);
+}
+
+.evidence {
+  margin-top: 6px;
+}
+
+.evidence-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.evidence-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border-left: 2px solid var(--border);
+  background: rgba(28, 32, 42, 0.58);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.evidence-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.evidence-tool {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
 .source-line {
   display: flex;
   align-items: center;

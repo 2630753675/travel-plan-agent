@@ -1,11 +1,7 @@
-"""校验 agent：独立于 planner 检查可行性。
+"""硬约束校验 Workflow：独立于规划逻辑检查方案能否执行。
 
-设计要点：planner 负责"排得好看"，critic 只负责"能不能落地"。
-两者分离才能在演示时说清"为什么改了这一版"。
-
-判定规则：
-- blocker 触发回退重排（最多 2 轮）
-- warning 只记录，不影响通过
+这是确定性验证器，不是 Agent。它检查预算、时间轴、开放时间、返程截止和同行人群，
+blocker 由 LangGraph 路由回 Planner，warning 只记录不阻断。
 """
 
 from __future__ import annotations
@@ -13,6 +9,7 @@ from __future__ import annotations
 from datetime import time
 
 from ..models import Critique, Issue, Itinerary, TripBrief
+from .planner import AIRPORT_TRANSFER_MIN, ARRIVAL_TRANSFER_MIN
 from .poi import PoiPlan
 from .transport import TransportPlan
 from .weather import WeatherPlan
@@ -32,7 +29,7 @@ def _active_minutes(day) -> int:
     return sum(i.duration_min for i in day.items if i.type != "rest")
 
 
-def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan) -> list[Issue]:
+def _timeline_issues(day, poi_map: dict, is_first: bool, is_last: bool, transport: TransportPlan) -> list[Issue]:
     """时间轴本身是否成立。
 
     这里检查的是"这张表能不能照着走"：活动是否叠在一起、
@@ -43,21 +40,21 @@ def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan
     acts = [i for i in day.items if i.type != "rest"]
     acts.sort(key=lambda i: (_m(i.start_time), _m(i.end_time)))
 
-    # 1. 相邻活动不能重叠（航班也算：人在飞机上，不能同时安排别的）
-    for a, b in zip(acts, acts[1:]):
-        if _m(a.end_time) > _m(b.start_time):
-            issues.append(
-                Issue(
-                    severity="blocker",
-                    code="TIME_OVERLAP",
-                    day=day.date,
-                    message=(
-                        f"{day.date} {a.title}（{a.start_time.strftime('%H:%M')}-"
-                        f"{a.end_time.strftime('%H:%M')}）与 {b.title}"
-                        f"（{b.start_time.strftime('%H:%M')}）时间重叠"
-                    ),
+    for index, item in enumerate(acts):
+        for other in acts[index + 1:]:
+            if _m(item.start_time) < _m(other.end_time) and _m(other.start_time) < _m(item.end_time):
+                issues.append(
+                    Issue(
+                        severity="blocker",
+                        code="TIME_OVERLAP",
+                        day=day.date,
+                        message=(
+                            f"{day.date} {item.title}（{item.start_time.strftime('%H:%M')}-"
+                            f"{item.end_time.strftime('%H:%M')}）与 {other.title}"
+                            f"（{other.start_time.strftime('%H:%M')}-{other.end_time.strftime('%H:%M')}）时间重叠"
+                        ),
+                    )
                 )
-            )
 
     # 2. 景点必须落在开放时间内
     for item in acts:
@@ -82,11 +79,26 @@ def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan
 
     # 3. 返程日不能错过赶飞机的时间
     if is_last and transport.chosen_inbound:
-        deadline = _m(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN
+        deadline = _m(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN - AIRPORT_TRANSFER_MIN
         for item in acts:
             if item.type == "transport":
                 continue
-            if _m(item.start_time) >= deadline:
+            if item.type == "fixed" and item.ref_id == "fixed:airport_transfer":
+                # 接驳本身发生在离城之后，单独按“到达机场不晚于提前量”检查。
+                if _m(item.end_time) > _m(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN:
+                    issues.append(
+                        Issue(
+                            severity="blocker",
+                            code="AIRPORT_TRANSFER_LATE",
+                            day=day.date,
+                            message=(
+                                f"{item.title} 到达 {item.end_time.strftime('%H:%M')}，"
+                                f"晚于航班起飞前 {AIRPORT_LEAD_MIN} 分钟到机场的要求"
+                            ),
+                        )
+                    )
+                continue
+            if _m(item.start_time) >= deadline or _m(item.end_time) > deadline:
                 issues.append(
                     Issue(
                         severity="blocker",
@@ -94,15 +106,35 @@ def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan
                         day=day.date,
                         message=(
                             f"{item.title} 排在 {item.start_time.strftime('%H:%M')}，"
-                            f"但当天需在 {deadline // 60:02d}:{deadline % 60:02d} 前赶往机场"
+                            f"但估算最晚 {deadline // 60:02d}:{deadline % 60:02d} 需离开市区"
+                            f"（含地面交通与提前到机场），请按实际交通核实"
                         ),
                     )
                 )
 
-    # 4. 一天里应该吃饭（长行程缺餐食说明排程把时间塞满了）
-    if len(day.items) >= 3:
-        titles = " ".join(i.title for i in day.items if i.type == "meal")
-        if "午餐" not in titles:
+    # 飞行占用整段时间；返程航班之后的餐食不是当日地面活动，不得计为固定行程。
+    if is_first and transport.chosen_outbound:
+        arrival_ready = _m(transport.chosen_outbound.arr_time) + ARRIVAL_TRANSFER_MIN
+        for item in day.items:
+            if item.type == "meal" and _m(item.start_time) < arrival_ready:
+                issues.append(Issue(severity="blocker", code="MEAL_BEFORE_ARRIVAL", day=day.date,
+                                    message=f"{item.title} 安排在抵达并完成转场前"))
+    if is_last and transport.chosen_inbound:
+        departure = _m(transport.chosen_inbound.dep_time)
+        airport_departure = departure - AIRPORT_LEAD_MIN - AIRPORT_TRANSFER_MIN
+        for item in day.items:
+            if item.type == "meal" and _m(item.start_time) >= departure:
+                issues.append(Issue(severity="blocker", code="MEAL_AFTER_FLIGHT", day=day.date,
+                                    message=f"{item.title} 安排在返程航班起飞之后"))
+            elif item.type == "meal" and _m(item.end_time) > airport_departure:
+                issues.append(Issue(severity="blocker", code="MEAL_AFTER_AIRPORT_DEPARTURE", day=day.date,
+                                    message=f"{item.title} 与估算的最晚离开市区时间冲突；机场用餐应标为未定时活动"))
+
+    # 餐食只在有合理时间窗时要求；晚班抵达日不因跳过已错过的餐次报错。
+    arrival_late = is_first and transport.chosen_outbound and _m(transport.chosen_outbound.arr_time) + ARRIVAL_TRANSFER_MIN >= 21 * 60
+    if len(day.items) >= 3 and not arrival_late and not (is_last and transport.chosen_inbound):
+        meal_notes = " ".join(day.notes)
+        if day.meal_estimate <= 0 and "自行安排" not in meal_notes and "没有足够午餐时间窗" not in meal_notes:
             issues.append(
                 Issue(
                     severity="warning",
@@ -111,7 +143,7 @@ def _timeline_issues(day, poi_map: dict, is_last: bool, transport: TransportPlan
                     message=f"{day.date} 没有安排午餐",
                 )
             )
-        if "晚餐" not in titles:
+        if "晚餐休息窗口" not in meal_notes and "自行安排晚餐" not in meal_notes:
             issues.append(
                 Issue(
                     severity="warning",
@@ -171,12 +203,23 @@ def run(
 
         # 时间轴本身是否立得住：重叠、开放时间、赶飞机、餐食
         issues.extend(
-            _timeline_issues(day, poi_map, day.date == is_last_day, transport)
+            _timeline_issues(
+                day,
+                poi_map,
+                day.date == itinerary.days[0].date,
+                day.date == is_last_day,
+                transport,
+            )
         )
 
         sights = [i for i in day.items if i.type == "sight"]
-        # 最后一天以返程为主，没有景点属正常，不提示
-        if not sights and len(itinerary.days) > 2 and day.date != is_last_day:
+        arrival_day_late = (
+            transport.chosen_outbound is not None
+            and day.date == itinerary.days[0].date
+            and _m(transport.chosen_outbound.arr_time) + ARRIVAL_TRANSFER_MIN >= 18 * 60
+        )
+        # 最后一天以返程为主、晚班抵达日以入住为主，没有景点属正常
+        if not sights and len(itinerary.days) > 2 and day.date != is_last_day and not arrival_day_late:
             issues.append(
                 Issue(
                     severity="warning",

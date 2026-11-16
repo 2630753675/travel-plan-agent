@@ -1,4 +1,4 @@
-"""验收：协商轨迹（预算官 vs 体验官）。
+﻿"""验收：协商轨迹（预算官 vs 体验官）。
 
 覆盖：
 A 超支时触发协商，产生三条发言（提议 / 表态 / 裁决）
@@ -96,7 +96,7 @@ def describe(neg: dict) -> None:
     print(f"  结论: {neg['outcome']} | 调整: {neg['adjustment']}")
 
 
-def main() -> int:
+def _run() -> int:
     print("\n[1] 提交超支需求，观察是否协商")
     status, text = post("/api/plan", BRIEF)
     check("请求成功", status == 200, str(status))
@@ -199,6 +199,19 @@ def main() -> int:
         return 1
     print("PASS  协商轨迹验收通过")
     return 0
+
+
+def main() -> int:
+    """旧协商链路的验收自带模型：不依赖库里恰好配了可用密钥。"""
+    from _legacy_llm import LegacyModel, configure, restore
+
+    model = LegacyModel()
+    backup = configure(model.base_url, agent_mode="legacy")
+    try:
+        return _run()
+    finally:
+        restore(backup)
+        model.stop()
 
 
 if __name__ == "__main__":

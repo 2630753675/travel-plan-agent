@@ -13,7 +13,12 @@ export type LLMSettings = {
 type Orchestration = {
   max_revisions: number
   node_timeout_s: number
+  max_runtime_s: number
+  max_model_calls: number
+  max_agent_turns: number
+  max_output_tokens: number
   token_budget: number
+  agent_mode: 'fast' | 'expert' | 'peer' | 'legacy'
 }
 
 type DataSource = {
@@ -197,6 +202,28 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
               <h3>编排参数</h3>
               <div className="row">
                 <label>
+                  最大运行时长（秒）
+                  <input
+                    type="number"
+                    min={30}
+                    max={600}
+                    value={s.orchestration.max_runtime_s}
+                    onChange={(e) => patch('orchestration', { max_runtime_s: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  最大模型请求数
+                  <input
+                    type="number"
+                    min={1}
+                    max={40}
+                    value={s.orchestration.max_model_calls}
+                    onChange={(e) => patch('orchestration', { max_model_calls: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <div className="row">
+                <label>
                   最大校验轮次
                   <input
                     type="number"
@@ -217,18 +244,10 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
                   />
                 </label>
               </div>
-              <label>
-                token 预算上限
-                <input
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  value={s.orchestration.token_budget}
-                  onChange={(e) => patch('orchestration', { token_budget: Number(e.target.value) })}
-                />
-              </label>
               <p className="cfg-hint">
-                校验轮次为 {s.orchestration.max_revisions} 时，最多重排 {Math.max(0, s.orchestration.max_revisions - 1)} 次。
+                快速模式最多 1 次模型请求；专家模式最多 3 次；深度团队最多 {s.orchestration.max_model_calls} 次。
+                单次运行最长 {s.orchestration.max_runtime_s} 秒，单次输出最多 {s.orchestration.max_output_tokens} token。
+                累计 token 不作为无限运行许可，达到任一上限立即停止并报告原因。
               </p>
             </section>
 

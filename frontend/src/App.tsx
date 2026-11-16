@@ -70,6 +70,20 @@ type Summary = {
   warning_groups: { category: string; label: string; items: string[] }[]
 }
 
+type TeamDocument = {
+  title: string
+  overview: string
+  days: { date: string; summary: string }[]
+  practical_notes: string | string[]
+  approved_version?: number | null
+}
+
+type TeamTask = {
+  owner?: string
+  status?: string
+  rework?: string[]
+}
+
 type Result = {
   plan_id: string
   brief: { destination: string; origin: string; budget_total: number }
@@ -88,6 +102,9 @@ type Result = {
   decision?: string | null
   version?: number
   summary?: Summary
+  document?: TeamDocument | null
+  team_tasks?: Record<string, TeamTask>
+  approved_version?: number | null
   share?: string
 }
 
@@ -167,6 +184,7 @@ type Form = {
   child: boolean
   preferences: string[]
   pace: (typeof PACE)[number]
+  planning_mode: 'fast' | 'expert' | 'peer'
 }
 
 const DEFAULT_FORM: Form = {
@@ -180,6 +198,7 @@ const DEFAULT_FORM: Form = {
   child: false,
   preferences: ['美食', '人文'],
   pace: '适中',
+  planning_mode: 'fast',
 }
 
 async function consume(res: Response, onEvent: (name: string, data: any) => void) {
@@ -300,10 +319,12 @@ type LogEntry = {
 
 const GROUP_LABEL: Record<string, string> = {
   clarify: '需求澄清',
-  retrieval: '并行检索',
-  collab: '检索结果校对',
-  plan: '行程规划',
-  check: '可行性校验',
+  retrieval: '查询工具',
+  collab: '工具协作 Workflow',
+  plan: '规划 Agent',
+  review: 'Agent 评审',
+  peer: '专业团队协作',
+  check: '硬约束校验 Workflow',
   negotiation: '预算与体验协商',
   confirm: '等你决定',
   misc: '其他',
@@ -312,6 +333,7 @@ const GROUP_LABEL: Record<string, string> = {
 const STAGE_STEPS = [
   { key: 'clarify', label: '澄清需求' },
   { key: 'retrieval', label: '并行检索' },
+  { key: 'peer', label: '专业团队协作' },
   { key: 'plan', label: '排行程' },
   { key: 'check', label: '校验' },
   { key: 'negotiation', label: '协商' },
@@ -392,15 +414,170 @@ function LogGroups({ entries }: { entries: LogEntry[] }) {
   )
 }
 
-function ActivityLog({ entries }: { entries: LogEntry[] }) {
-  if (!entries || entries.length === 0) return null
+function Conversation({ events }: { events: RunEvent[] }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const groups: { key: string; label: string; items: RunEvent[] }[] = []
+  const pendingTools = new Map<string, RunEvent>()
+  const messageEvents: RunEvent[] = []
+
+  // 先把 tool_call / tool_result 配对，工具仍然是证据，不抢 Agent 发言的位置。
+  const hasStructuredMessages = events.some((ev) => Boolean(ev.payload?.message_id))
+  for (const ev of events) {
+    if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor) && ev.event_type !== 'tool_call' && ev.event_type !== 'tool_result') continue
+    if (ev.event_type === 'agent_message' && !ev.payload?.message_id) {
+      // 旧 activity 投影中的查询工具行不是 Agent 消息；工具调用单独显示为证据卡片。
+      if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor)) continue
+      if (hasStructuredMessages) continue
+    }
+    if (ev.event_type === 'tool_call') {
+      const id = String(ev.payload?.tool_call_id ?? ev.event_id)
+      pendingTools.set(id, ev)
+      continue
+    }
+    if (ev.event_type === 'tool_result') {
+      const id = String(ev.payload?.tool_call_id ?? '')
+      const call = pendingTools.get(id)
+      if (call) {
+        call.payload = { ...call.payload, _result: ev.payload, _resultEventId: ev.event_id }
+        pendingTools.delete(id)
+        messageEvents.push(call)
+      } else {
+        messageEvents.push(ev)
+      }
+      continue
+    }
+    if (ev.event_type === 'tool_exchange') continue
+    if (ev.event_type === 'tool_call') {
+      messageEvents.push(ev)
+      continue
+    }
+    if (['agent_message', 'route_decision', 'validation_result', 'user_question', 'user_answer', 'agent_resumed'].includes(ev.event_type)) {
+      messageEvents.push(ev)
+    }
+  }
+
+  for (const ev of messageEvents) {
+    const key = ev.stage || 'misc'
+    const last = groups[groups.length - 1]
+    if (last?.key === key) last.items.push(ev)
+    else groups.push({ key, label: GROUP_LABEL[key] ?? key, items: [ev] })
+  }
+
+  const actorLabel = (actor: string) => ACTOR_LABEL[actor] ?? actor
+  const actorClass = (actor: string) => actor.replace(/[^a-zA-Z0-9_-]/g, '-')
+  const messageText = (ev: RunEvent) => {
+    const p = ev.payload ?? {}
+    if (ev.event_type === 'tool_call') {
+      return `工具调用：${String(p.tool_name ?? '查询工具')}`
+    }
+    if (ev.event_type === 'validation_result') {
+      const issues = Array.isArray(p.issues) ? p.issues : []
+      const blockers = issues.filter((i: any) => i?.severity === 'blocker').length
+      return p.passed ? `检查通过${issues.length ? `，有 ${issues.length} 条提醒` : ''}` : `检查未通过，需要处理 ${blockers} 个问题`
+    }
+    if (ev.event_type === 'agent_resumed') return '我已经从中断处继续处理。'
+    return String(p.text ?? p.message ?? p.summary ?? '')
+  }
+  const messageKind = (ev: RunEvent) => {
+    if (ev.event_type === 'tool_call') return 'tool'
+    if (ev.event_type === 'user_question') return 'question'
+    if (ev.event_type === 'user_answer') return 'answer'
+    if (ev.event_type === 'validation_result' || ev.event_type === 'route_decision') return 'decision'
+    return 'speech'
+  }
+
+  return (
+    <div className="conversation">
+      {groups.map((group, gi) => {
+        const groupId = `${group.key}-${gi}`
+        const isCollapsed = collapsed[groupId]
+        return (
+          <section key={groupId} className={`conversation-group ${isCollapsed ? 'collapsed' : ''}`}>
+            <button
+              className="conversation-stage"
+              onClick={() => setCollapsed((current) => ({ ...current, [groupId]: !current[groupId] }))}
+            >
+              <span>{isCollapsed ? '▶' : '▼'}</span>
+              <strong>{group.label}</strong>
+              <span className="conversation-count">{group.items.length} 条消息</span>
+            </button>
+            {!isCollapsed && (
+              <div className="conversation-messages">
+                {group.items.map((ev) => {
+                  const tools = events.filter((candidate) => candidate.event_type === 'tool_call' && candidate.parent_id === ev.event_id)
+                  const orphanTools = tools.length === 0 && ev.event_type === 'agent_message'
+                    ? events.filter((candidate) => candidate.event_type === 'tool_call' && candidate.actor === ev.actor && candidate.seq < ev.seq && ev.seq - candidate.seq <= 3)
+                    : []
+                  const evidence = ev.event_type === 'tool_call'
+                    ? [ev]
+                    : tools.length
+                      ? tools
+                      : orphanTools
+                  const evidenceKey = `${ev.event_id}-evidence`
+                  const evidenceOpen = collapsed[evidenceKey]
+                  return (
+                    <article key={ev.event_id} className={`conversation-message ${actorClass(ev.actor)} kind-${messageKind(ev)}`}>
+                      <div className="message-avatar">{actorLabel(ev.actor).slice(0, 1)}</div>
+                      <div className="message-main">
+                        <div className="message-meta">
+                          <strong>{actorLabel(ev.actor)}</strong>
+                          <span>{fmtClock(ev.occurred_at)}</span>
+                          {(() => {
+                            const recipients = Array.isArray(ev.payload?.recipients)
+                              ? ev.payload.recipients
+                              : ev.payload?.receiver ? [ev.payload.receiver] : []
+                            const names = recipients.filter((recipient: unknown): recipient is string => typeof recipient === 'string')
+                            return names.length > 0 && <span className="message-route">→ {names.map(actorLabel).join('、')}</span>
+                          })()}
+                          {ev.event_type === 'route_decision' && <em>做了决定</em>}
+                        </div>
+                        <div className="message-bubble">{messageText(ev) || '已完成这一项处理。'}</div>
+                        {ev.payload?.reason && <div className="message-reason">依据：{String(ev.payload.reason)}</div>}
+                        {evidence.length > 0 && (
+                          <div className="evidence">
+                            <button
+                              className="evidence-toggle"
+                              onClick={() => setCollapsed((current) => ({ ...current, [evidenceKey]: !current[evidenceKey] }))}
+                            >
+                              {evidenceOpen ? '收起依据' : '查看依据'} · {evidence.length} 次工具调用
+                            </button>
+                            {evidenceOpen && (
+                              <div className="evidence-body">
+                                {evidence.map((tool) => {
+                                  const result = tool.payload?._result
+                                  return (
+                                    <div key={tool.event_id} className="evidence-row">
+                                      <span className="evidence-tool">{String(tool.payload?.tool_name ?? '工具')}</span>
+                                      <span>{result?.summary ?? result?.status ?? '已执行'}</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
+function ActivityLog({ entries, events }: { entries: LogEntry[]; events: RunEvent[] }) {
+  if ((!entries || entries.length === 0) && (!events || events.length === 0)) return null
   return (
     <section className="activity">
       <div className="section-head">
-        <h2>执行轨迹</h2>
-        <span className="hint">{entries.length} 步 · 按阶段分组</span>
+        <h2>Agent 对话</h2>
+        <span className="hint">{events.length || entries.length} 条 · 可展开查看依据</span>
       </div>
-      <LogGroups entries={entries} />
+      {events.length > 0 ? <Conversation events={events} /> : <LogGroups entries={entries} />}
     </section>
   )
 }
@@ -408,16 +585,36 @@ function ActivityLog({ entries }: { entries: LogEntry[] }) {
 const ACTOR_LABEL: Record<string, string> = {
   system: '系统',
   clarify: '需求澄清',
-  transport: '交通',
-  lodging: '住宿',
-  poi: '景点',
-  weather: '天气',
-  planner: '行程规划',
-  critic: '可行性校验',
-  negotiation: '协商',
-  budget_officer: '预算官',
-  experience_officer: '体验官',
-  mediator: '调解者',
+  transport: '航班查询工具',
+  lodging: '酒店查询工具',
+  poi: '景点查询工具',
+  weather: '天气查询工具',
+  planner: '规划 Agent',
+  critic: '硬约束校验 Workflow',
+  budget_review: '预算评审 Agent',
+  experience_review: '体验评审 Agent',
+  budget_reviewer: '预算评审 Agent',
+  experience_reviewer: '体验评审 Agent',
+  intake: '需求分析 Agent',
+  flight_scout: '航班侦察 Agent',
+  hotel_scout: '酒店侦察 Agent',
+  sight_scout: '景点侦察 Agent',
+  weather_scout: '天气侦察 Agent',
+  budget_critic: '预算评审 Agent',
+  experience_critic: '体验评审 Agent',
+  orchestrator: '团队统筹',
+  logistics: '交通住宿专家',
+  local_expert: '当地体验专家',
+  critic_agent: '方案评审',
+  writer: '行程撰稿',
+  team_protocol: '协作协议',
+  peer_run: '专业团队协作',
+  peer_ask: '请示你',
+  peer_finalize: '硬约束校验',
+  negotiation: '预算与体验协商',
+  budget_officer: '预算评审 Agent',
+  experience_officer: '体验评审 Agent',
+  mediator: '规则裁决',
   confirm: '等待确认',
   ask: '等待确认',
   user: '你',
@@ -551,10 +748,12 @@ type InterruptOption = { value: string; label: string }
 type InterruptInfo = {
   type: string
   message?: string
-  total: number
-  budget: number
-  over: number
-  ratio: number
+  question?: string
+  from?: string
+  total?: number
+  budget?: number
+  over?: number
+  ratio?: number
   options: InterruptOption[]
   plan_id: string
   negotiation?: Negotiation | null
@@ -572,7 +771,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<Record<string, string>>({})
   const [refineNote, setRefineNote] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [llmOn, setLlmOn] = useState(false)
+  const [agentMode, setAgentMode] = useState<'fast' | 'expert' | 'peer'>('fast')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
   const [versions, setVersions] = useState<VersionInfo[]>([])
@@ -591,7 +790,11 @@ export default function App() {
   useEffect(() => {
     apiFetch('/api/config')
       .then((r) => r.json())
-      .then((c) => setLlmOn(Boolean(c?.llm?.enabled)))
+      .then((c) =>
+        setAgentMode(
+          (c?.orchestration?.agent_mode ?? 'fast') as 'fast' | 'expert' | 'peer',
+        ),
+      )
       .catch(() => undefined)
   }, [])
 
@@ -604,7 +807,29 @@ export default function App() {
     const url = share ? `/api/plan/${id}?share=${encodeURIComponent(share)}` : `/api/plan/${id}`
     apiFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
+      .catch(() => {
+        if (share) return Promise.reject(new Error('not found'))
+        return apiFetch(`/api/run/${id}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
+      })
       .then((rec) => {
+        if (rec?.status === 'interrupted' || rec?.status === 'failed') {
+          const payload = rec.payload ?? {}
+          if (rec.status === 'interrupted') {
+            const info = { ...(payload.interrupt ?? {}), plan_id: rec.run_id } as InterruptInfo
+            setInterruptInfo(info)
+            setPhase('interrupt')
+            if (Array.isArray(info.activity)) setLiveEvents(activityToEvents(info.activity))
+          } else {
+            const text = [
+              String(payload.message ?? '规划失败'),
+              ...(Array.isArray(payload.blockers) ? payload.blockers : []),
+              ...(Array.isArray(payload.reasons) ? payload.reasons : []),
+            ].filter(Boolean).join('\n')
+            setError(text)
+            setPhase('error')
+          }
+          return
+        }
         setResult({
           plan_id: rec.id,
           brief: rec.brief,
@@ -615,6 +840,9 @@ export default function App() {
           negotiation: rec.negotiation ?? null,
           version: rec.version,
           share: share ?? undefined,
+          document: rec.document,
+          team_tasks: rec.team_tasks,
+          approved_version: rec.approved_version,
         })
         // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
         if (Array.isArray(rec.events) && rec.events.length > 0) {
@@ -656,9 +884,26 @@ export default function App() {
       } else if (ev.event_type === 'run_interrupted') {
         setInterruptInfo((ev.payload?.interrupt ?? null) as InterruptInfo | null)
         setPhase('interrupt')
+        const pid = ev.payload?.plan_id ?? ev.payload?.interrupt?.plan_id
+        if (pid) {
+          const url = new URL(location.href)
+          url.searchParams.set('plan', pid)
+          history.replaceState(null, '', url)
+        }
       } else if (ev.event_type === 'run_failed') {
-        setError(String(ev.payload?.message ?? '规划失败'))
+        const reason = [
+          String(ev.payload?.message ?? '规划失败'),
+          ...(Array.isArray(ev.payload?.blockers) ? ev.payload.blockers : []),
+          ...(Array.isArray(ev.payload?.reasons) ? ev.payload.reasons : []),
+        ].filter(Boolean).join('\n')
+        setError(reason)
         setPhase('error')
+        const pid = ev.payload?.plan_id
+        if (pid) {
+          const url = new URL(location.href)
+          url.searchParams.set('plan', pid)
+          history.replaceState(null, '', url)
+        }
       }
       return
     }
@@ -724,6 +969,7 @@ export default function App() {
         : ['无'],
       preferences: form.preferences,
       pace: form.pace,
+      planning_mode: form.planning_mode,
     }
     try {
       const res = await apiFetch('/api/plan', {
@@ -749,7 +995,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: day, feedback: feedback[day] ?? '' }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
       const data = await res.json()
       const sightsOf = (it: any, d: string) =>
         (it.days.find((x: any) => x.date === d)?.items ?? [])
@@ -858,7 +1107,7 @@ export default function App() {
           <p className="sub">LangGraph 编排 · 四路并行检索 · 校验回退 · 单日重排</p>
         </div>
         <div className="topbar-right">
-          <span className="mode-pill">{llmOn ? '模型生成' : '规则引擎'}</span>
+          <span className="mode-pill">{form.planning_mode === 'peer' ? '深度团队协作 · 高成本' : form.planning_mode === 'expert' ? '专家模式 · 最多 3 次模型请求' : '快速规划 · 默认最多 1 次模型请求'}</span>
           <div className="status-pill">
             {phase === 'form' && '待提交'}
             {phase === 'running' && `执行中 ${doneCount}/7`}
@@ -896,7 +1145,7 @@ export default function App() {
             {liveLogs.length === 0 ? (
               <p className="muted">提交需求后，各 agent 的讨论与工具调用会实时出现在这里。</p>
             ) : (
-              <LogGroups entries={liveLogs} />
+              <Conversation events={liveEvents} />
             )}
           </div>
         </aside>
@@ -905,7 +1154,9 @@ export default function App() {
       {settingsOpen && (
         <SettingsPanel
           onClose={() => setSettingsOpen(false)}
-          onSaved={(s) => setLlmOn(Boolean(s.llm.enabled))}
+          onSaved={(s) =>
+            setAgentMode((s.orchestration?.agent_mode ?? 'fast') as 'fast' | 'expert' | 'peer')
+          }
         />
       )}
 
@@ -1013,6 +1264,25 @@ export default function App() {
           </div>
 
           <div className="chips">
+            <span className="chip-label">规划模式</span>
+            {([
+              ['fast', '快速', '默认，少量模型调用'],
+              ['expert', '专家', '复杂约束时使用'],
+              ['peer', '深度团队', '高成本，显式启用'],
+            ] as const).map(([mode, label, title]) => (
+              <button
+                key={mode}
+                title={title}
+                className={`chip ${form.planning_mode === mode ? 'on' : ''}`}
+                disabled={phase === 'running'}
+                onClick={() => setForm({ ...form, planning_mode: mode })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="chips">
             <span className="chip-label">节奏</span>
             {PACE.map((p) => (
               <button
@@ -1064,31 +1334,46 @@ export default function App() {
             <section className="interrupt">
               <div className="interrupt-head">
                 <h3>
-                  {interruptInfo.type === 'negotiation_deadlock'
-                    ? '预算和体验谈不拢，需要你定方向'
-                    : '预算超支，需要你决定'}
+                  {interruptInfo.type === 'peer_escalation'
+                    ? '团队需要你确认'
+                    : interruptInfo.type === 'negotiation_deadlock'
+                      ? '预算和体验谈不拢，需要你定方向'
+                      : '预算超支，需要你决定'}
                 </h3>
-                <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
+                {typeof interruptInfo.ratio === 'number' && (
+                  <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
+                )}
               </div>
+              {interruptInfo.type === 'peer_escalation' && (
+                <p className="interrupt-body">
+                  <strong>{interruptInfo.question ?? '团队遇到需要你决定的问题'}</strong>
+                  {interruptInfo.from && (
+                    <>
+                      <br />
+                      提出方：{ACTOR_LABEL[interruptInfo.from] ?? interruptInfo.from}
+                    </>
+                  )}
+                </p>
+              )}
               {interruptInfo.type === 'negotiation_deadlock' && interruptInfo.message && (
                 <p className="interrupt-body">
                   <strong>{interruptInfo.message}</strong>
                   <br />
-                  当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
-                  预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元。
+                  当前方案总花费 <strong>{(interruptInfo.total ?? 0).toFixed(0)}</strong> 元，
+                  预算 <strong>{(interruptInfo.budget ?? 0).toFixed(0)}</strong> 元。
                   你给个倾向，两位会带着这个倾向再谈一轮：
                 </p>
               )}
-              {interruptInfo.type !== 'negotiation_deadlock' && (
+              {interruptInfo.type !== 'negotiation_deadlock' && interruptInfo.type !== 'peer_escalation' && (
                 <p className="interrupt-body">
-                  当前方案总花费 <strong>{interruptInfo.total.toFixed(0)}</strong> 元，
-                  预算 <strong>{interruptInfo.budget.toFixed(0)}</strong> 元，
-                  超出 <strong>{interruptInfo.over.toFixed(0)}</strong> 元。
+                  当前方案总花费 <strong>{(interruptInfo.total ?? 0).toFixed(0)}</strong> 元，
+                  预算 <strong>{(interruptInfo.budget ?? 0).toFixed(0)}</strong> 元，
+                  超出 <strong>{(interruptInfo.over ?? 0).toFixed(0)}</strong> 元。
                   系统没有替你决定，请选择：
                 </p>
               )}
               <div className="interrupt-actions">
-                {interruptInfo.options.map((o) => (
+                {(interruptInfo.options ?? []).map((o) => (
                   <button key={o.value} onClick={() => resumePlan(o.value)}>
                     {o.label}
                   </button>
@@ -1107,6 +1392,44 @@ export default function App() {
 
           {result && (
             <section className="result">
+              {result.document && (
+                <section className="team-document">
+                  <div className="section-head">
+                    <h2>{typeof result.document.title === 'string' ? result.document.title : '旅行方案'}</h2>
+                    {(result.document.approved_version ?? result.approved_version) != null && (
+                      <span className="hint">审核版本 v{result.document.approved_version ?? result.approved_version}</span>
+                    )}
+                  </div>
+                  {typeof result.document.overview === 'string' && <p>{result.document.overview}</p>}
+                  {Array.isArray(result.document.days) && result.document.days.map((day, index) => (
+                    <div key={index}>
+                      {typeof day?.date === 'string' && <h3>{day.date}</h3>}
+                      {typeof day?.summary === 'string' && <p>{day.summary}</p>}
+                    </div>
+                  ))}
+                  {Array.isArray(result.document.practical_notes) ? (
+                    <ul>{result.document.practical_notes.filter((note) => typeof note === 'string').map((note, index) => <li key={index}>{note}</li>)}</ul>
+                  ) : typeof result.document.practical_notes === 'string' && <p>{result.document.practical_notes}</p>}
+                </section>
+              )}
+              {result.team_tasks && Object.keys(result.team_tasks).length > 0 && (
+                <section className="team-tasks">
+                  <h2>团队任务</h2>
+                  <table>
+                    <thead><tr><th scope="col">任务</th><th scope="col">负责人</th><th scope="col">状态</th><th scope="col">返工次数</th></tr></thead>
+                    <tbody>
+                      {Object.entries(result.team_tasks).map(([id, task]) => (
+                        <tr key={id}>
+                          <th scope="row">{id}</th>
+                          <td>{typeof task?.owner === 'string' ? ACTOR_LABEL[task.owner] ?? task.owner : '—'}</td>
+                          <td>{typeof task?.status === 'string' ? ({ pending: '待处理', running: '处理中', delivered: '已交付' } as Record<string, string>)[task.status] ?? task.status : '—'}</td>
+                          <td>{Array.isArray(task?.rework) ? task.rework.length : 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
               <div className="stats">
                 <div className="stat">
                   <span className="stat-label">总花费</span>

@@ -59,6 +59,7 @@ def day_cost_breakdown(day: DayPlan) -> dict:
             buckets[item.type] += item.cost
         else:
             buckets["transport"] += item.cost  # rest 之类归入杂项
+    buckets["meal"] += day.meal_estimate
     return {
         "date": str(day.date),
         "total": round(day.day_cost, 2),

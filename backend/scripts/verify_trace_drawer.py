@@ -1,11 +1,12 @@
-"""验收：右侧执行轨迹抽屉（流式）。
+"""验收：右侧 Agent 对话抽屉（流式）。
 
 覆盖：
 A 轨迹默认不展开，点按钮才出现
-B 规划过程中轨迹逐步增长（不是最后一次性出现）
-C 轨迹是分层结构：阶段块 → agent 块 → 工具行
-D 工具调用可见（函数名 + 参数 + 返回）
+B 规划过程中对话消息逐步增长
+C 轨迹是用户可读结构：阶段块 → 角色气泡
+D 工具调用折叠为"查看依据"，展开后可见工具与结果
 E 协商阶段能实时看到角色发言
+F 阶段块可折叠，旧日志选择器不再作为 UI 契约
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ def main() -> int:
         # 采样：running 期间轨迹条数应递增
         samples: list[int] = []
         for _ in range(30):
-            n = page.locator(".log-row").count()
+            n = page.locator(".conversation-message").count()
             samples.append(n)
             if page.locator(".drawer-sub").inner_text().startswith("已完成"):
                 break
@@ -63,40 +64,37 @@ def main() -> int:
 
         page.wait_for_selector(".day, .interrupt", timeout=240000)
         page.wait_for_timeout(600)
-        total = page.locator(".log-row").count()
-        print(f"  最终 {total} 行")
+        total = page.locator(".conversation-message").count()
+        print(f"  最终 {total} 条消息")
 
         print("\n[3] 分层结构")
-        groups = page.locator(".log-group").count()
-        chunks = page.locator(".log-chunk-head").all_inner_texts()
-        print(f"  阶段块 {groups} 个，agent 块：{sorted(set(chunks))}")
+        groups = page.locator(".conversation-group").count()
+        bubbles = page.locator(".message-bubble").all_inner_texts()
+        actors = page.locator(".message-meta strong").all_inner_texts()
+        agent_actors = page.locator(".conversation-message:not(.kind-tool) .message-meta strong").all_inner_texts()
+        print(f"  阶段块 {groups} 个，角色：{sorted(set(actors))}")
         check("有多个阶段块", groups >= 3, str(groups))
-        check("有 agent 分块", len(chunks) >= 3, str(chunks))
-        check("出现检索类 agent", any(a in ("住宿", "景点", "交通", "天气") for a in chunks), str(chunks))
+        check("有对话气泡", len(bubbles) >= 3, str(len(bubbles)))
+        check("出现真正 Agent 角色", any(a in ("规划 Agent", "预算评审 Agent", "体验评审 Agent") for a in actors), str(actors))
+        check("查询工具不作为 Agent", not any(a in ("航班查询工具", "酒店查询工具", "景点查询工具", "天气查询工具") for a in agent_actors), str(agent_actors))
 
         print("\n[4] 工具调用可见")
-        tools = page.locator(".log-row.kind-tool .log-text").all_inner_texts()
-        print(f"  工具调用 {len(tools)} 条：{tools[:4]}")
-        check("记录了工具调用", len(tools) >= 3, str(len(tools)))
-        check(
-            "带函数名与入参",
-            any(t.startswith("search_flights(") or t.startswith("list_pois(") for t in tools),
-            str(tools[:3]),
-        )
-        check("有返回摘要行", any(t.startswith("→ ") for t in tools), str(tools[:4]))
-        # 同一工具不应同时出现真实事件和旧的摘要行
-        check(
-            "工具事件未重复",
-            not any("→ " in t and "(" in t for t in tools),
-            str([t for t in tools if "→ " in t and "(" in t][:3]),
-        )
+        evidence = page.locator(".evidence-toggle")
+        print(f"  依据入口 {evidence.count()} 个")
+        check("有可展开的依据", evidence.count() >= 1, str(evidence.count()))
+        if evidence.count() > 0:
+            evidence.first.click()
+            page.wait_for_timeout(200)
+            check("展开后显示工具名", page.locator(".evidence-body").count() >= 1)
+            check("工具依据有内容", len(page.locator(".evidence-row").all_inner_texts()) >= 1)
+        check("不把工具调用平铺成消息", page.locator(".log-row").count() == 0)
 
         print("\n[5] 阶段可折叠")
-        first_head = page.locator(".log-group-head").first
-        before = page.locator(".log-group-body").count()
+        first_head = page.locator(".conversation-stage").first
+        before = page.locator(".conversation-messages").count()
         first_head.click()
         page.wait_for_timeout(300)
-        after = page.locator(".log-group-body").count()
+        after = page.locator(".conversation-messages").count()
         check("折叠后收起一块", after == before - 1, f"{before} -> {after}")
         first_head.click()
         page.wait_for_timeout(300)
@@ -104,7 +102,7 @@ def main() -> int:
         page.screenshot(path=str(DOCS / "shot-drawer.png"))
 
         print("\n[6] 收起抽屉不影响主流程")
-        page.get_by_role("button", name="收起").click()
+        page.get_by_role("button", name="收起", exact=True).click()
         page.wait_for_timeout(300)
         check("抽屉已关闭", page.locator(".drawer").count() == 0)
         check("主流程结果仍在", page.locator(".day").count() > 0 or page.locator(".interrupt").count() > 0)

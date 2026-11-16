@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 Slot = Literal["上午", "中午", "下午", "晚上"]
-ItemType = Literal["transport", "sight", "meal", "hotel", "rest"]
+ItemType = Literal["transport", "sight", "meal", "hotel", "rest", "fixed"]
 Companion = Literal["老人", "儿童", "无"]
 Severity = Literal["blocker", "warning"]
 
@@ -25,6 +25,7 @@ class TripBrief(BaseModel):
     companions: list[Companion] = Field(default_factory=lambda: ["无"])
     preferences: list[str] = Field(default_factory=list)
     pace: Literal["轻松", "适中", "紧凑"] = "适中"
+    planning_mode: Literal["fast", "expert", "peer"] = "fast"
 
     @model_validator(mode="after")
     def _check(self) -> TripBrief:
@@ -122,7 +123,19 @@ class DayPlan(BaseModel):
     date: date
     items: list[Item] = Field(default_factory=list)
     day_cost: float = Field(default=0, ge=0)
+    meal_estimate: float = Field(default=0, ge=0)
     notes: list[str] = Field(default_factory=list)
+
+
+class FixedEvent(BaseModel):
+    """Agent 明确指定的固定时段安排（如去机场、预约参观）。"""
+
+    date: date
+    title: str = Field(min_length=1)
+    start_time: time
+    end_time: time
+    kind: Literal["activity", "airport_transfer"] = "activity"
+    note: str = ""
 
 
 class Itinerary(BaseModel):

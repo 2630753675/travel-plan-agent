@@ -1,4 +1,4 @@
-"""天气 agent：取逐日天气，供 planner 做雨天备选、供 critic 做冲突校验。"""
+"""天气查询工具封装：取逐日天气，供行程规划与硬约束校验 Workflow 使用。"""
 
 from __future__ import annotations
 

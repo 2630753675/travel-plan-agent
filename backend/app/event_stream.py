@@ -131,6 +131,82 @@ class EventFactory:
         from .activity import NODE_GROUP
 
         stage = str(row.get("stage") or NODE_GROUP.get(node, ""))
+        if phase == "peer_message":
+            to = row.get("to") or []
+            return [
+                self.make(
+                    "agent_message",
+                    stage="peer",
+                    actor=str(row.get("agent") or "system"),
+                    payload={
+                        "text": row.get("text", ""),
+                        "message_id": row.get("message_id"),
+                        "to": list(to),
+                        "recipients": list(to),
+                        "sender": row.get("agent"),
+                        "receiver": to[0] if to else None,
+                        "intent": row.get("kind", "note"),
+                        "reason": "",
+                        "evidence": [],
+                        "reply_to": row.get("reply_to"),
+                        "payload": row.get("payload", {}),
+                        "peer": True,
+                    },
+                )
+            ]
+        if phase == "peer_status":
+            step = str(row.get("step") or "")
+            if step == "wake":
+                text = f"被叫醒（{row.get('reason') or '有新的消息'}）"
+            elif step == "converged":
+                text = f"协作收敛：{row.get('rounds')} 轮、{row.get('turns')} 个回合"
+            elif step == "session_end":
+                text = f"协作结束：{row.get('rounds')} 轮，收敛={row.get('converged')}"
+            elif step == "round_cap":
+                text = f"往返达到上限（{row.get('rounds')} 轮），带着未解决异议定稿"
+            elif step == "escalated":
+                text = f"无法与同伴协调，请示用户：{row.get('question')}"
+            elif step == "turn_failed":
+                text = f"回合失败：{row.get('error')}"
+            else:
+                text = step
+            return [
+                self.make(
+                    "agent_message",
+                    stage="peer",
+                    actor=str(row.get("agent") or "system"),
+                    payload={
+                        "text": text,
+                        "message_id": uuid4().hex,
+                        "sender": row.get("agent"),
+                        "receiver": None,
+                        "intent": "note",
+                        "peer": True,
+                        "status": step,
+                    },
+                )
+            ]
+        if phase == "message" and isinstance(row.get("message"), dict):
+            message = row["message"]
+            return [
+                self.make(
+                    "agent_message",
+                    stage=stage or "collab",
+                    actor=str(message.get("sender") or node),
+                    parent_id=message.get("reply_to"),
+                    payload={
+                        "text": message.get("content", ""),
+                        "message_id": message.get("message_id"),
+                        "sender": message.get("sender"),
+                        "receiver": message.get("receiver"),
+                        "intent": message.get("intent"),
+                        "reason": message.get("reason", ""),
+                        "evidence": message.get("evidence", []),
+                        "reply_to": message.get("reply_to"),
+                        "payload": message.get("payload", {}),
+                    },
+                )
+            ]
         if phase == "log" and isinstance(row.get("entry"), dict):
             return self.from_log(LogEntry.model_validate(row["entry"]))
         if phase == "start":

@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS plan_versions (
     negotiation TEXT,
     PRIMARY KEY (plan_id, version)
 );
+CREATE TABLE IF NOT EXISTS runs (
+    run_id      TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    payload     TEXT NOT NULL
+);
 """
 
 
@@ -195,6 +201,32 @@ def load_version(plan_id: str, version: int) -> dict | None:
         "itinerary": json.loads(row[4]),
         "critique": json.loads(row[5]),
         "negotiation": json.loads(row[6]) if row[6] else None,
+    }
+
+
+def save_run(run_id: str, status: str, payload: dict) -> None:
+    """保存失败/中断的运行摘要，让页面刷新后仍能看到原因或继续确认。"""
+    with closing(_connect()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO runs (run_id, status, created_at, payload) VALUES (?, ?, ?, ?)",
+            (run_id, status, datetime.now(timezone.utc).isoformat(), json.dumps(payload, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+def load_run(run_id: str) -> dict | None:
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT run_id, status, created_at, payload FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "run_id": row[0],
+        "status": row[1],
+        "created_at": row[2],
+        "payload": json.loads(row[3]),
     }
 
 

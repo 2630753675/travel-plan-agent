@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from datetime import date, time, timedelta
 
-from ..models import Critique, DayPlan, Hotel, Item, Itinerary, POI, TripBrief, WeatherDay
+from ..models import Critique, DayPlan, FixedEvent, Hotel, Item, Itinerary, POI, TripBrief, WeatherDay
 from .lodging import LodgingPlan
 from .poi import PoiPlan
 from .transport import TransportPlan
@@ -33,6 +33,8 @@ MAX_POI_MINUTES_LAST_DAY = 120
 # 超过这个时长算"半天级"项目：单日已经超时时，这类项目要先让路
 HALF_DAY_MINUTES = 240
 AIRPORT_LEAD_MIN = 150
+AIRPORT_TRANSFER_MIN = 90
+ARRIVAL_TRANSFER_MIN = 90
 POI_PER_DAY = {"轻松": 2, "适中": 3, "紧凑": 4}
 
 
@@ -43,6 +45,14 @@ def _minutes(t: time) -> int:
 def _to_time(m: int) -> time:
     m = max(0, min(m, 23 * 60 + 59))
     return time(m // 60, m % 60)
+
+
+def _slot_for(m: int) -> str:
+    if m < LUNCH_START:
+        return "上午"
+    if m < DINNER_START:
+        return "下午"
+    return "晚上"
 
 
 def _rooms(travelers: int) -> int:
@@ -138,28 +148,63 @@ def _picked_by_llm(pool: list[POI], used: set[str], d: date, ids: list[str], wan
     return out
 
 
-def _place_poi(
-    start: int, poi: POI, lunch_at: int | None
-) -> tuple[int | None, int | None, int | None]:
-    """返回实际可用的 (start, end, lunch_at)。
+def _avoid_busy(start: int, end: int, busy: list[tuple[int, int]]) -> tuple[int, int]:
+    """把活动区间推到固定事件之后，直到不再重叠。"""
+    length = end - start
+    changed = True
+    while changed:
+        changed = False
+        for b_start, b_end in busy:
+            if start < b_end and b_start < end:
+                start = b_end
+                end = start + length
+                changed = True
+    return start, end
 
-    放不下时返回 (None, None, lunch_at)，由调用方跳过这个景点。
-    两处需要午饭让路：已过午饭时间还没吃，或本次景点会横跨午饭时段。
-    结束时间必须早于闭馆时间，否则就是把游客排到关门后的景点。
-    """
-    if lunch_at is None and start >= LUNCH_START:
-        lunch_at = start
-        start += MEAL_LUNCH
+
+def _place_poi(start: int, poi: POI, busy: list[tuple[int, int]] | None = None) -> tuple[int | None, int | None]:
+    """按开放时间放置一个景点；餐食与固定事件已由单独调度避让。"""
     s = max(start, _minutes(poi.open_time))
     e = s + poi.duration_min
-    if lunch_at is None and s < LUNCH_START < e:
-        lunch_at = LUNCH_START
-        s = max(LUNCH_END, _minutes(poi.open_time))
-        e = s + poi.duration_min
-    # 关门时间检查：排不进去就放弃这个景点，不能排出"闭馆后游览"
+    if busy:
+        s, e = _avoid_busy(s, e, busy)
     if e > _minutes(poi.close_time):
-        return None, None, lunch_at
-    return s, e, lunch_at
+        return None, None
+    return s, e
+
+
+def _meal_window(
+    *, day_start: int, cursor: int, period_start: int, period_end: int,
+    duration: int, deadline: int | None, arrival: int,
+    busy: list[tuple[int, int]] | None = None,
+) -> tuple[int, int] | None:
+    """只在餐期窗口内排餐；无足够空档则不伪造、截短或排到午夜。"""
+    start = max(day_start, cursor, period_start, arrival)
+    end = start + duration
+    if busy:
+        start, end = _avoid_busy(start, end, busy)
+    if start >= period_end or end > period_end or (deadline is not None and end > deadline):
+        return None
+    return start, end
+
+
+def _unplaced_notes(requested: list[str], placed: set[str], pool: list[POI], d: date) -> list[str]:
+    """把"Agent 点名但没排进去"的项目说清楚，不静默丢弃。"""
+    by_id = {p.id: p for p in pool}
+    notes: list[str] = []
+    for pid in requested:
+        if pid in placed:
+            continue
+        poi = by_id.get(pid)
+        if poi is None:
+            notes.append(f"未安排 {pid}：候选中不存在")
+        elif not poi.is_open_on(d):
+            notes.append(f"未安排 {poi.name}：当天闭馆")
+        elif _minutes(poi.open_time) >= DAY_LATEST_POI_START:
+            notes.append(f"未安排 {poi.name}：开放时间过晚")
+        else:
+            notes.append(f"未安排 {poi.name}：当天时间或航班节点放不下")
+    return notes
 
 
 def run(
@@ -176,6 +221,8 @@ def run(
     llm_selection: dict[date, list[str]] | None = None,
     forced_drops: set[str] | None = None,
     force_cheaper_hotel: bool = False,
+    require_explicit_assignments: bool = False,
+    fixed_events: dict[date, list[FixedEvent]] | None = None,
 ) -> Itinerary:
     budget_pressure = bool(
         force_cheaper_hotel
@@ -183,7 +230,7 @@ def run(
     )
     duration_pressure = bool(critique and any(i.code == "DAY_TOO_LONG" for i in critique.issues))
 
-    hotel = _pick_hotel(lodging, brief, budget_pressure)
+    hotel = lodging.chosen if require_explicit_assignments else _pick_hotel(lodging, brief, budget_pressure)
     weather_by_date: dict[date, WeatherDay] = {w.date: w for w in weather.days}
     pool = list(poi_plan.candidates)
     used: set[str] = set()
@@ -232,7 +279,7 @@ def run(
             f = transport.chosen_outbound
             items.append(
                 Item(
-                    slot="上午",
+                    slot=_slot_for(_minutes(f.dep_time)),
                     start_time=f.dep_time,
                     end_time=f.arr_time,
                     type="transport",
@@ -243,13 +290,42 @@ def run(
                     note="含往返机场时间约 90 分钟",
                 )
             )
-            cursor = _minutes(f.arr_time) + 90
+            cursor = _minutes(f.arr_time) + ARRIVAL_TRANSFER_MIN
 
         # 返程航班：必须提前到机场，因此给当天设硬截止时间
         if is_last and transport.chosen_inbound:
-            deadline = _minutes(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN
+            deadline = _minutes(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN - AIRPORT_TRANSFER_MIN
 
-        if is_first or is_last:
+        # Agent 明确指定的固定时段（接驳、预约等）：原样进入时间表，其余活动避让。
+        fixed = sorted(
+            (fixed_events or {}).get(d, []),
+            key=lambda e: _minutes(e.start_time),
+        )
+        busy: list[tuple[int, int]] = []
+        for event in fixed:
+            start_m = _minutes(event.start_time)
+            end_m = _minutes(event.end_time)
+            if end_m <= start_m:
+                continue
+            items.append(
+                Item(
+                    slot=_slot_for(start_m),
+                    start_time=event.start_time,
+                    end_time=event.end_time,
+                    type="fixed",
+                    title=event.title,
+                    ref_id=f"fixed:{event.kind}",
+                    cost=0,
+                    duration_min=end_m - start_m,
+                    note=event.note,
+                )
+            )
+            busy.append((start_m, end_m))
+
+        if is_last:
+            # 返程日不安排景点：航班、接驳与机场提前量优先，机场路程没有实时数据。
+            want = 0
+        elif is_first:
             want = min(1, per_day) if brief.days > 1 else 0
         else:
             want = per_day
@@ -257,6 +333,8 @@ def run(
         if llm_selection is not None and d in llm_selection:
             # LLM 明确给了这一天的选择：尊重其意图（哪怕是空列表），只做硬约束过滤
             picked = _picked_by_llm(pool, used, d, llm_selection[d], want)
+        elif require_explicit_assignments:
+            picked = []
         else:
             picked = _select_for_day(
                 pool, used, d, rainy, want,
@@ -272,9 +350,27 @@ def run(
             for pid in forced_drops:
                 used.add(pid)
 
-        lunch_at: int | None = None
+        requested = list(llm_selection[d]) if llm_selection is not None and d in llm_selection else []
+        placed_ids: set[str] = set()
+
+        arrival = _minutes(transport.chosen_outbound.arr_time) + ARRIVAL_TRANSFER_MIN if is_first and transport.chosen_outbound else DAY_START
+        sightseeing_end = cursor
+        lunch_reserved = False
+        pre_lunch_end = DAY_START
         for poi in picked:
-            s, e, lunch_at = _place_poi(cursor, poi, lunch_at)
+            # 景点若会压到午餐窗口，先把 12:00-13:00 完整留出来再排。
+            guess_start = max(sightseeing_end, _minutes(poi.open_time))
+            guess_end = guess_start + poi.duration_min
+            if (
+                not is_last
+                and not lunch_reserved
+                and guess_start < LUNCH_END
+                and guess_end > LUNCH_START
+                and not (is_first and arrival >= LUNCH_START)
+            ):
+                lunch_reserved = True
+                sightseeing_end = max(sightseeing_end, LUNCH_END)
+            s, e = _place_poi(sightseeing_end, poi, busy)
             if s is None or e is None:
                 # 关门前来不及游览，换下一个
                 continue
@@ -296,46 +392,66 @@ def run(
                     note="室内备选" if poi.indoor else "",
                 )
             )
-            cursor = e + 30
+            placed_ids.add(poi.id)
+            if e <= LUNCH_START:
+                pre_lunch_end = max(pre_lunch_end, e)
+            sightseeing_end = e + 30
 
-        if lunch_at is None:
-            lunch_at = max(cursor, LUNCH_START)
-        items.append(
-            Item(
-                slot="中午",
-                start_time=_to_time(lunch_at),
-                end_time=_to_time(lunch_at + MEAL_LUNCH),
-                type="meal",
-                title="午餐",
-                cost=MEAL_LUNCH * brief.travelers,
-                duration_min=MEAL_LUNCH,
+        unplaced_notes = _unplaced_notes(requested, placed_ids, pool, d)
+
+        lunch_blocked = any(s < LUNCH_END and LUNCH_START < e for s, e in busy)
+        if lunch_reserved and not lunch_blocked:
+            lunch = (LUNCH_START, LUNCH_END)
+        else:
+            lunch = _meal_window(
+                day_start=DAY_START,
+                cursor=max(DAY_START, pre_lunch_end),
+                period_start=LUNCH_START,
+                period_end=LUNCH_END,
+                duration=MEAL_LUNCH,
+                deadline=deadline,
+                arrival=arrival,
+                busy=busy,
             )
+        dinner_arrival_limit = 21 * 60
+        dinner = _meal_window(
+            day_start=DAY_START,
+            cursor=max(sightseeing_end, DINNER_START),
+            period_start=DINNER_START,
+            period_end=dinner_arrival_limit,
+            duration=MEAL_DINNER,
+            deadline=deadline,
+            arrival=arrival,
+            busy=busy,
         )
+        meal_notes: list[str] = []
+        meal_estimate = 0.0
+        if lunch:
+            meal_notes.append(f"午餐休息窗口 {_to_time(lunch[0]):%H:%M}-{_to_time(lunch[1]):%H:%M}；费用为估算")
+            meal_estimate += MEAL_LUNCH * brief.travelers
+        elif is_first and transport.chosen_outbound and arrival >= LUNCH_END:
+            meal_notes.append("去程抵达较晚，午餐按实际到达与转场时间自行安排；费用未计入固定时间表")
+        elif is_last and transport.chosen_inbound:
+            meal_notes.append("返程日时间不足以安排市区午餐，请在机场自行安排；费用未计入固定时间表")
+        else:
+            meal_notes.append("当天没有足够午餐时间窗，建议自行安排；费用未计入固定时间表")
+        if dinner:
+            meal_notes.append(f"晚餐休息窗口 {_to_time(dinner[0]):%H:%M}-{_to_time(dinner[1]):%H:%M}；费用为估算")
+            meal_estimate += MEAL_DINNER * brief.travelers
+        elif is_first and arrival >= dinner_arrival_limit:
+            meal_notes.append("航班晚到，请自行安排晚餐；费用未计入固定时间表")
+        elif is_last and transport.chosen_inbound:
+            meal_notes.append("返程日不安排市区晚餐，需按航班时间前往机场")
 
-        # 返程日若晚餐时间晚于机场截止时间，说明人在机场，不再单列晚餐
-        dinner_allowed = deadline is None or deadline > DINNER_START + MEAL_DINNER
-        dinner_end = cursor
-        if dinner_allowed:
-            dinner_at = max(cursor, DINNER_START)
-            dinner_end = dinner_at + MEAL_DINNER
-            items.append(
-                Item(
-                    slot="晚上",
-                    start_time=_to_time(dinner_at),
-                    end_time=_to_time(dinner_end),
-                    type="meal",
-                    title="晚餐",
-                    cost=MEAL_DINNER * brief.travelers,
-                    duration_min=MEAL_DINNER,
-                )
-            )
+        meal_ends = [end for meal in (lunch, dinner) if meal for end in [meal[1]]]
+        day_cursor = max([sightseeing_end, *meal_ends])
 
         # 返程航班（排在当天最后）
         if is_last and transport.chosen_inbound:
             f = transport.chosen_inbound
             items.append(
                 Item(
-                    slot="晚上",
+                    slot=_slot_for(_minutes(f.dep_time)),
                     start_time=f.dep_time,
                     end_time=f.arr_time,
                     type="transport",
@@ -343,52 +459,70 @@ def run(
                     ref_id=f.flight_no,
                     cost=f.price * brief.travelers,
                     duration_min=f.duration_min,
-                    note="需提前 90 分钟到机场，最后一晚不住店",
+                    note=f"假设市区到机场地面交通预留 {AIRPORT_TRANSFER_MIN} 分钟，并提前 {AIRPORT_LEAD_MIN} 分钟到机场；请按实际交通核实，最后一晚不住店",
                 )
             )
 
         # 住宿（最后一晚不住）
         # 入住时间不能早于晚餐结束，否则晚餐和入住会叠在一起
         if not is_last and hotel:
-            hotel_at = max(21 * 60, dinner_end)
+            hotel_at, hotel_end = _avoid_busy(
+                max(21 * 60, day_cursor, arrival if is_first else 0),
+                max(21 * 60, day_cursor, arrival if is_first else 0) + 30,
+                busy,
+            )
+            late_arrival = bool(is_first and transport.chosen_outbound and hotel_at >= 23 * 60 + 30)
+            if not late_arrival:
+                items.append(
+                    Item(
+                        slot="晚上",
+                        start_time=_to_time(hotel_at),
+                        end_time=_to_time(hotel_end),
+                        type="hotel",
+                        title=f"入住 {hotel.name}",
+                        ref_id=hotel.name,
+                        cost=hotel.price_per_night * _rooms(brief.travelers),
+                        duration_min=30,
+                        note=f"{hotel.district} · 距市中心 {hotel.distance_to_center_km}km",
+                    )
+                )
+        else:
+            late_arrival = False
+
+        items.sort(key=lambda x: (_minutes(x.start_time), _minutes(x.end_time)))
+        # 极晚抵达时当日不建虚假的 23:59 入住时间项；房费照计，时间轴只留零时长标记。
+        if late_arrival and hotel:
             items.append(
                 Item(
                     slot="晚上",
-                    start_time=_to_time(hotel_at),
-                    end_time=_to_time(hotel_at + 30),
+                    start_time=_to_time(min(hotel_at, 23 * 60 + 59)),
+                    end_time=_to_time(min(hotel_at, 23 * 60 + 59)),
                     type="hotel",
-                    title=f"入住 {hotel.name}",
+                    title=f"晚到入住 {hotel.name}",
                     ref_id=hotel.name,
                     cost=hotel.price_per_night * _rooms(brief.travelers),
-                    duration_min=30,
-                    note=f"{hotel.district} · 距市中心 {hotel.distance_to_center_km}km",
+                    duration_min=0,
+                    note=(
+                        f"航班 {transport.chosen_outbound.arr_time.strftime('%H:%M')} 抵达并转场后办理入住，"
+                        "跨日不计入当天时间轴；房费按一晚计入"
+                    ),
                 )
             )
-            rest_at = hotel_at + 30
-        else:
-            rest_at = max(21 * 60 + 30, dinner_end)
-
-        items.append(
-            Item(
-                slot="晚上",
-                start_time=_to_time(rest_at),
-                end_time=_to_time(rest_at),
-                type="rest",
-                title="市内交通预留",
-                cost=LOCAL_TRANSPORT_PER_PERSON_DAY * brief.travelers,
-                duration_min=0,
-            )
-        )
-
-        items.sort(key=lambda x: (_minutes(x.start_time), _minutes(x.end_time)))
-        day_cost = sum(x.cost for x in items)
+        day_cost = sum(x.cost for x in items) + meal_estimate + LOCAL_TRANSPORT_PER_PERSON_DAY * brief.travelers
         notes: list[str] = []
+        notes.append(f"市内交通费用按 {LOCAL_TRANSPORT_PER_PERSON_DAY * brief.travelers:.0f} 元估算，未写入时间轴")
         if rainy and wd:
             notes.append(f"当天{wd.condition}，已优先安排室内景点")
+        if late_arrival and hotel:
+            notes.append(f"航班抵达较晚，请直接前往 {hotel.name} 办理入住")
         if is_last and deadline is not None:
-            notes.append(f"当天需在 {_to_time(deadline).strftime('%H:%M')} 前赶往机场")
+            notes.append(
+                f"估算最晚 {_to_time(deadline).strftime('%H:%M')} 从市区出发；"
+                f"假设机场地面交通 {AIRPORT_TRANSFER_MIN} 分钟、提前 {AIRPORT_LEAD_MIN} 分钟到机场，需按实际交通核实；"
+                "早班航班可能需要前一晚靠近机场住宿"
+            )
 
-        days.append(DayPlan(date=d, items=items, day_cost=day_cost, notes=notes))
+        days.append(DayPlan(date=d, items=items, day_cost=day_cost, meal_estimate=meal_estimate, notes=notes + meal_notes + unplaced_notes))
 
     total = sum(x.day_cost for x in days)
     if revision > 0:
