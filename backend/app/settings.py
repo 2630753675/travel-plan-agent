@@ -51,7 +51,8 @@ class OrchestrationSettings(BaseModel):
     max_runtime_s: int = Field(default=180, ge=30, le=600, description="单次运行最长秒数")
     max_model_calls: int = Field(default=40, ge=1, le=80, description="单次运行最多供应商模型请求数，含工具调用轮次")
     max_agent_turns: int = Field(default=20, ge=1, le=40, description="peer 模式最多 Agent 回合数，与模型请求数分别计数")
-    max_output_tokens: int = Field(default=1400, ge=256, le=6000, description="单次模型输出上限")
+    # 仅保留字段兼容旧配置；模型请求不再发送 max_tokens 硬上限，实际用量由供应商 usage/字符数记录。
+    max_output_tokens: int | None = Field(default=None, description="已弃用：不限制单次模型输出，仅记录实际用量")
     # 兼容旧配置，不再作为模型请求预算使用；实际限制由 max_model_calls/max_runtime_s 控制。
     token_budget: int = Field(default=60000, ge=1000, le=2_000_000)
     # fast：默认快速规划；expert：按需启用的有限专家协作；peer：显式深度团队。
@@ -82,10 +83,14 @@ def load() -> AppSettings:
     if row is None:
         return AppSettings()
     try:
-        return AppSettings(**json.loads(row[0]))
+        settings = AppSettings(**json.loads(row[0]))
     except (json.JSONDecodeError, ValidationError):
         # 配置损坏时回到默认值，而不是让服务起不来
         return AppSettings()
+    # 旧版本把 max_output_tokens 当硬上限保存（常见 1400）。该限制已废弃，
+    # 迁移为 None，避免升级后旧配置继续把正常输出判成截断失败。
+    settings.orchestration.max_output_tokens = None
+    return settings
 
 
 def save(settings: AppSettings) -> AppSettings:
@@ -131,4 +136,6 @@ def merge_incoming(current: AppSettings, incoming: dict) -> AppSettings:
     for section in ("orchestration", "datasource"):
         if section in payload and payload[section]:
             merged[section].update(payload[section])
+    # 全局限流字段已废弃：忽略前端/旧备份回传的数值，保持“不限制输出、只记录用量”。
+    merged["orchestration"]["max_output_tokens"] = None
     return AppSettings(**merged)

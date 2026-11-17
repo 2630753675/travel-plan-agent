@@ -69,12 +69,24 @@ def _post(url: str, payload: dict, api_key: str, timeout: float, host: str) -> d
 
 
 class LLMClient:
-    def __init__(self, cfg: LLMSettings, timeout_s: int = 60, budget: TokenBudget | None = None, max_calls: int | None = None, max_output_tokens: int | None = 1400):
+    def __init__(
+        self,
+        cfg: LLMSettings,
+        timeout_s: int = 60,
+        budget: TokenBudget | None = None,
+        max_calls: int | None = None,
+        max_output_tokens: int | None = None,
+        cancellation=None,
+    ):
         self.cfg = cfg
         self.timeout_s = timeout_s
         self.budget = budget
         self.max_calls = max_calls
+        # 保留字段兼容旧调用方；当前策略是不向供应商发送 max_tokens 硬上限，
+        # 输出量只记录在 usage/字符数里，运行边界靠请求数、回合数和总时长。
         self.max_output_tokens = max_output_tokens
+        # 运行级取消标记（见 app/cancellation.py）；None 表示不检查。
+        self.cancellation = cancellation
         self.calls = 0
         self.input_chars = 0
         self.output_chars = 0
@@ -87,6 +99,11 @@ class LLMClient:
         if self.max_calls is not None and self.calls >= self.max_calls:
             raise ModelCallBudgetExceeded(f"已达到本次运行模型调用上限 {self.max_calls}")
         self.calls += 1
+
+    def _check_cancelled(self) -> None:
+        """在请求前后检查用户取消；检查点之间不做强杀，避免丢已产生的事实。"""
+        if self.cancellation is not None:
+            self.cancellation.raise_if_cancelled()
 
     def stats(self) -> dict:
         return {
@@ -113,12 +130,17 @@ class LLMClient:
         return urlparse(self.cfg.base_url).hostname or self.cfg.base_url
 
     async def _complete(
-        self, system: str, user: str, *, max_tokens: int = 2000, json_mode: bool = False
+        self, system: str, user: str, *, max_tokens: int | None = None, json_mode: bool = False
     ) -> str:
-        """发一次请求并返回 content 原文。网络与结构错误统一抛 LLMError。"""
+        """发一次请求并返回 content 原文。网络与结构错误统一抛 LLMError。
+
+        max_tokens 仅为兼容旧调用签名保留，不再发给供应商：固定输出上限会把
+        推理模型的思考长度当成失败条件，已改为只用 usage/字符数记录实际用量。
+        """
         if not self.cfg.has_credentials:
             raise LLMError("缺少 base_url / model / api_key")
 
+        self._check_cancelled()
         self._reserve_call()
         self.input_chars += len(system) + len(user)
         if self.budget:
@@ -129,7 +151,6 @@ class LLMClient:
         payload = {
             "model": self.cfg.model,
             "temperature": self.cfg.temperature,
-            "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -146,6 +167,7 @@ class LLMClient:
             ),
             timeout=self.timeout_s + 1,
         )
+        self._check_cancelled()
         self.latency_ms += int((time.monotonic() - started) * 1000)
         usage = data.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens")
@@ -168,8 +190,8 @@ class LLMClient:
         if not content.strip():
             if finish == "length":
                 raise LLMError(
-                    f"输出被截断：max_tokens={max_tokens} 不足。"
-                    "推理模型会先消耗 token 思考，请调大节点超时/换非推理模型"
+                    "模型未给出正文就达到自身输出上限（finish_reason=length）。"
+                    "不是本应用限制，请检查模型/供应商的输出上限配置"
                 )
             if reasoning:
                 raise LLMError(
@@ -179,21 +201,16 @@ class LLMClient:
 
         if finish == "length":
             # 内容非空但被截断：JSON 大概率不完整，宁可降级也不要半截数据
-            raise LLMError(f"输出被截断（max_tokens={max_tokens}），结果不可信")
+            raise LLMError("模型输出被自身上限截断（finish_reason=length），结果不可信")
 
         self.output_chars += len(content)
         if self.budget:
             self.budget.add(content)
         return content
 
-    async def chat_json(self, system: str, user: str, *, max_tokens: int = 4000) -> dict:
+    async def chat_json(self, system: str, user: str, *, max_tokens: int | None = None) -> dict:
         """要求 JSON 输出。模型偶尔会用代码块包裹或加解释，这里做容错提取。"""
-        content = await self._complete(
-            system,
-            user,
-            max_tokens=min(max_tokens, self.max_output_tokens) if self.max_output_tokens else max_tokens,
-            json_mode=True,
-        )
+        content = await self._complete(system, user, json_mode=True)
         return _extract_json(content)
 
     async def chat_tools(
@@ -212,15 +229,15 @@ class LLMClient:
         if not self.cfg.has_credentials:
             raise LLMError("缺少 base_url / model / api_key")
 
+        self._check_cancelled()
         self._reserve_call()
         payload: dict = {
             "model": self.cfg.model,
             "temperature": self.cfg.temperature,
             "messages": messages,
         }
-        output_limit = max_tokens if max_tokens is not None else self.max_output_tokens
-        if output_limit is not None:
-            payload["max_tokens"] = output_limit
+        # 不发送 max_tokens：固定输出上限会在推理模型上先耗尽思考预算，
+        # 把正常回合误判为截断失败。用量只记录，不参与放行判断。
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -237,6 +254,7 @@ class LLMClient:
             ),
             timeout=self.timeout_s + 1,
         )
+        self._check_cancelled()
         self.latency_ms += int((time.monotonic() - started) * 1000)
         usage = data.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens")
@@ -270,7 +288,7 @@ class LLMClient:
 
         if not content.strip() and not calls:
             if finish_reason == "length":
-                raise LLMError(f"工具调用响应被截断：max_tokens={output_limit} 不足")
+                raise LLMError("模型未给出正文就达到自身输出上限（finish_reason=length），不是本应用限制")
             if reasoning:
                 raise LLMError(f"模型只返回 reasoning_content，未返回答案或工具调用（finish_reason={finish_reason}）")
             raise LLMError(f"模型未返回内容或工具调用（finish_reason={finish_reason or 'unknown'}）")
@@ -285,12 +303,10 @@ class LLMClient:
 
         只验证"能不能调通"，不要求模型遵守 JSON 或任何格式约定——
         格式约束属于具体任务，不该成为连通性测试的通过条件。
-        推理模型会先用 token 思考，因此这里给足额度。
         """
         content = await self._complete(
             "你是一个连通性测试助手，回答越短越好。",
             "回复两个字：正常",
-            max_tokens=512,
         )
         return content.strip()[:80]
 

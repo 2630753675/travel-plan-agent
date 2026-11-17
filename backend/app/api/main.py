@@ -22,7 +22,9 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from .. import access
+from .. import cancellation
 from .. import settings as config_store
+from ..cancellation import RunCancelled
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..checkpoint import PersistentSaver
 from ..graph.build import build
@@ -123,7 +125,16 @@ def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
     return f"{prefix}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: TripBrief, source_kind: str = "mock", max_runtime_s: int = 180):
+async def _run_graph(
+    graph,
+    config: dict,
+    graph_input,
+    plan_id: str,
+    brief: TripBrief,
+    source_kind: str = "mock",
+    max_runtime_s: int = 180,
+    cancel_token: cancellation.RunCancellation | None = None,
+):
     """Stream, persist, and replay one normalized event sequence per run."""
     import asyncio
     trace: list[dict] = []
@@ -149,12 +160,28 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             async for mode, payload in graph.astream(
                 graph_input, config=config, stream_mode=["custom", "values"]
             ):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 if mode == "custom":
                     trace.append(payload)
                     for event in factory.from_custom(payload):
                         yield publish(event)
                 else:
                     final = payload
+    except RunCancelled:
+        # 用户主动取消：保留已完成轨迹与用量，但绝不把半成品当行程交付。
+        message = "你已取消本次运行。已产生的执行轨迹和模型用量已保留，未完成方案不会作为行程交付。"
+        stats = final.get("llm_stats") or {}
+        payload = {
+            "plan_id": plan_id,
+            "message": message,
+            "cancelled": True,
+            "llm_stats": stats,
+            "recovery_status": "cancelled",
+        }
+        store.save_run(plan_id, "cancelled", payload)
+        yield publish(factory.make("run_needs_input", actor="system", payload=payload))
+        return
     except Exception as e:  # 任何未预期异常都要让前端收到，而不是静默断开
         error_type = type(e).__name__
         detail = str(e).strip() or "未提供异常消息"
@@ -378,14 +405,20 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
 async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
     # 请求级模式优先于全局配置：普通请求默认 fast，peer 必须由用户显式选择。
     cfg.orchestration.agent_mode = brief.planning_mode
-    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
-    config = {"configurable": {"thread_id": plan_id}}
-    async for chunk in _run_graph(
-        graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief,
-        cfg.datasource.kind,
-        cfg.orchestration.max_runtime_s,
-    ):
-        yield chunk
+    cancel_token = cancellation.begin(plan_id)
+    try:
+        graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER, cancellation=cancel_token)
+        config = {"configurable": {"thread_id": plan_id}}
+        async for chunk in _run_graph(
+            graph, config, {"brief": brief, "revision": 0, "errors": []}, plan_id, brief,
+            cfg.datasource.kind,
+            cfg.orchestration.max_runtime_s,
+            cancel_token,
+        ):
+            yield chunk
+    finally:
+        # 客户端断开时生成器被关闭，也必须清掉登记，避免残留“可取消”的假运行。
+        cancellation.finish(plan_id, cancel_token)
 
 
 @app.post("/api/plan")
@@ -461,30 +494,54 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
             raise HTTPException(status_code=400, detail="找不到该规划的原始需求")
         brief = raw
     cfg.orchestration.agent_mode = brief.planning_mode
-    graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
 
     async def stream():
-        async for chunk in _run_graph(
-            graph,
-            config,
-            Command(resume={
-                "kind": body.kind or "legacy_decision",
-                "decision": body.decision,
-                "accepted_issue_codes": body.accepted_issue_codes,
-                "note": body.note,
-            }),
-            plan_id,
-            brief,
-            cfg.datasource.kind,
-            cfg.orchestration.max_runtime_s,
-        ):
-            yield chunk
+        cancel_token = cancellation.begin(plan_id)
+        try:
+            graph = build(
+                make_source(cfg.datasource), cfg,
+                checkpointer=_CHECKPOINTER, cancellation=cancel_token,
+            )
+            async for chunk in _run_graph(
+                graph,
+                config,
+                Command(resume={
+                    "kind": body.kind or "legacy_decision",
+                    "decision": body.decision,
+                    "accepted_issue_codes": body.accepted_issue_codes,
+                    "note": body.note,
+                }),
+                plan_id,
+                brief,
+                cfg.datasource.kind,
+                cfg.orchestration.max_runtime_s,
+                cancel_token,
+            ):
+                yield chunk
+        finally:
+            cancellation.finish(plan_id, cancel_token)
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/plan/{plan_id}/cancel")
+async def cancel_plan(plan_id: str):
+    """请求取消进行中的运行。
+
+    协作式取消：不硬杀线程里的 HTTP 请求，而是在下一个节点/请求边界停下，
+    已产生的轨迹、用量和检查点照常保留，未完成方案不会作为行程交付。
+    """
+    if not cancellation.request_cancel(plan_id):
+        raise HTTPException(status_code=404, detail="该运行不在进行中，无法取消")
+    return {
+        "ok": True,
+        "plan_id": plan_id,
+        "message": "已请求取消，当前模型请求返回后停止并保留轨迹",
+    }
 
 
 @app.post("/api/plan/{plan_id}/refine")

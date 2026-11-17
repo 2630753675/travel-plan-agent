@@ -807,6 +807,9 @@ export default function App() {
   const [versions, setVersions] = useState<VersionInfo[]>([])
   const [needToken, setNeedToken] = useState(false)
   const [tokenDraft, setTokenDraft] = useState('')
+  // 运行中的 plan_id：取消接口需要它；run_started 事件到达后才有值。
+  const [activePlanId, setActivePlanId] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
   const drawerRef = useRef<HTMLDivElement>(null)
   const liveLogs = useMemo(() => projectEvents(liveEvents), [liveEvents])
 
@@ -842,7 +845,7 @@ export default function App() {
         return apiFetch(`/api/run/${id}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
       })
       .then((rec) => {
-        if (rec?.status === 'interrupted' || rec?.status === 'failed' || rec?.status === 'failed_non_resumable' || rec?.status === 'checkpoint_lost' || rec?.status === 'needs_input') {
+        if (rec?.status === 'interrupted' || rec?.status === 'failed' || rec?.status === 'failed_non_resumable' || rec?.status === 'checkpoint_lost' || rec?.status === 'needs_input' || rec?.status === 'cancelled') {
           const payload = rec.payload ?? {}
           setErrorStats(payload.llm_stats as LlmStats | undefined)
           setRecoveryStatus(payload.recovery_status)
@@ -859,7 +862,7 @@ export default function App() {
               ...(Array.isArray(payload.issues) ? payload.issues.map((i: any) => i?.message ?? '') : []),
             ].filter(Boolean).join('\n')
             setError(text)
-            setPhase(rec.status === 'needs_input' ? 'stopped' : 'error')
+            setPhase(['needs_input', 'cancelled'].includes(rec.status) ? 'stopped' : 'error')
           }
           return
         }
@@ -904,6 +907,10 @@ export default function App() {
     if (name === 'run_event') {
       const ev = data as RunEvent
       appendEvent(ev)
+      if (ev.event_type === 'run_started' || ev.event_type === 'run_resumed') {
+        const pid = ev.payload?.plan_id ?? ev.run_id
+        if (pid) setActivePlanId(String(pid))
+      }
       if (ev.event_type === 'run_completed') {
         const payload = ev.payload?.result as Result | undefined
         if (payload) {
@@ -958,6 +965,11 @@ export default function App() {
           history.replaceState(null, '', url)
         }
       }
+      if (['run_completed', 'run_interrupted', 'run_needs_input', 'run_failed'].includes(ev.event_type)) {
+        // 运行已结束：没有可取消的对象，取消按钮随之隐藏。
+        setActivePlanId(null)
+        setCancelling(false)
+      }
       return
     }
 
@@ -984,10 +996,27 @@ export default function App() {
     }
   }
 
+  async function cancelPlan() {
+    if (!activePlanId || cancelling) return
+    setCancelling(true)
+    try {
+      const res = await apiFetch(`/api/plan/${activePlanId}/cancel`, { method: 'POST' })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
+      // 取消是协作式的：真正的终态由随后到达的 run_needs_input 事件决定。
+    } catch (e) {
+      setCancelling(false)
+      setError(describeError(e))
+    }
+  }
+
   async function resumePlan(decision: string) {
     const pid = interruptInfo?.plan_id
     if (!pid) return
     setInterruptInfo(null)
+    setActivePlanId(pid)
     setPhase('running')
     try {
       const res = await apiFetch(`/api/plan/${pid}/resume`, {
@@ -1015,6 +1044,8 @@ export default function App() {
     setInterruptInfo(null)
     setLiveEvents([])
     setError('')
+    setActivePlanId(null)
+    setCancelling(false)
     const body = {
       origin: form.origin,
       destination: form.destination,
@@ -1165,7 +1196,7 @@ export default function App() {
           <p className="sub">LangGraph 编排 · 四路并行检索 · 校验回退 · 单日重排</p>
         </div>
         <div className="topbar-right">
-          <span className="mode-pill">{form.planning_mode === 'peer' ? '深度团队协作 · 高成本' : form.planning_mode === 'expert' ? '专家模式 · 最多 3 次模型请求' : '快速规划 · 默认最多 1 次模型请求'}</span>
+          <span className="mode-pill">{form.planning_mode === 'peer' ? '深度团队协作 · 高成本' : form.planning_mode === 'expert' ? '专家模式 · 最多 12 个 Agent 回合' : '快速规划 · 最多 8 个 Agent 回合'}</span>
           <div className="status-pill">
             {phase === 'form' && '待提交'}
             {phase === 'running' && `执行中 ${doneCount}/7`}
@@ -1325,7 +1356,7 @@ export default function App() {
           <div className="chips">
             <span className="chip-label">规划模式</span>
             {([
-              ['fast', '快速', '默认，少量模型调用'],
+              ['fast', '快速', '默认，回合更少'],
               ['expert', '专家', '复杂约束时使用'],
               ['peer', '深度团队', '高成本，显式启用'],
             ] as const).map(([mode, label, title]) => (
@@ -1404,6 +1435,9 @@ export default function App() {
                   </span>
                 ))}
               </div>
+              <button className="ghost" onClick={cancelPlan} disabled={!activePlanId || cancelling}>
+                {cancelling ? '正在取消…' : '取消本次运行'}
+              </button>
             </section>
           )}
 

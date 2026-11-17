@@ -302,7 +302,7 @@ def _log_lines(node: str, upd: dict, state: TripState) -> list:
     return lines
 
 
-def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None):
+def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None, cancellation=None):
     settings = settings or AppSettings()
     max_revisions = settings.orchestration.max_revisions
     selected_mode = settings.orchestration.agent_mode
@@ -327,7 +327,9 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             settings.orchestration.node_timeout_s,
             budget=None,
             max_calls=mode_call_limit,
-            max_output_tokens=settings.orchestration.max_output_tokens,
+            # 不再下发 max_tokens；旧配置里的数值在 settings.load 已迁移为 None。
+            max_output_tokens=None,
+            cancellation=cancellation,
         )
         if settings.llm.configured
         else None
@@ -1027,7 +1029,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         """跑一场对等协作：Agent 互相唤醒、协商，僵持则请示用户。"""
         from ..agents import hub as peer_hub
 
-        # 深度团队也受运行级请求数和单次输出上限保护，达到上限立即停止。
+        # 深度团队受运行级请求数、Agent 回合数和总时长保护，达到上限立即停下并请示用户。
         client = shared_llm
         result = await peer_hub.run_session(
             brief=state["brief"],

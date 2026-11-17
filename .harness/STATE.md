@@ -15,9 +15,10 @@
 - 后端：`backend`
 - 前端：`frontend`
 - 服务已于 2026-11-17 14:03 重启：`http://127.0.0.1:8848`（启动器 PID 28920，监听 PID 22268），健康检查 `{"ok":true}`
-- 已保存运行配置基线：`agent_mode=fast`、`max_runtime_s=180`、`max_model_calls=8`、`max_agent_turns=10`、`max_output_tokens=1400`（代码默认值已更新为 40/20，但 SQLite 中已保存配置不会自动迁移；跑 peer 前需在设置页提高请求数）
+- 注意：该进程启动于 12:41，早于 14:07 的提交与本次改动；要测试新行为必须先重启 :8848
+- 已保存运行配置基线：`agent_mode=fast`、`max_runtime_s=180`、`max_model_calls=8`、`max_agent_turns=10`（代码默认 40/20；旧配置不自动迁移，跑 peer 前需在设置页提高请求数）；`max_output_tokens` 已废弃，旧值 1400 在加载时迁移为 None
 - 前端入口：`Cache-Control: no-store`
-- 最新前端资源：`/assets/index-Dvt-jbjM.js`
+- 最新前端资源：`/assets/index-BCHEiKlU.js`
 
 ## 已完成
 1. 配置有效模型时，`fast`、`expert`、`peer` 三种模式统一进入 `hub.run_session` Agent 消息引擎；差异仅为协作预算，未配置模型时明确走规则降级。
@@ -34,6 +35,9 @@
 12. 用户确认请求支持 `kind/decision/accepted_issue_codes/note`，兼容旧字符串。
 13. 失败/中断持久化、固定事件工具、机场接驳校验、返程日移除无意义 `rest` 时间项等之前整改已保留。
 14. checkpoint 兼容旧单文件、新写入按 thread_id 分片；README 已同步事件契约、预算语义、协议、检查点与验收状态。
+15. 方案 B：模型请求不再发送 `max_tokens`，`max_output_tokens` 废弃并迁移为 None，只记录 usage/字符数；保留请求数、Agent 回合、工具步数、复审轮次与总时长边界。
+16. 运行中可取消：`app/cancellation.py` + `POST /api/plan/{id}/cancel`；协作式在请求返回后的节点边界停止，返回 `run_needs_input`（`recovery_status=cancelled`，DB 状态 `cancelled`），前端运行区有取消按钮，刷新可恢复。
+17. mock 数据：成都新增 3 个已核对景点（p22 天府美术馆、p23 川大博物馆、p24 浣花溪公园），新增 `backend/data/mock/SOURCES.md` 记录来源与容量缺口；README 4.5 同步。
 
 ## Git 存档
 - `675c72b`：`整改：默认快速规划并限制多Agent成本`
@@ -49,12 +53,15 @@
 - `verify_peer_success.py`：通过（五角色 24 次调用/6 回合/总价 5700/8000，评审上限升级 restart/stop）。
 - `verify_peer_remediation.py`：通过（空响应/超时/预算异常/证据/Writer/分片 checkpoint/API 中断→恢复→stop）。
 - `verify_peer_runtime.py`、`verify_event_contract.py`：通过。
+- `verify_budget_cancel.py`：通过（不发送 max_tokens、旧配置迁移、取消登记/接口/流中途取消）。
+- `verify_timeline.py`、frontend `npm.cmd run build`：通过。
+- `verify_graph.py`：1 条失败为改动前既有（规则图 revision 断言），已在 HEAD 干净 worktree 复现，与本次改动无关。
 - 服务重启、健康接口、配置接口、最新静态资源 `index-Dvt-jbjM.js`：通过。
 
 ## 下一步（新窗口优先）
-1. 真实模型验收前不要自行调用外部模型；先用 `verify_peer_success.py`、`verify_peer_remediation.py` 做回归。
-2. 实现跨中断累计调用/耗时账本、checkpoint 分片保留/清理策略与体积观测。
-3. 重启既有服务后用浏览器确认中断/恢复、run_needs_input 与设置说明；无关截图、运行日志和媒体仍不得加入提交。
+1. 重启 :8848 服务（当前进程仍是旧代码），在浏览器确认取消按钮、长输出不再被 1400 截断。
+2. 需要长行程时继续扩充同城市景点：成都老人可用候选约 22 条，10 天以上仍会耗尽；扩到 40+ 才能排满 14 天。
+3. 真实模型下验证取消时延（请求返回后才生效）与供应商是否返回 usage；跨中断累计调用账本仍未实现。
 
 ## 未完成/风险
 - peer 架构整改正在进行：计划文档 `docs/peer-agent-remediation-plan.md`；本轮已完成 P0 API 中断、异常诊断/有限重试、停止终态、任务协议、证据引用、Writer 敏感断言、checkpoint 异步写入与集中调度文档等部分。
@@ -65,5 +72,7 @@
 - 未配置模型时 fast/expert 仍是规则降级路径；配置有效模型后三种模式均走 Agent 引擎。
 - 旧 `verify_peer_agents.py` 仍引用废弃的 intake/flight_scout/planner/budget_critic 角色名，需要迁移到当前角色协议后才能作为完整回归脚本。
 - 深度 peer 模式仍有消息协议和返工复杂度，虽然已有硬上限；Agent 的 `wake` 不是实际调度器输入，系统定位为集中式依赖调度。
-- 运行级 token 目前以供应商 usage 为准；未返回 usage 时只能展示字符回退值。
+- 运行级 token 目前以供应商 usage 为准；未返回 usage 时只能展示字符回退值。单次输出已不设应用侧上限，长输出风险由总时长与请求额度约束。
+- 取消是协作式的：线程里的 urllib 请求无法被强杀，取消在下一个节点/请求返回后生效；已保存的 checkpoint 仍可能被 resume 接口复用。
+- mock 数据容量：成都老人可用候选约 22 条，5 天够用、7 天接近上限、10 天以上排不满；来源与近似字段见 `backend/data/mock/SOURCES.md`。
 - 工作区还有未提交的无关截图、运行日志和动画媒体，不能误加入提交。

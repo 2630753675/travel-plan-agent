@@ -27,3 +27,8 @@
 - 新增 `verify_peer_success.py`，脚本化五角色跑通完整成功路径：24 次调用（orchestrator 2 / logistics 5 / local_expert 10 / critic 5 / writer 2）、6 个 Agent 回合、总价 5700/8000、产出批准文档；并验证评审上限后升级为用户 restart/stop。
 - 该测试发现并修复两个真实缺陷：1) 主控无工具却必须提供证据——改为专业交付把 evidence_ids 随消息和任务状态转交主控引用；2) 中断恢复后主控看不到待返工问题——改为在提示中显式渲染 `待返工问题`。
 - 2026-11-17 文档同步：README 补齐事件类型（含 `run_needs_input` 等）、终态载荷、设置项（模型请求数/Agent 回合数/输出上限/上限 80）、`max_tokens` 实际行为、验收状态与证据；补充证据引用/转交、恢复待返工、升级类型与 `accept_risk` 禁用、`GET /api/run` 状态、检查点分片与恢复段预算限制。整改计划补“执行状态”表。STATE 更新重启 PID、前端资源 `index-Dvt-jbjM.js`、已保存配置 8/10 与新增回归结果。
+- 2026-11-17 方案 B 整改：模型请求不再发送 `max_tokens`，`max_output_tokens` 标记废弃并在 `settings.load/merge_incoming` 迁移为 `None`（旧库 1400 不再生效）；保留请求数、Agent 回合、单回合工具步数、复审轮次、总时长边界；用量继续按供应商 usage/字符数记录。新增 `app/cancellation.py`（threading.Event 协作式取消）与 `POST /api/plan/{id}/cancel`；`LLMClient` 在请求前后检查取消，`_run_graph` 在节点边界检查并返回 `run_needs_input`（`recovery_status=cancelled`、DB 状态 `cancelled`）；前端运行区新增“取消本次运行”，刷新可恢复 cancelled 终态。
+- 新增 `backend/scripts/verify_budget_cancel.py`（29 项）覆盖：不发送 max_tokens、旧配置迁移、取消登记、取消后不发请求、流中途取消、取消接口 404/200、build 接受取消标记。
+- 数据审计：实测成都老人同行候选 19→22，5 天排 10 个景点不变，7 天 16 个，10 天以上候选耗尽。联网核对 3 个场馆后新增 p22 成都市天府美术馆、p23 四川大学博物馆（周末闭馆、30 元）、p24 浣花溪公园；无法核实开放时间的成都自然博物馆未写入。新增 `backend/data/mock/SOURCES.md` 记录来源、核对日期、近似字段与容量缺口；README 4.5 与限制章节同步。
+- 验证：backend compileall、frontend `npm.cmd run build`、`verify_budget_cancel.py`、`verify_peer_success.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、`verify_timeline.py` 通过；`verify_graph.py` 仅剩 1 条**改动前已存在**的规则图断言失败（“达到轮次上限后放行 revision=1”，已在 HEAD 干净 worktree 复现，与本次改动无关）。
+- 未做：未重启 :8848 现有服务（仍是 12:41 启动的旧进程，需重启才加载新代码）；未在真实模型上验证取消时延与长输出；未扩充到能排满 14 天。
