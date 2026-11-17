@@ -23,6 +23,10 @@ class LLMError(Exception):
     """调用失败、超时或输出不可解析。调用方必须降级。"""
 
 
+class ModelCallBudgetExceeded(LLMError):
+    """本次运行的供应商请求额度已耗尽。"""
+
+
 class TokenBudget:
     """粗略的字符级预算，用于防止单次规划失控。"""
 
@@ -81,7 +85,7 @@ class LLMClient:
 
     def _reserve_call(self) -> None:
         if self.max_calls is not None and self.calls >= self.max_calls:
-            raise LLMError(f"已达到本次运行模型调用上限 {self.max_calls}")
+            raise ModelCallBudgetExceeded(f"已达到本次运行模型调用上限 {self.max_calls}")
         self.calls += 1
 
     def stats(self) -> dict:
@@ -249,6 +253,8 @@ class LLMClient:
             raise LLMError("响应结构不符合 OpenAI 兼容格式") from e
 
         content = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or ""
+        finish_reason = choice.get("finish_reason")
         calls = []
         for raw in message.get("tool_calls") or []:
             fn = raw.get("function") or {}
@@ -263,7 +269,11 @@ class LLMClient:
             calls.append({"id": raw.get("id") or name, "name": name, "arguments": args})
 
         if not content.strip() and not calls:
-            raise LLMError("模型既没有输出内容也没有调用工具")
+            if finish_reason == "length":
+                raise LLMError(f"工具调用响应被截断：max_tokens={output_limit} 不足")
+            if reasoning:
+                raise LLMError(f"模型只返回 reasoning_content，未返回答案或工具调用（finish_reason={finish_reason}）")
+            raise LLMError(f"模型未返回内容或工具调用（finish_reason={finish_reason or 'unknown'}）")
 
         self.output_chars += len(content) + len(json.dumps(calls, ensure_ascii=False))
         if self.budget:

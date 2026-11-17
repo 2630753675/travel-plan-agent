@@ -59,6 +59,9 @@ class TripState(TypedDict, total=False):
     team_tasks: dict
     blocked: bool
     peer_finalize_feedback: str
+    peer_issue_codes: list[str]
+    peer_stopped: bool
+    peer_stop_reason: str
     llm_stats: dict
     log: Annotated[list[LogEntry], operator.add]
     errors: Annotated[list[str], operator.add]

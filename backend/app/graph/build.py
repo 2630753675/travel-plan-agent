@@ -12,6 +12,7 @@ planner 收到全部四路结果后才开始排程。
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from uuid import uuid4
 
@@ -309,13 +310,15 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         selected_mode = "expert"
     # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"
     enable_interrupt = checkpointer is not None
-    # fast/expert 都走受控规则图；只有显式 peer 才启动五角色团队。
-    # legacy 保留旧协商图，仅用于历史轨迹兼容，不作为默认路径。
-    peer_mode = settings.llm.configured and selected_mode == "peer"
-    fast_mode = selected_mode == "fast"
+    # 配置了模型时，三种模式都进入同一 Agent 消息引擎；模式只控制协作预算。
+    # legacy 保留旧规则图，仅用于历史轨迹兼容，不作为默认路径。
+    peer_mode = settings.llm.configured and selected_mode in {"fast", "expert", "peer"}
+    fast_mode = selected_mode == "fast" and not peer_mode
     mode_call_limit = {
-        "fast": 1,
-        "expert": min(3, settings.orchestration.max_model_calls),
+        # 一个完整轻量团队至少需要主控、两位专业 Agent、Critic 和 Writer 的回合；
+        # 仍受用户配置的运行级上限约束，触顶时由 Agent 升级为待确认而非伪造完成。
+        "fast": settings.orchestration.max_model_calls,
+        "expert": settings.orchestration.max_model_calls,
         "peer": settings.orchestration.max_model_calls,
     }.get(selected_mode, 1)
     shared_llm = (
@@ -648,6 +651,10 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         })
         # 预算/体验评审是 Agent；这里是确定性的硬约束 Workflow，合并结果并决定路由。
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
+
+    async def fast_planner_node(state: TripState) -> dict:
+        """快速路径只生成行程，不构造专家评审 proposal/message。"""
+        return await planner_node(state)
 
     async def fast_review_node(state: TripState) -> dict:
         """快速路径只运行确定性硬约束校验，不调用模型评审或协商。"""
@@ -996,6 +1003,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                     "tool": payload.get("tool"),
                     "status": "success" if payload.get("ok") else "error",
                     "summary": payload.get("summary", ""),
+                    "evidence_id": payload.get("evidence_id"),
                     "tool_call_id": _peer_tool_ids.get(agent) or uuid4().hex,
                 }
             )
@@ -1026,8 +1034,11 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             source=source,
             client=client,
             emit=_peer_emit,
-            max_rounds=max(1, settings.orchestration.max_revisions),
-            max_turns=min(settings.orchestration.max_agent_turns, settings.orchestration.max_model_calls),
+            max_rounds={"fast": 1, "expert": max(1, settings.orchestration.max_revisions), "peer": max(1, settings.orchestration.max_revisions)}.get(selected_mode, 1),
+            max_turns=min(
+                settings.orchestration.max_agent_turns,
+                {"fast": 8, "expert": 12, "peer": settings.orchestration.max_agent_turns}.get(selected_mode, 1),
+            ),
             resume=state.get("peer_state"),
             user_answer=state.get("peer_answer") or "",
             finalize_feedback=str(state.get("peer_finalize_feedback") or ""),
@@ -1049,6 +1060,13 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         }
         if result.escalation:
             updates["peer_question"] = result.escalation
+            updates["peer_stopped"] = False
+            updates["peer_stop_reason"] = ""
+            return updates
+        if result.stopped:
+            updates["peer_question"] = None
+            updates["peer_stopped"] = True
+            updates["peer_stop_reason"] = result.stop_reason
             return updates
         if result.blocked:
             updates["blocked"] = True
@@ -1081,23 +1099,28 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         answer = interrupt(
             {
                 "kind": "peer_review_risk",
-                "type": "peer_escalation",
+                "type": q.get("type") or "peer_escalation",
                 "question": q.get("question") or "需要你确认一件事",
                 "from": q.get("from"),
                 "options": q.get("options") or [],
+                "issue_codes": list(q.get("issue_codes") or []),
             }
         )
         if isinstance(answer, dict):
             decision = str(answer.get("decision") or "")
             issue_codes = answer.get("accepted_issue_codes") or []
             accepted = set(issue_codes) if isinstance(issue_codes, list) else set()
-            question = (state.get("peer_question") or {}).get("question", "")
+            question_data = state.get("peer_question") or {}
+            question = question_data.get("question", "")
             if decision == "accept_risk" and not accepted:
                 raise ValueError("接受评审风险时必须明确接受的 issue code")
+            if decision == "accept_risk" and set(accepted) & set(question_data.get("issue_codes") or []):
+                raise ValueError("确定性硬约束 blocker 不允许通过 accept_risk 绕过；请继续修正或停止")
             answer_text = json.dumps(
                 {"kind": answer.get("kind", "peer_review_risk"), "decision": decision,
                  "accepted_issue_codes": sorted(str(code) for code in accepted),
-                 "note": str(answer.get("note") or ""), "question": question},
+                 "note": str(answer.get("note") or ""), "question": question,
+                 "issue_codes": list(question_data.get("issue_codes") or [])},
                 ensure_ascii=False,
             )
         else:
@@ -1137,37 +1160,52 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                 "suggestions": critique.suggestions,
             }
         )
-        feedback = "；".join(i.message for i in critique.issues if i.severity == "blocker")
+        blockers = [i for i in critique.issues if i.severity == "blocker"]
+        feedback = "；".join(f"[{i.code}] {i.message}" for i in blockers)
         if not critique.passed and feedback:
             _emit({"phase": "peer_finalize_feedback", "text": feedback})
+        next_revision = int(state.get("revision", 0)) + 1
+        unresolved = bool(not critique.passed and next_revision >= max_revisions)
         return {
             "critique": critique,
-            "revision": int(state.get("revision", 0)) + 1,
+            "revision": next_revision,
             "peer_finalize_feedback": feedback if not critique.passed else "",
+            "peer_issue_codes": [i.code for i in critique.issues],
+            "peer_question": {
+                "from": "critic_agent",
+                "question": (
+                    f"硬约束复核仍未通过（{feedback}），不能把当前方案标记为可交付。"
+                    "Agent 已达到本次返工上限；请选择停止并保留问题清单，或调整预算/需求后重新发起规划。"
+                ),
+                "type": "hard_constraint_unresolved",
+                "issue_codes": [i.code for i in critique.issues if i.severity == "blocker"],
+                "options": [
+                    {"value": "stop", "label": "停止并保留问题清单"},
+                    {"value": "restart", "label": "调整需求后重新规划"},
+                ],
+            } if unresolved and enable_interrupt else None,
             "llm_stats": shared_llm.stats() if shared_llm else {},
         }
 
     def route_after_peer(state: TripState) -> str:
+        if state.get("peer_stopped"):
+            return END
         return "peer_ask" if state.get("peer_question") else "peer_finalize"
 
     def route_after_peer_finalize(state: TripState) -> str:
         draft = state.get("draft")
         critique = state.get("critique")
-        brief = state["brief"]
         if draft is None or critique is None:
             return END
         if not critique.passed:
-            if state.get("revision", 0) + 1 >= max_revisions:
+            if state.get("peer_question"):
+                return "peer_ask"
+            if state.get("revision", 0) >= max_revisions:
                 return END
             return "peer_run"
         approved = state.get("approved_version")
         if approved is None or approved != state.get("peer_state", {}).get("context", {}).get("plan_version"):
             return END
-        over_ratio = (
-            (draft.total_cost - brief.budget_total) / brief.budget_total if brief.budget_total else 0
-        )
-        if enable_interrupt and over_ratio > 0.2 and not state.get("decision"):
-            return "confirm"
         return END
 
     def wrap(name: str, fn):
@@ -1216,7 +1254,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         g.add_conditional_edges(
             "peer_run",
             route_after_peer,
-            {"peer_ask": "peer_ask", "peer_finalize": "peer_finalize"},
+            {END: END, "peer_ask": "peer_ask", "peer_finalize": "peer_finalize"},
         )
         g.add_edge("peer_ask", "peer_run")
         peer_targets: dict = {END: END, "peer_run": "peer_run"}
@@ -1233,7 +1271,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     # fast 使用最小图：并行查事实 -> 一次选景点/排程 -> 一次硬校验。
     if fast_mode:
-        g.add_node("fast_planner", wrap("planner", planner_node))
+        g.add_node("fast_planner", wrap("fast_planner", fast_planner_node))
         g.add_node("fast_review", wrap("critic", fast_review_node))
         for name in ("transport", "lodging", "poi", "weather"):
             g.add_node(name, wrap(name, {"transport": transport_node, "lodging": lodging_node, "poi": poi_node, "weather": weather_node}[name]))

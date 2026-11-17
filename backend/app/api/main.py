@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import traceback
 from datetime import date
 from pathlib import Path
 
@@ -32,6 +34,8 @@ from ..settings import AppSettings
 from .. import summary
 from ..tools.factory import make_source
 from . import store
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="旅行规划助手", version="0.2.0")
 
@@ -124,6 +128,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     import asyncio
     trace: list[dict] = []
     final: dict = {}
+    snapshot = None
     prior_events = store.list_events(plan_id)
     seq_start = (prior_events[-1]["seq"] + 1) if prior_events else 1
     factory = EventFactory(
@@ -151,18 +156,42 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                 else:
                     final = payload
     except Exception as e:  # 任何未预期异常都要让前端收到，而不是静默断开
-        message = f"规划过程异常：{e}"
-        store.save_run(plan_id, "failed", {"message": message})
-        yield publish(
-            factory.make(
-                "run_failed",
-                actor="system",
-                payload={"plan_id": plan_id, "message": message},
-            )
-        )
+        error_type = type(e).__name__
+        detail = str(e).strip() or "未提供异常消息"
+        message = f"规划过程异常（{error_type}）：{detail}"
+        logger.exception("Planning stream failed: run_id=%s", plan_id)
+        error_traceback = traceback.format_exc()
+        error_snapshot = None
+        try:
+            error_snapshot = await graph.aget_state(config)
+        except Exception:
+            logger.exception("Failed to read graph state after error: run_id=%s", plan_id)
+        values = error_snapshot.values if error_snapshot is not None else {}
+        stats = final.get("llm_stats") or values.get("llm_stats") or {}
+        payload = {
+            "plan_id": plan_id,
+            "message": message,
+            "error_type": error_type,
+            "llm_stats": stats,
+            "recovery_status": "resumable" if error_snapshot is not None and bool(error_snapshot.next) else "non_resumable",
+        }
+        store.save_run(plan_id, "failed", {**payload, "traceback": error_traceback})
+        yield publish(factory.make("run_failed", actor="system", payload=payload))
         return
 
-    snapshot = await graph.aget_state(config)
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception as e:
+        error_type = type(e).__name__
+        detail = str(e).strip() or "未提供异常消息"
+        message = f"读取运行状态失败（{error_type}）：{detail}"
+        logger.exception("Failed to read graph state after stream: run_id=%s", plan_id)
+        payload = {"plan_id": plan_id, "message": message, "error_type": error_type}
+        store.save_run(plan_id, "failed_non_resumable", payload)
+        yield publish(factory.make("run_failed", actor="system", payload=payload))
+        return
+
+    stats = final.get("llm_stats") or (snapshot.values.get("llm_stats") if snapshot.values else {}) or {}
     pending = [i for task in (snapshot.tasks or []) for i in task.interrupts]
     if pending:
         info = dict(pending[0].value or {})
@@ -173,7 +202,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
             info["negotiation"] = negotiation.model_dump(mode="json")
         activity = final.get("log") or []
         info["activity"] = [e.model_dump(mode="json") for e in activity]
-        info["llm_stats"] = final.get("llm_stats") or {}
+        info["llm_stats"] = stats
         store.save_run(
             plan_id,
             "interrupted",
@@ -197,10 +226,28 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         )
         return
 
+    if final.get("peer_stopped"):
+        reason = str(final.get("peer_stop_reason") or "本次协作已停止，未形成可验证的完整方案。")
+        issues = [
+            {"code": issue.code, "message": issue.message, "severity": issue.severity}
+            for issue in (final.get("critique").issues if final.get("critique") else [])
+        ]
+        payload = {
+            "plan_id": plan_id,
+            "message": reason,
+            "issues": issues,
+            "llm_stats": stats,
+            "recovery_status": "stopped",
+        }
+        store.save_run(plan_id, "needs_input", payload)
+        yield publish(factory.make("run_needs_input", actor="system", payload=payload))
+        return
+
     if final.get("draft") is None or final.get("critique") is None or final.get("blocked"):
         reasons = final.get("peer_state", {}).get("warnings", [])
         stats = final.get("llm_stats") or {}
-        store.save_run(plan_id, "failed", {"message": "专业团队未产出可交付结果", "reasons": reasons, "llm_stats": stats})
+        payload = {"message": "专业团队未产出可交付结果", "reasons": reasons, "llm_stats": stats, "recovery_status": "non_resumable"}
+        store.save_run(plan_id, "failed_non_resumable", payload)
         yield publish(
             factory.make(
                 "run_failed",
@@ -210,6 +257,7 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                     "message": "专业团队未产出可交付结果",
                     "reasons": reasons,
                     "llm_stats": stats,
+                    "recovery_status": "non_resumable",
                 },
             )
         )
@@ -219,16 +267,14 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
     critique: Critique = final["critique"]
     if not critique.passed:
         blockers = [issue.message for issue in critique.issues if issue.severity == "blocker"]
-        store.save_run(
-            plan_id,
-            "failed",
-            {
-                "message": "终局硬约束未通过，未保存为可交付行程。",
-                "blockers": blockers,
-                "critique": critique.model_dump(mode="json"),
-                "llm_stats": final.get("llm_stats") or {},
-            },
-        )
+        failure_payload = {
+            "message": "终局硬约束未通过，未保存为可交付行程。",
+            "blockers": blockers,
+            "critique": critique.model_dump(mode="json"),
+            "llm_stats": stats,
+            "recovery_status": "non_resumable",
+        }
+        store.save_run(plan_id, "failed_non_resumable", failure_payload)
         yield publish(
             factory.make(
                 "run_failed",
@@ -238,7 +284,8 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
                     "message": "终局硬约束未通过，未保存为可交付行程。",
                     "blockers": blockers,
                     "critique": critique.model_dump(mode="json"),
-                    "llm_stats": final.get("llm_stats") or {},
+                    "llm_stats": stats,
+                    "recovery_status": "non_resumable",
                 },
             )
         )
@@ -249,8 +296,9 @@ async def _run_graph(graph, config: dict, graph_input, plan_id: str, brief: Trip
         if (final.get("approved_version") != context.get("plan_version")
                 or final.get("approved_version") is None or not final.get("document")):
             message = "方案尚未完成版本评审或 Writer 整合，拒绝交付"
-            store.save_run(plan_id, "failed", {"message": message})
-            yield publish(factory.make("run_failed", actor="system", payload={"plan_id": plan_id, "message": message}))
+            failure_payload = {"plan_id": plan_id, "message": message, "llm_stats": stats, "recovery_status": "non_resumable"}
+            store.save_run(plan_id, "failed_non_resumable", failure_payload)
+            yield publish(factory.make("run_failed", actor="system", payload=failure_payload))
             return
     revision = final.get("revision", 0)
     decision = final.get("decision")

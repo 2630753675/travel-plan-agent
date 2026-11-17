@@ -10,9 +10,9 @@ from .tools_spec import ToolContext
 
 CONTRACT = """只输出 JSON 对象：
 {"say":"对团队的结论和依据", "kind":"request|proposal|objection|accept|escalate|final|note",
- "to":[], "wake":[], "done":true, "changes":[], "escalate":null}
+ "to":[], "wake":[], "done":true, "changes":[], "evidence":[], "escalate":null}
 角色代号：orchestrator / logistics / local_expert / critic_agent / writer。
-需要修改就用 objection，changes 列出具体问题；accept 表示没有待修改项。
+需要修改就用 objection，changes 列出具体问题；accept 表示没有待修改项。proposal、objection、accept、final 必须填写 evidence 对象数组，格式为 [{"id":"工具结果返回的 evidence_id"}]；不得自行编造 ID。事实不足时明确写“未核实/待确认”，不得补造事实。
 无法自行协调的取舍用 escalate，并提供 {"question":"问题","options":[{"value":"选择值","label":"选择说明"}]}。
 所有工具错误均是真实失败，必须修正调用或如实报告，不得编造查询结果、预订确认或校验通过。
 """
@@ -47,7 +47,7 @@ ROLES: dict[str, Role] = {
         '数据源没有的酒店房型、楼层、发票、确认号等信息，标为"未核实，需向酒店确认"即可，'
         '不得因此反复要求专业 Agent 核实，也不得为这类数据缺口打断用户。'
         '只有预算与体验取舍、用户硬性条件无法满足时，才向用户申请确认。'
-        '收到所有专业交付后，通知 critic_agent 评审，kind=proposal。'
+        '收到所有专业交付后，通知 critic_agent 评审，kind=proposal；此时 evidence 必须引用专业交付消息 payload.evidence_ids 或任务状态 delivery.evidence_ids 中的真实 id，不得自造。'
         '无法同时满足用户硬条件时申请用户确认，不能擅自放宽预算或人群条件。',
     ),
     "logistics": Role(

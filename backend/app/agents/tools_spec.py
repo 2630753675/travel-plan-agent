@@ -48,6 +48,7 @@ class ToolContext:
     approved_version: int | None = None
     document: dict | None = None
     itinerary_version: int | None = None
+    evidence: dict[str, dict] = field(default_factory=dict)
 
     def poi_map(self) -> dict[str, POI]:
         return {p.id: p for p in self.poi.candidates}

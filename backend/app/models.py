@@ -165,7 +165,7 @@ class RunEvent(BaseModel):
         "run_started", "run_resumed", "stage_started", "agent_started", "agent_message",
         "agent_completed", "agent_resumed", "tool_call", "tool_result", "tool_exchange", "validation_result", "route_decision",
         "user_question", "user_answer", "artifact_created", "run_interrupted",
-        "run_completed", "run_failed",
+        "run_completed", "run_needs_input", "run_failed",
     ]
     stage: str = ""
     actor: str = "system"

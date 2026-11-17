@@ -14,21 +14,26 @@
 - 工作目录：`E:\项目\agent_study\dsh_work2`
 - 后端：`backend`
 - 前端：`frontend`
-- 服务已重启：`http://127.0.0.1:8848`
-- 健康检查：`{"ok":true}`
-- 当前配置：`agent_mode=fast`、`max_runtime_s=180`、`max_model_calls=8`、`max_agent_turns=10`、`max_output_tokens=1400`
+- 服务已于 2026-11-17 14:03 重启：`http://127.0.0.1:8848`（启动器 PID 28920，监听 PID 22268），健康检查 `{"ok":true}`
+- 已保存运行配置基线：`agent_mode=fast`、`max_runtime_s=180`、`max_model_calls=8`、`max_agent_turns=10`、`max_output_tokens=1400`（代码默认值已更新为 40/20，但 SQLite 中已保存配置不会自动迁移；跑 peer 前需在设置页提高请求数）
 - 前端入口：`Cache-Control: no-store`
-- 最新前端资源：`/assets/index-z8KDp3ax.js`
+- 最新前端资源：`/assets/index-Dvt-jbjM.js`
 
 ## 已完成
-1. 默认快速模式 `fast`，专家模式 `expert`，深度团队 `peer` 显式启用。
-2. 新增最小快速图：并行查询交通/住宿/景点/天气，快速 Planner 一次排程，确定性 Critic 一次校验；fast 图不含 `peer_run`。
-3. 运行级上限：模型请求数、Agent 回合、单次输出、总运行时长；共享 `LLMClient` 计数，重排不重置。
-4. LLM 计量：调用次数、输入/输出字符、等待时间；若兼容接口返回 usage，则记录 prompt/completion/total tokens，否则明确标记供应商未提供。
-5. 前端显示运行模型用量和等待时间。
-6. 用户确认请求支持 `kind/decision/accepted_issue_codes/note`，兼容旧字符串。
-7. 失败/中断持久化、固定事件工具、机场接驳校验、返程日移除无意义 `rest` 时间项等之前整改已保留。
-8. README 已同步三种模式、运行上限、时间线责任和确认规则。
+1. 配置有效模型时，`fast`、`expert`、`peer` 三种模式统一进入 `hub.run_session` Agent 消息引擎；差异仅为协作预算，未配置模型时明确走规则降级。
+2. Agent 关键 proposal/objection/accept/final 必须引用本会话工具结果的 `evidence_id`，或明确标注未核实/待确认；主控无工具时引用专业交付转交的 `evidence_ids`。
+3. Agent 会话在回合失败、请求额度耗尽或事实不足时升级为用户确认，保留可恢复会话；用户 stop/restart 返回 `run_needs_input` 终态。
+4. peer 会话保留真实工具、消息、返工、版本和 Writer 协议；综述复审上限只给 restart/stop，`accept_risk` 已禁用。
+5. fast 图改用独立 `fast_planner`，不生成 proposal/message 协作链；expert/legacy 的 reviewer 协议保持不变。
+6. 失败/中断/完成路径统一传递 `llm_stats`；运行状态区分 `interrupted`、`needs_input`、`failed`、`failed_non_resumable`，异常事件带 `error_type` 与服务端 traceback。
+7. 前端失败与中断状态展示运行用量，刷新可识别上述新状态，可恢复失败不显示“重新规划”替代恢复提示。
+8. 新增最小快速图：并行查询交通/住宿/景点/天气，快速 Planner 一次排程，确定性 Critic 一次校验；fast 图不含 `peer_run`。
+9. 运行级上限：模型请求数与 Agent 回合分离计数，另有单次输出和总运行时长；共享 `LLMClient` 计数，重排不重置。
+10. LLM 计量：调用次数、输入/输出字符、等待时间；若兼容接口返回 usage，则记录 prompt/completion/total tokens，否则明确标记供应商未提供。
+11. 前端显示运行模型用量和等待时间。
+12. 用户确认请求支持 `kind/decision/accepted_issue_codes/note`，兼容旧字符串。
+13. 失败/中断持久化、固定事件工具、机场接驳校验、返程日移除无意义 `rest` 时间项等之前整改已保留。
+14. checkpoint 兼容旧单文件、新写入按 thread_id 分片；README 已同步事件契约、预算语义、协议、检查点与验收状态。
 
 ## Git 存档
 - `675c72b`：`整改：默认快速规划并限制多Agent成本`
@@ -41,18 +46,24 @@
 - 默认 fast 图结构：通过，包含 `fast_planner/fast_review`，不含 `peer_run`。
 - 完整 fast 图合成数据执行：通过，硬校验通过，返程日无 `rest` 项。
 - 模型调用上限确定性测试：通过。
-- 服务重启、健康接口、配置接口、最新静态资源：通过。
+- `verify_peer_success.py`：通过（五角色 24 次调用/6 回合/总价 5700/8000，评审上限升级 restart/stop）。
+- `verify_peer_remediation.py`：通过（空响应/超时/预算异常/证据/Writer/分片 checkpoint/API 中断→恢复→stop）。
+- `verify_peer_runtime.py`、`verify_event_contract.py`：通过。
+- 服务重启、健康接口、配置接口、最新静态资源 `index-Dvt-jbjM.js`：通过。
 
 ## 下一步（新窗口优先）
-1. 先读本文件、`DECISIONS.md`、`WORK.md`，再运行 `git status --short` 和最新编译/构建核验。
-2. 审查快速图的 `planner_node` 是否仍生成非必要 Agent proposal；若 fast 不需要，继续删除/隔离纯展示消息和旧 reviewer 节点。
-3. 补齐运行计量在失败/中断事件中的前端展示，并确认 `llm_stats` 在所有路径传递一致。
-4. 细化 `checkpoint_lost`、`failed_non_resumable` 等运行状态，避免记录显示可恢复但 checkpoint 不存在。
-5. 做真实模型验收前，不要自行调用外部模型；只做 mock/monkeypatch 确定性测试。
+1. 真实模型验收前不要自行调用外部模型；先用 `verify_peer_success.py`、`verify_peer_remediation.py` 做回归。
+2. 实现跨中断累计调用/耗时账本、checkpoint 分片保留/清理策略与体积观测。
+3. 重启既有服务后用浏览器确认中断/恢复、run_needs_input 与设置说明；无关截图、运行日志和媒体仍不得加入提交。
 
 ## 未完成/风险
+- peer 架构整改正在进行：计划文档 `docs/peer-agent-remediation-plan.md`；本轮已完成 P0 API 中断、异常诊断/有限重试、停止终态、任务协议、证据引用、Writer 敏感断言、checkpoint 异步写入与集中调度文档等部分。
+- 五角色成功路径已用脚本化模型验证（24 次调用、6 回合、总价 5700/8000）；评审上限升级为用户 restart/stop 已验证。恢复段仍会重新获得调用/时间预算，尚无跨恢复累计账本。
+- checkpoint 已改为按 thread_id 分片（旧文件只读兼容、删除 tombstone、异步线程事务），真实 `aput_writes` 并发通过；尚无分片保留/清理策略与体积观测。
+- Writer 的敏感断言扫描不是通用事实校验，不能替代结构化事实生成。
 - 未真实验证供应商 usage 字段和真实 token 账单。
-- 专家模式仍复用受控规则图，不是完整的 2-3 Agent 专家团队。
-- 深度 peer 模式仍有消息协议和返工复杂度，虽然已有硬上限。
+- 未配置模型时 fast/expert 仍是规则降级路径；配置有效模型后三种模式均走 Agent 引擎。
+- 旧 `verify_peer_agents.py` 仍引用废弃的 intake/flight_scout/planner/budget_critic 角色名，需要迁移到当前角色协议后才能作为完整回归脚本。
+- 深度 peer 模式仍有消息协议和返工复杂度，虽然已有硬上限；Agent 的 `wake` 不是实际调度器输入，系统定位为集中式依赖调度。
 - 运行级 token 目前以供应商 usage 为准；未返回 usage 时只能展示字符回退值。
 - 工作区还有未提交的无关截图、运行日志和动画媒体，不能误加入提交。

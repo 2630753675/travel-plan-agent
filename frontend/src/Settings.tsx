@@ -216,7 +216,7 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
                   <input
                     type="number"
                     min={1}
-                    max={40}
+                    max={80}
                     value={s.orchestration.max_model_calls}
                     onChange={(e) => patch('orchestration', { max_model_calls: Number(e.target.value) })}
                   />
@@ -224,13 +224,13 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
               </div>
               <div className="row">
                 <label>
-                  最大校验轮次
+                  最大 Agent 回合数
                   <input
                     type="number"
                     min={1}
-                    max={8}
-                    value={s.orchestration.max_revisions}
-                    onChange={(e) => patch('orchestration', { max_revisions: Number(e.target.value) })}
+                    max={40}
+                    value={s.orchestration.max_agent_turns}
+                    onChange={(e) => patch('orchestration', { max_agent_turns: Number(e.target.value) })}
                   />
                 </label>
                 <label>
@@ -245,9 +245,9 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
                 </label>
               </div>
               <p className="cfg-hint">
-                快速模式最多 1 次模型请求；专家模式最多 3 次；深度团队最多 {s.orchestration.max_model_calls} 次。
-                单次运行最长 {s.orchestration.max_runtime_s} 秒，单次输出最多 {s.orchestration.max_output_tokens} token。
-                累计 token 不作为无限运行许可，达到任一上限立即停止并报告原因。
+                当前 peer 深度团队最多使用 {s.orchestration.max_model_calls} 次供应商请求、{s.orchestration.max_agent_turns} 个 Agent 回合。
+                两种预算分别计数；工具调用也会消耗供应商请求额度。单次运行最长 {s.orchestration.max_runtime_s} 秒，单次输出最多 {s.orchestration.max_output_tokens} token。
+                达到任一上限会暂停并说明实际原因；请求额度不足时可提高设置后恢复，不会自动扩大费用上限。
               </p>
             </section>
 

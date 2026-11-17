@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -29,7 +30,9 @@ class AgentTurn:
     decision: dict = field(default_factory=dict)
     tool_calls: list[str] = field(default_factory=list)
     error: str | None = None
+    error_type: str | None = None
     history: list[dict] = field(default_factory=list)
+    evidence_ids: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -104,6 +107,12 @@ def _validate_decision(decision: dict) -> None:
             raise ValueError("提供 escalate 对象时 kind 必须为 escalate")
     if kind == "accept" and any(decision.get(key) for key in ("changes", "requested_changes")):
         raise ValueError("changes 或 requested_changes 非空时不能 accept，请修改 kind 后重新回复")
+    if kind in {"proposal", "objection", "accept", "final"}:
+        evidence = decision.get("evidence")
+        if evidence is not None and (not isinstance(evidence, list) or any(not isinstance(item, dict) for item in evidence)):
+            raise ValueError("关键结论的 evidence 必须是对象数组")
+        if not evidence and not any(marker in decision.get("say", "") for marker in ("未核实", "待确认", "数据源没有", "无法验证")):
+            raise ValueError("关键结论必须提供 evidence 引用，或明确标记事实未核实/待确认")
 
 
 async def run_turn(
@@ -132,12 +141,25 @@ async def run_turn(
     schemas = tools_spec.schemas_for(tools)
     allowed_tools = set(tools) & {schema["function"]["name"] for schema in schemas}
     used: list[str] = []
+    evidence_ids: list[str] = []
 
+    transient_markers = ("未返回内容或工具调用", "请求超时", "HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "无法连接")
     for _ in range(max_steps):
-        try:
-            resp = await client.chat_tools(messages, schemas)
-        except LLMError as e:
-            return AgentTurn(error=f"{e}", tool_calls=used, history=messages)
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = await client.chat_tools(messages, schemas)
+                break
+            except (LLMError, TimeoutError, asyncio.TimeoutError) as e:
+                transient = isinstance(e, (TimeoutError, asyncio.TimeoutError)) or any(
+                    marker in str(e) for marker in transient_markers
+                )
+                if transient and attempt == 0:
+                    emit("retry", agent=agent, reason=str(e) or type(e).__name__, attempt=1)
+                    continue
+                return AgentTurn(error=f"{type(e).__name__}: {str(e).strip() or '未提供异常消息'}", error_type=type(e).__name__, tool_calls=used, history=messages)
+        if resp is None:
+            return AgentTurn(error="模型重试后仍无响应", error_type="LLMError", tool_calls=used, history=messages)
 
         calls = resp.get("tool_calls") or []
         if calls:
@@ -151,12 +173,26 @@ async def run_turn(
                     result = {"ok": False, "error": "工具参数必须是 JSON 对象"}
                 else:
                     result = tools_spec.execute(ctx, call["name"], call["arguments"])
+                if result.get("ok"):
+                    from uuid import uuid4
+                    evidence_id = uuid4().hex
+                    evidence = {
+                        "evidence_id": evidence_id,
+                        "agent": agent,
+                        "tool": call["name"],
+                        "arguments": call["arguments"],
+                        "result": deepcopy(result),
+                    }
+                    ctx.evidence[evidence_id] = evidence
+                    evidence_ids.append(evidence_id)
+                    result = {**result, "evidence_id": evidence_id}
                 emit(
                     "tool_result",
                     agent=agent,
                     tool=call["name"],
                     ok=bool(result.get("ok")),
                     summary=_summarize_result(result),
+                    evidence_id=result.get("evidence_id"),
                 )
                 messages.append(
                     {
@@ -172,19 +208,31 @@ async def run_turn(
         try:
             decision = _parse_decision(content)
             _validate_decision(decision)
+            evidence = decision.get("evidence") or []
+            if evidence and (
+                not isinstance(evidence, list)
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or item["id"] not in ctx.evidence
+                    for item in evidence
+                )
+            ):
+                raise ValueError("evidence 必须引用本会话工具成功结果中的 evidence_id")
         except ValueError as e:
             messages.append({
                 "role": "user",
                 "content": (
                     f"上条回复未遵守协作协议：{e}。"
                     "顶层必须含 kind、say、to、wake、done、escalate；"
-                    "changes 或 requested_changes 非空时不能 accept。"
+                    "changes 或 requested_changes 非空时不能 accept；"
+                    "关键结论的 evidence 必须是 [{\"id\":\"工具返回的 evidence_id\"}]，事实不足则明确标记待确认。"
                     "请重新只输出符合约定的 JSON 对象。"
                 ),
             })
             continue
         emit("say", agent=agent, text=content)
-        return AgentTurn(content=content, decision=decision, tool_calls=used, history=messages)
+        return AgentTurn(content=content, decision=decision, tool_calls=used, history=messages, evidence_ids=evidence_ids)
 
     return AgentTurn(
         error=f"回合超过 {max_steps} 步仍未给出结论",

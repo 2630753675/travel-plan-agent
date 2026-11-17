@@ -80,13 +80,15 @@ Writer 只能读取已批准版本，调用 `get_plan` 后生成标题、总览�
 
 系统不再让每个请求默认进入五角色长循环。模式由主表单的 `planning_mode` 选择，默认是 `fast`：
 
-- `fast`（默认快速规划）：确定性查询、排程和校验，最多一次模型请求用于景点选择；模型失败时明确回落规则结果。
-- `expert`（专家模式）：快速规划基础上允许有限模型选择和一次受控修订，最多 3 次模型请求。
-- `peer`（深度团队）：显式启用的 Orchestrator/Logistics/Local Expert/Critic/Writer 团队，最多 `max_model_calls` 次模型请求，适合多城市、多约束或需要独立争议评审的任务。
+- `fast`（默认快速规划）：使用同一 Agent 消息引擎的轻量会话，优先完成交通住宿、本地体验、事实核查和交付；限制回合与复审次数以控制延迟。
+- `expert`（专家模式）：使用同一 Agent 消息引擎，允许更多返工和独立评审，适合预算、节奏、人群等约束冲突。
+- `peer`（深度团队）：显式启用的 Orchestrator/Logistics/Local Expert/Critic/Writer 深度团队，采用集中式任务依赖调度；Agent 负责任务内容、工具选择和专业取舍，代码负责任务顺序、权限、版本、硬约束和运行预算。
 
-所有模式共享运行级保护：默认最长 180 秒、深度团队最多 10 个 Agent 回合、单次输出默认最多 1400 token。达到任一上限即停止并报告原因，不继续无上限讨论。`agent_mode` 全局配置只作为默认值；请求中的 `planning_mode` 优先。
+三种模式都是真实 Agent 会话；模式差异是协作预算，不是“工作流模式”和“Agent 模式”的二分。查询工具只提供事实，Agent 通过消息自主分工、提议、质疑、返工和升级。确定性排程、费用计算和硬约束校验只作为工具与安全边界。
 
-没有有效模型时，fast/expert 使用确定性查询、规划、规则评审和硬约束校验，不伪造 Agent 对话。
+所有模式共享运行级保护：默认最长 180 秒、单次输出默认最多 1400 token。达到回合或模型调用上限时，Agent 必须升级为待确认状态，不能伪造完成；事实不足时必须标明未核实/待确认，不能编造。`agent_mode` 全局配置只作为默认值；请求中的 `planning_mode` 优先。
+
+没有有效模型时，系统只能明确使用规则降级路径，不伪造 Agent 对话；配置模型后，三种模式都进入 Agent 消息引擎。
 ## 2. 目录
 
 ```
@@ -152,15 +154,15 @@ $env:PYTHONPATH=(Get-Location).Path
 
 ### 4.1 任务与交付状态
 
-专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文和方案版本。
+专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式；`critic_agent` 是评审角色，不能被声明为交付任务负责人。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文、服务端 evidence 目录和方案版本。`wake` 是 Agent 的协作意图/事件元数据，实际出场顺序由代码集中式调度器按 DAG 和消息决定，并不表示自主并行抢占。
 
 ### 4.2 循环、成本与交付边界
 
 `plan_version` 记录专业选择变更；`itinerary_version` 表示当前时间表由哪个版本生成；`approved_version` 表示 Critic 批准的版本。版本不一致不能交付。
 
-默认 fast 模式不启动多 Agent 团队，最多调用一次模型；expert 最多 3 次；peer 深度团队最多 `max_model_calls` 次。每次运行还有最长时限和 Agent 回合上限，模型客户端共享同一个调用计数器，重排不会重置计数。
+peer 深度团队受两个独立硬上限约束：`max_model_calls` 限制供应商请求总数（包括工具调用轮次），`max_agent_turns` 限制 Agent 交接回合；另有 `max_runtime_s` 和单次输出 token 上限。回合失败、请求额度耗尽、复审到上限会升级为可操作的用户确认；运行超时或输出被截断则以明确错误结束本次运行，不伪装成功，也不会静默扩充费用额度。服务端请求计数由共享客户端统计；中断恢复会创建新的运行段，因此 UI/事件须结合恢复记录看待分段用量。
 
-复审达到上限时转为请示用户（再改一轮 / 接受风险出稿），不把草案静默当成最终结果。失败与中断会写入 `runs` 表，刷新后仍能看到原因或继续确认。
+复审达到上限时转为请示用户（继续返工 / 停止并保留问题清单），不允许绕过确定性硬约束出稿。模型空响应、超时和瞬时供应商错误会有限重试；仍失败时按真实原因升级。失败、中断和未完成终态会写入 `runs` 表，刷新后仍能看到原因或继续确认。
 
 ### 4.3 失败与"查无结果"必须区分
 
@@ -234,11 +236,13 @@ $env:PYTHONPATH=(Get-Location).Path
 | `seq` | run 内严格递增，用于稳定排序与断点续读 |
 | `parent_id` | 因果链：`tool_result` 指向 `tool_call`，`agent_started` 指向所属 `stage_started` |
 | `stage` / `actor` | 阶段与身份 |
-| `event_type` | `run_started` / `stage_started` / `agent_started` / `agent_message` / `tool_call` / `tool_result` / `validation_result` / `route_decision` / `user_question` / `user_answer` / `run_interrupted` / `run_completed` / `run_failed` |
+| `event_type` | `run_started` / `run_resumed` / `stage_started` / `agent_started` / `agent_message` / `agent_completed` / `agent_resumed` / `tool_call` / `tool_result` / `tool_exchange` / `validation_result` / `route_decision` / `user_question` / `user_answer` / `artifact_created` / `run_interrupted` / `run_completed` / `run_needs_input` / `run_failed` |
 | `payload` | 结构化数据；展示文案不再充当协议字段 |
 
-SSE 只有一种事件名 `run_event`，用 `payload.event_type` 区分语义，
-终态事件自带载荷（`run_completed.payload.result`、`run_interrupted.payload.interrupt`），
+SSE 只有一种事件名 `run_event`，用 `payload.event_type` 区分语义。
+终态事件自带载荷：`run_completed.payload.result`、`run_interrupted.payload.interrupt`、
+`run_needs_input.payload.{message,issues}`（用户停止或要求调整需求后重新规划）、
+`run_failed.payload.{message,error_type,blockers,reasons,recovery_status}`。
 前端不需要再拼装三个端点。
 
 回放：`GET /api/plan/{id}/events?after_seq=N` 返回游标之后的事件，
@@ -396,7 +400,7 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 | 分组 | 配置项 | 说明 |
 |---|---|---|
 | 模型连接 | 启用开关、base_url、model、api_key、temperature | OpenAI 兼容协议，DeepSeek / OpenAI / Kimi 只换 base_url |
-| 编排参数 | 最大校验轮次、节点超时、历史 token 预算字段 | 专业团队复审次数使用 `max(1, max_revisions - 1)`；`token_budget` 仅兼容旧路径，专业团队不使用 |
+| 编排参数 | 运行时长（默认 180 秒）、模型请求数（默认 40，上限 80）、Agent 回合数（默认 20）、复审轮次、节点超时、单次输出上限（默认 1400 token）、历史 token 预算字段 | `max_model_calls` 统计供应商请求（含工具调用轮次），`max_agent_turns` 统计 Agent 交接回合，两者独立计数；`token_budget` 仅兼容旧路径，专业团队不使用。已保存的旧配置不会被代码默认值覆盖，需要时在界面调整 |
 | 数据源 | mock / HTTP | HTTP 适配器已实现，本机无真实接口，未实测 |
 
 存储与安全约定：
@@ -413,12 +417,13 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 
 - 各 Agent 自主选择其职责内工具；主控不承担专业查询，Critic 与 Writer 无专业写入权限。
 - 时间轴、费用与硬约束由确定性工具验证；Critic 的语义评审仍不可省略。
-- 专业团队模型超时、报错或协议无法纠正时返回失败，不自动冒充 Agent 生成规则结果。
-- 专业团队不设置累计 token 消耗上限，也不传 `max_tokens`；供应商上下文/响应上限仍由供应商决定。
+- 专业团队模型超时、空响应或瞬时供应商错误会有限重试一次（计入请求额度），仍失败时按真实原因升级，不自动冒充 Agent 生成规则结果。
+- 每次模型请求都会传 `max_tokens`（默认 1400，可在设置调整）；被截断时返回明确错误，不把半截 JSON 当作有效回复。
+- 单次运行只统计本运行段的请求数与耗时；中断恢复会开始新的运行段，目前没有跨恢复累计账本。
 
 ## 7. 验收交接（由用户执行）
 
-本次重构按用户要求不运行模型验收或回归测试。此前旧架构的“26/26 通过”不代表五角色专业团队通过验收，不应作为当前完成证据。
+本次没有调用真实模型做验收，也没有重启服务后的浏览器验收；但已运行确定性回归：`verify_peer_success.py`（脚本化五角色成功路径与评审上限升级）、`verify_peer_remediation.py`（空响应/超时/预算异常/证据引用/Writer/checkpoint/API 中断与停止）、`verify_peer_runtime.py`、`verify_event_contract.py`，以及后端编译和前端构建。此前旧架构的“26/26 通过”不代表五角色专业团队通过验收，不应作为当前完成证据。
 
 建议使用界面提交一份真实需求，检查以下交付事实：
 
@@ -435,7 +440,7 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 
 ### 真实模型验收入口
 
-先在界面设置保存有效模型密钥；密钥不要放进代码、聊天或日志。当前专业团队运行不设置累计 token 预算，也不传应用层 `max_tokens`；网络超时、单回合工具步数和复审次数仍用于故障保护。
+先在界面设置保存有效模型密钥；密钥不要放进代码、聊天或日志。当前专业团队运行不设置累计 token 预算，但每次请求会传 `max_tokens`（默认 1400）；网络超时、单回合工具步数、请求额度与复审次数用于故障保护。
 
 ```powershell
 cd backend
@@ -444,7 +449,7 @@ cd backend
 
 这个入口使用当前 FastAPI 应用、当前配置模型和当前数据源，涵盖请求、LangGraph、SSE、持久化与回读；它使用进程内 HTTP 客户端，不验证浏览器和外部网络监听。它会产生真实模型费用并保存运行记录；本次未执行。
 
-旧版 `verify_peer_agents.py`、`verify_peer_runtime.py`、`verify_negotiation*` 与 `_legacy_llm.py` 是历史验收夹具，不适用于新五角色协议；部分会启动脚本模型或修改配置，**不要用于真实体验验收，不要在使用真实密钥的应用库上运行**。历史脚本的适配不在本次交付范围。
+`verify_peer_agents.py`、`verify_negotiation*` 与 `_legacy_llm.py` 仍是历史验收夹具，不适用于新五角色协议；部分会启动脚本模型或修改配置，**不要用于真实体验验收，不要在使用真实密钥的应用库上运行**。`verify_peer_runtime.py` 已迁移到当前角色协议；`verify_peer_remediation.py` 覆盖中断恢复、停止终态、空响应/超时、证据引用、Writer 检查与 checkpoint 并发；`verify_peer_success.py` 用脚本化五角色模型跑通完整成功路径（24 次调用、6 个 Agent 回合），并验证评审上限后的用户升级。
 
 ## 8. 团队协议与产品接口
 
@@ -456,14 +461,18 @@ cd backend
 - 主控返工：`rework:[{task_id,reason}]`，依赖任务同时失效。
 - Critic 接受：`kind=accept`、空 `changes`、`approved_version` 等于待审版本，并且硬校验通过。
 - Writer 完成：`kind=final`，附 `document:{title,overview,days:[{date,summary}],practical_notes}`。
+- **证据**：proposal / objection / accept / final 必须引用本会话工具成功结果里的 `evidence_id`（`evidence:[{"id":"..."}]`），否则该角色被要求重答；服务端只登记真实工具结果，不接受自造 ID。
+- **证据转交**：专业交付把 `evidence_ids` 写入消息载荷和任务状态 `delivery.evidence_ids`，主控提交评审时引用这些 ID（主控本身没有工具）。
+- **恢复上下文**：中断恢复后若仍有待返工问题，主控提示会显式带出 `待返工问题`，必须逐项 `rework` 后才能再次送审。
+- **升级类型**：`agent_turn_failed`（回合失败）、`model_call_budget_exhausted`（请求额度耗尽）、`review_rounds_exhausted`（复审到上限）、`hard_constraint_unresolved`（硬约束未解决）。用户选择 `continue` 继续、`stop` 停止、`restart` 调整需求后重新规划。
 
-每个角色都有独立模型历史与工具白名单；越权工具调用返回工具错误，不执行。非法 JSON 或协议回复会要求同一角色修正，不替模型补造交付。
+每个角色都有独立模型历史与工具白名单；越权工具调用返回工具错误，不执行。非法 JSON 或协议回复会要求同一角色修正，不替模型补造交付。`accept_risk` 在后端被禁用：确定性 blocker 不能被用户选择绕过。
 
 `POST /api/plan` 与 `/resume` 仍使用 `run_event` SSE。专业团队完成结果额外包含 `document`、`team_tasks`、`approved_version`。任务表只展示负责人、状态与返工次数，不把模型私有历史发送到结果页。事件保留真实 `message_id`、`reply_to`、所有收件人及结构化消息载荷。
 
 `GET /api/plan/{id}` 从现有 trace 保存的团队交付条目恢复计划书；只有条目中的行程与当前行程完全相同才显示，避免重排后显示旧文案。失败/中断另存于新增的 `runs` 表，不改变既有 `plans` 结构。
 
-`GET /api/run/{id}` 返回失败/中断运行摘要（`status`、`interrupt`、`reasons`），页面刷新后据此恢复确认面板或显示具体失败原因。
+`GET /api/run/{id}` 返回运行摘要：`status` 可能是 `interrupted`、`needs_input`（用户停止或要求调整需求）、`failed`、`failed_non_resumable`；载荷含 `interrupt`、`message`、`issues`、`error_type`、`recovery_status`。页面刷新后据此恢复确认面板、显示未完成状态或具体失败原因。
 
 ## 9. 已知限制与验收状态
 
@@ -473,6 +482,7 @@ cd backend
 - 当前数据源是允许保留的旅行静态快照，价格、天气和余票不保证实时；未接实际预订、高铁、点评或小红书接口，也未实现 VLM 与应急 Agent。
 - Writer 文案由模型生成，结构化航班、酒店、日程和费用始终以获批工具数据为准；文案事实准确性需用户验收。
 - 既有单日重排入口仍为历史功能，不自动执行新的五角色完整复审；重排后不沿用旧 Writer 文案或批准版本。
-- 达到工具循环、团队回合或复审上限时阻止草案交付；这些是循环保护，不是 token 用量限制。
-- checkpoint 是单文件快照，适用于单进程服务；专业团队改版前的旧 checkpoint 不支持直接恢复。
+- 达到工具循环、团队回合、请求额度或复审上限时不会静默交付：回合失败升级为可重试确认，请求额度耗尽提示先提高设置，复审上限让用户选择重新规划或停止并保留问题清单。
+- 恢复后会开始新的运行段，请求数与耗时重新计数；目前没有跨恢复累计账本，也没有 checkpoint 分片清理策略和体积观测。
+- checkpoint 兼容读取旧的单文件 `checkpoints.pkl`，新写入按 thread_id 落到 `checkpoints.pkl.d/*.pkl` 分片：单次写入只序列化当前线程，异步写入在工作线程完成并原子替换。仍只适用于单进程服务，分片目录需要与主文件一起备份；专业团队改版前的旧 checkpoint 不支持直接恢复为团队会话。
 - 历史规则/legacy 分支及历史验收脚本未在本次重新验收，不能引用旧通过率作为新版本质量结论。

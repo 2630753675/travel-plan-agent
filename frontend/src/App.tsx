@@ -84,6 +84,19 @@ type TeamTask = {
   rework?: string[]
 }
 
+type LlmStats = {
+  calls?: number
+  max_calls?: number | null
+  input_chars?: number
+  output_chars?: number
+  latency_ms?: number
+  usage_available?: boolean
+  usage_calls?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
+}
+
 type Result = {
   plan_id: string
   brief: { destination: string; origin: string; budget_total: number }
@@ -105,18 +118,7 @@ type Result = {
   document?: TeamDocument | null
   team_tasks?: Record<string, TeamTask>
   approved_version?: number | null
-  llm_stats?: {
-    calls?: number
-    max_calls?: number | null
-    input_chars?: number
-    output_chars?: number
-    latency_ms?: number
-    usage_available?: boolean
-    usage_calls?: number
-    prompt_tokens?: number
-    completion_tokens?: number
-    total_tokens?: number
-  }
+  llm_stats?: LlmStats
   share?: string
 }
 
@@ -145,6 +147,20 @@ const COST_COLOR: Record<string, string> = {
   meal: 'var(--cost-3)',
   sight: 'var(--cost-4)',
   other: 'var(--cost-5)',
+}
+
+function RunUsage({ stats }: { stats?: LlmStats }) {
+  if (!stats || stats.calls === undefined) return null
+  return (
+    <div className="run-usage" role="status">
+      <strong>本次模型用量</strong>
+      <span>{stats.calls} 次请求{stats.max_calls ? ` / 上限 ${stats.max_calls}` : ''}</span>
+      <span>{stats.usage_available
+        ? `供应商报告 ${stats.total_tokens ?? 0} tokens（输入 ${stats.prompt_tokens ?? 0} / 输出 ${stats.completion_tokens ?? 0}）`
+        : `供应商未返回 token usage；输入/输出 ${stats.input_chars ?? 0}/${stats.output_chars ?? 0} 字符`}</span>
+      <span>模型等待 {(Math.max(0, stats.latency_ms ?? 0) / 1000).toFixed(1)} 秒</span>
+    </div>
+  )
 }
 
 function CostBreakdown({ summary }: { summary: Summary }) {
@@ -775,10 +791,12 @@ type InterruptInfo = {
 
 export default function App() {
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
-  const [phase, setPhase] = useState<'form' | 'running' | 'interrupt' | 'done' | 'error'>('form')
+  const [phase, setPhase] = useState<'form' | 'running' | 'interrupt' | 'done' | 'error' | 'stopped'>('form')
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
+  const [errorStats, setErrorStats] = useState<LlmStats | undefined>()
+  const [recoveryStatus, setRecoveryStatus] = useState<string | undefined>()
   const [refining, setRefining] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<string, string>>({})
   const [refineNote, setRefineNote] = useState<Record<string, string>>({})
@@ -824,8 +842,10 @@ export default function App() {
         return apiFetch(`/api/run/${id}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
       })
       .then((rec) => {
-        if (rec?.status === 'interrupted' || rec?.status === 'failed') {
+        if (rec?.status === 'interrupted' || rec?.status === 'failed' || rec?.status === 'failed_non_resumable' || rec?.status === 'checkpoint_lost' || rec?.status === 'needs_input') {
           const payload = rec.payload ?? {}
+          setErrorStats(payload.llm_stats as LlmStats | undefined)
+          setRecoveryStatus(payload.recovery_status)
           if (rec.status === 'interrupted') {
             const info = { ...(payload.interrupt ?? {}), plan_id: rec.run_id } as InterruptInfo
             setInterruptInfo(info)
@@ -836,9 +856,10 @@ export default function App() {
               String(payload.message ?? '规划失败'),
               ...(Array.isArray(payload.blockers) ? payload.blockers : []),
               ...(Array.isArray(payload.reasons) ? payload.reasons : []),
+              ...(Array.isArray(payload.issues) ? payload.issues.map((i: any) => i?.message ?? '') : []),
             ].filter(Boolean).join('\n')
             setError(text)
-            setPhase('error')
+            setPhase(rec.status === 'needs_input' ? 'stopped' : 'error')
           }
           return
         }
@@ -896,6 +917,8 @@ export default function App() {
         }
       } else if (ev.event_type === 'run_interrupted') {
         setInterruptInfo((ev.payload?.interrupt ?? null) as InterruptInfo | null)
+        setErrorStats((ev.payload?.interrupt?.llm_stats ?? undefined) as LlmStats | undefined)
+        setRecoveryStatus('resumable')
         setPhase('interrupt')
         const pid = ev.payload?.plan_id ?? ev.payload?.interrupt?.plan_id
         if (pid) {
@@ -903,7 +926,24 @@ export default function App() {
           url.searchParams.set('plan', pid)
           history.replaceState(null, '', url)
         }
+      } else if (ev.event_type === 'run_needs_input') {
+        setErrorStats(ev.payload?.llm_stats as LlmStats | undefined)
+        setRecoveryStatus('stopped')
+        const reason = [
+          String(ev.payload?.message ?? '本次运行未完成'),
+          ...(Array.isArray(ev.payload?.issues) ? ev.payload.issues.map((i: any) => i?.message ?? '') : []),
+        ].filter(Boolean).join('\n')
+        setError(reason)
+        setPhase('stopped')
+        const pid = ev.payload?.plan_id
+        if (pid) {
+          const url = new URL(location.href)
+          url.searchParams.set('plan', pid)
+          history.replaceState(null, '', url)
+        }
       } else if (ev.event_type === 'run_failed') {
+        setErrorStats(ev.payload?.llm_stats as LlmStats | undefined)
+        setRecoveryStatus(ev.payload?.recovery_status)
         const reason = [
           String(ev.payload?.message ?? '规划失败'),
           ...(Array.isArray(ev.payload?.blockers) ? ev.payload.blockers : []),
@@ -1131,6 +1171,7 @@ export default function App() {
             {phase === 'running' && `执行中 ${doneCount}/7`}
             {phase === 'interrupt' && '等待你的决定'}
             {phase === 'done' && (result?.critique.passed ? '已完成' : '已完成 · 有未解项')}
+            {phase === 'stopped' && '未完成 · 待调整需求'}
             {phase === 'error' && '失败'}
           </div>
           <button
@@ -1323,9 +1364,27 @@ export default function App() {
           {error && (
             <div className="alert">
               <span>{error}</span>
-              <button className="ghost" onClick={runPlan} disabled={phase === 'running'}>
-                用同样的需求重试
-              </button>
+              {phase === 'stopped' ? (
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setPhase('form')
+                    setError('')
+                    setErrorStats(undefined)
+                    setRecoveryStatus(undefined)
+                    setInterruptInfo(null)
+                  }}
+                >
+                  调整需求后重新规划
+                </button>
+              ) : recoveryStatus !== 'resumable' ? (
+                <button className="ghost" onClick={runPlan} disabled={phase === 'running'}>
+                  用同样的需求重试
+                </button>
+              ) : (
+                <span>当前运行仍可从检查点恢复。</span>
+              )}
+              <RunUsage stats={errorStats} />
             </div>
           )}
 
@@ -1352,19 +1411,25 @@ export default function App() {
             <section className="interrupt">
               <div className="interrupt-head">
                 <h3>
-                  {interruptInfo.type === 'peer_escalation'
-                    ? '团队需要你确认'
-                    : interruptInfo.type === 'negotiation_deadlock'
-                      ? '预算和体验谈不拢，需要你定方向'
-                      : '预算超支，需要你决定'}
+                  {interruptInfo.type === 'agent_turn_failed'
+                    ? 'Agent 回合需要重试'
+                    : interruptInfo.type === 'model_call_budget_exhausted'
+                      ? '模型请求额度已用尽'
+                      : interruptInfo.type === 'hard_constraint_unresolved'
+                        ? '硬约束尚未解决'
+                        : interruptInfo.type === 'peer_escalation'
+                          ? 'Agent 团队需要你确认'
+                          : interruptInfo.type === 'negotiation_deadlock'
+                            ? '预算和体验谈不拢，需要你定方向'
+                            : '预算超支，需要你决定'}
                 </h3>
                 {typeof interruptInfo.ratio === 'number' && (
                   <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
                 )}
               </div>
-              {interruptInfo.type === 'peer_escalation' && (
+              {['peer_escalation', 'agent_turn_failed', 'model_call_budget_exhausted', 'hard_constraint_unresolved'].includes(interruptInfo.type) && (
                 <p className="interrupt-body">
-                  <strong>{interruptInfo.question ?? '团队遇到需要你决定的问题'}</strong>
+                  <strong>{interruptInfo.question ?? 'Agent 团队遇到需要你决定的问题'}</strong>
                   {interruptInfo.from && (
                     <>
                       <br />
@@ -1382,7 +1447,7 @@ export default function App() {
                   你给个倾向，两位会带着这个倾向再谈一轮：
                 </p>
               )}
-              {interruptInfo.type !== 'negotiation_deadlock' && interruptInfo.type !== 'peer_escalation' && (
+              {!['negotiation_deadlock', 'peer_escalation', 'agent_turn_failed', 'model_call_budget_exhausted', 'hard_constraint_unresolved'].includes(interruptInfo.type) && (
                 <p className="interrupt-body">
                   当前方案总花费 <strong>{(interruptInfo.total ?? 0).toFixed(0)}</strong> 元，
                   预算 <strong>{(interruptInfo.budget ?? 0).toFixed(0)}</strong> 元，
@@ -1448,16 +1513,7 @@ export default function App() {
                   </table>
                 </section>
               )}
-              {result.llm_stats && result.llm_stats.calls !== undefined && (
-                <div className="run-usage" role="status">
-                  <strong>本次模型用量</strong>
-                  <span>{result.llm_stats.calls} 次请求{result.llm_stats.max_calls ? ` / 上限 ${result.llm_stats.max_calls}` : ''}</span>
-                  <span>{result.llm_stats.usage_available
-                    ? `供应商报告 ${result.llm_stats.total_tokens ?? 0} tokens（输入 ${result.llm_stats.prompt_tokens ?? 0} / 输出 ${result.llm_stats.completion_tokens ?? 0}）`
-                    : `供应商未返回 token usage；输入/输出 ${result.llm_stats.input_chars ?? 0}/${result.llm_stats.output_chars ?? 0} 字符`}</span>
-                  <span>模型等待 {(Math.max(0, result.llm_stats.latency_ms ?? 0) / 1000).toFixed(1)} 秒</span>
-                </div>
-              )}
+                      <RunUsage stats={result.llm_stats} />
               <div className="stats">
                 <div className="stat">
                   <span className="stat-label">总花费</span>

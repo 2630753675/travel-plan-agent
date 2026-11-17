@@ -49,8 +49,8 @@ class OrchestrationSettings(BaseModel):
     max_revisions: int = Field(default=2, ge=1, le=4, description="快速模式最多 1 次重排；专家模式最多 1 次自动返工")
     node_timeout_s: int = Field(default=45, ge=5, le=180)
     max_runtime_s: int = Field(default=180, ge=30, le=600, description="单次运行最长秒数")
-    max_model_calls: int = Field(default=8, ge=1, le=40, description="单次运行最多模型请求数")
-    max_agent_turns: int = Field(default=10, ge=1, le=40, description="专家团队最多 Agent 回合数")
+    max_model_calls: int = Field(default=40, ge=1, le=80, description="单次运行最多供应商模型请求数，含工具调用轮次")
+    max_agent_turns: int = Field(default=20, ge=1, le=40, description="peer 模式最多 Agent 回合数，与模型请求数分别计数")
     max_output_tokens: int = Field(default=1400, ge=256, le=6000, description="单次模型输出上限")
     # 兼容旧配置，不再作为模型请求预算使用；实际限制由 max_model_calls/max_runtime_s 控制。
     token_budget: int = Field(default=60000, ge=1000, le=2_000_000)

@@ -183,6 +183,9 @@ class EventFactory:
                         "intent": "note",
                         "peer": True,
                         "status": step,
+                        "error": row.get("error"),
+                        "reason": row.get("reason"),
+                        "attempt": row.get("attempt"),
                     },
                 )
             ]
@@ -286,6 +289,7 @@ class EventFactory:
                         "tool_call_id": call_id,
                         "status": row.get("status", "success"),
                         "summary": row.get("summary", ""),
+                        "evidence_id": row.get("evidence_id"),
                     },
                 )
             ]

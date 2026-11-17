@@ -32,6 +32,8 @@ class PeerResult:
     warnings: list[str] = field(default_factory=list)
     trace: list[dict] = field(default_factory=list)
     blocked: bool = False
+    stopped: bool = False
+    stop_reason: str = ""
     session: dict = field(default_factory=dict)
 
 
@@ -50,6 +52,7 @@ def dump_context(ctx: ToolContext) -> dict:
         "itinerary_version": ctx.itinerary_version,
         "approved_version": ctx.approved_version,
         "document": ctx.document,
+        "evidence": ctx.evidence,
     }
 
 
@@ -77,6 +80,7 @@ def _restore_context(brief: TripBrief, source: TravelSource, raw: dict) -> ToolC
     ctx.itinerary_version = raw.get("itinerary_version")
     ctx.approved_version = raw.get("approved_version")
     ctx.document = raw.get("document")
+    ctx.evidence = dict(raw.get("evidence") or {})
     return ctx
 
 
@@ -88,20 +92,30 @@ def _validate_tasks(raw: object) -> dict[str, dict]:
         if not isinstance(item, dict):
             raise ValueError("任务必须是对象")
         tid, owner = str(item.get("id") or ""), item.get("owner")
-        if not tid or tid in tasks or owner not in {"logistics", "local_expert"} or not item.get("goal"):
-            raise ValueError("任务需要唯一 id、专业负责人和具体 goal")
+        if not tid:
+            raise ValueError("任务缺少非空 id")
+        if tid in tasks:
+            raise ValueError(f"任务 id 重复：{tid}")
+        if owner not in {"logistics", "local_expert"}:
+            raise ValueError(f"任务 {tid} 的 owner 必须是 logistics 或 local_expert；critic_agent 是评审角色，不能作为交付任务负责人")
+        if not isinstance(item.get("goal"), str) or not item["goal"].strip():
+            raise ValueError(f"任务 {tid} 缺少具体 goal")
         deps = item.get("depends_on") or []
         if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
-            raise ValueError("depends_on 必须是任务编号数组")
-        tasks[tid] = {"id": tid, "owner": owner, "goal": str(item["goal"]), "depends_on": deps, "status": "pending", "delivery": None, "rework": []}
+            raise ValueError(f"任务 {tid} 的 depends_on 必须是任务编号数组")
+        tasks[tid] = {"id": tid, "owner": owner, "goal": item["goal"].strip(), "depends_on": deps, "status": "pending", "delivery": None, "rework": []}
     if {t["owner"] for t in tasks.values()} != {"logistics", "local_expert"}:
-        raise ValueError("本产品行程必须有交通住宿和本地体验任务")
+        raise ValueError("tasks 必须至少包含一项 logistics 交通住宿任务和一项 local_expert 本地体验任务")
+    for task in tasks.values():
+        unknown = set(task["depends_on"]) - tasks.keys()
+        if unknown:
+            raise ValueError(f"任务 {task['id']} 依赖不存在的任务：{', '.join(sorted(unknown))}")
     remaining = set(tasks)
     resolved = set()
     while remaining:
         ready = {tid for tid in remaining if set(tasks[tid]["depends_on"]) <= resolved}
         if not ready:
-            raise ValueError("任务依赖存在未知编号或循环")
+            raise ValueError("任务依赖存在循环：" + ", ".join(sorted(remaining)))
         remaining -= ready
         resolved |= ready
     for task in tasks.values():
@@ -154,9 +168,25 @@ def _writer_valid(document: object, ctx: ToolContext) -> bool:
     if not isinstance(document, dict) or not document.get("title") or not document.get("overview"):
         return False
     days = document.get("days")
-    return bool(ctx.itinerary and isinstance(days, list)
-                and [d.get("date") for d in days if isinstance(d, dict)] == [str(d.date) for d in ctx.itinerary.days]
-                and all(isinstance(d.get("summary"), str) and d["summary"].strip() for d in days))
+    if not (ctx.itinerary and isinstance(days, list)
+            and [d.get("date") for d in days if isinstance(d, dict)] == [str(d.date) for d in ctx.itinerary.days]
+            and all(isinstance(d.get("summary"), str) and d["summary"].strip() for d in days)):
+        return False
+
+    text_parts = [document["title"], document["overview"]]
+    text_parts.extend(d["summary"] for d in days)
+    notes = document.get("practical_notes") or []
+    if isinstance(notes, str):
+        text_parts.append(notes)
+    elif isinstance(notes, list) and all(isinstance(note, str) for note in notes):
+        text_parts.extend(notes)
+    else:
+        return False
+    text = " ".join(text_parts)
+    unsupported_claims = ("已预订", "已确认", "确认号", "含早餐", "免费取消", "有电梯", "无障碍", "双床房已安排")
+    if any(claim in text and "未核实" not in text and "待确认" not in text for claim in unsupported_claims):
+        return False
+    return True
 
 
 async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClient, emit,
@@ -181,11 +211,15 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
     escalation = None
     converged = False
     blocked = False
-    accepted_risk = False
-    active_task = None
+    stopped_reason = ""
     proposal_id = (resume or {}).get("proposal_id")
     review_version = (resume or {}).get("review_version")
     pending_rejections = list((resume or {}).get("pending_rejections") or [])
+    pending_issue_codes = list((resume or {}).get("pending_issue_codes") or [])
+    pending_agent = (resume or {}).get("pending_agent")
+    pending_task = (resume or {}).get("pending_task")
+    next_agent = "orchestrator"
+    active_task = None
 
     def post(sender, to, kind, text, payload=None, reply_to=None):
         env = bus.post(Envelope(sender=sender, recipients=list(to), kind=kind, content=text,
@@ -206,20 +240,46 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             if task["status"] == "running":
                 task["status"] = "pending"
         if decision == "accept_risk":
-            if not accepted_codes:
-                raise ValueError("接受评审风险时必须指定 issue code")
-            ctx.approved_version = ctx.plan_version
-            ctx.document = None
-            accepted_risk = True
+            raise ValueError("当前版本不允许绕过 Critic objection 或确定性硬约束；请继续返工或停止")
+        elif decision == "continue":
+            # 用户只允许继续协作，不改变任何事实或方案选择。
+            blocked = False
+            if pending_agent:
+                next_agent = pending_agent
+                active_task = pending_task
+                pending_agent = None
+                pending_task = None
+        elif decision in {"stop", "restart"}:
+            # 明确保留未完成状态；不伪造草案，也不把停止误报成系统异常。
+            blocked = True
+            stopped_reason = (
+                "你选择停止，本次协作未形成可验证的完整方案。"
+                if decision == "stop"
+                else "你选择调整需求后重新规划；当前运行到此结束，未生成新方案。"
+            )
         elif decision == "revise":
-            reviews = max(0, reviews - 1)
+            decision = "restart"
+            stopped_reason = "当前运行已达到复审上限；请调整需求或提高相关预算后重新发起规划。"
     if finalize_feedback:
         post("hard_constraint_workflow", ["orchestrator"], "objection", finalize_feedback)
         ctx.approved_version = None
         ctx.document = None
     if not resume:
         post("user", ["orchestrator"], "request", json.dumps(brief.model_dump(mode="json"), ensure_ascii=False))
-    next_agent = "writer" if accepted_risk else "orchestrator"
+    if user_answer and decision in {"stop", "restart"}:
+        session = {
+            "architecture": "professional_team", "bus": bus.to_dict(), "context": dump_context(ctx),
+            "tasks": tasks, "histories": histories, "trace": trace, "turns": turns,
+            "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
+            "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes, "warnings": warnings,
+        }
+        return PeerResult(bus=bus, ctx=ctx, itinerary=None, escalation=None,
+                          converged=False, rounds=reviews, turns=turns, warnings=warnings,
+                          trace=trace, blocked=True, stopped=True,
+                          stop_reason=stopped_reason, session=session)
+    if pending_agent and not user_answer:
+        next_agent = pending_agent
+        active_task = pending_task
 
     def schedule():
         for task in tasks.values():
@@ -239,6 +299,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         prompt = role.prompt(ctx, bus)
         prompt += "\n任务状态：" + json.dumps(tasks, ensure_ascii=False)
         prompt += f"\n当前任务：{active_task}；待审版本：{review_version}；已批准版本：{ctx.approved_version}"
+        if pending_rejections:
+            # 恢复后收件箱可能已空，必须显式带上待返工问题，否则主控只能盲目再次送审。
+            prompt += "\n待返工问题（必须返回 rework 逐项派回责任方）：" + json.dumps(pending_rejections, ensure_ascii=False)
         if agent == "local_expert":
             prompt += "\n交通住宿依赖交付事实：" + json.dumps({
                 "outbound": ctx.transport.chosen_outbound.model_dump(mode="json") if ctx.transport.chosen_outbound else None,
@@ -253,10 +316,31 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         histories[agent] = turn.history
         turns += 1
         trace.append({"agent": agent, "task_id": active_task, "ok": turn.ok, "error": turn.error,
-                      "tools": turn.tool_calls, "decision": turn.decision, "plan_version": ctx.plan_version})
+                      "error_type": turn.error_type, "tools": turn.tool_calls,
+                      "decision": turn.decision, "plan_version": ctx.plan_version})
         if not turn.ok:
-            warnings.append(f"{role.title} 执行失败：{turn.error}")
+            error_text = turn.error or "未提供异常消息"
+            budget_exhausted = turn.error_type == "ModelCallBudgetExceeded"
+            reason = (
+                f"供应商模型请求预算已耗尽（当前上限 {client.max_calls} 次）；"
+                "请先提高设置中的模型请求上限，再选择继续。"
+                if budget_exhausted
+                else f"{role.title} 回合失败：{error_text}"
+            )
+            warnings.append(reason)
+            pending_agent, pending_task = agent, active_task
+            escalation = {
+                "from": agent,
+                "type": "model_call_budget_exhausted" if budget_exhausted else "agent_turn_failed",
+                "question": f"{reason} 事实与方案保持不变；可继续协作，或停止本次规划。",
+                "options": [
+                    {"value": "continue", "label": "提高上限后继续" if budget_exhausted else "重试该 Agent 回合"},
+                    {"value": "stop", "label": "停止并保留未完成状态"},
+                ],
+                "say": reason,
+            }
             emit("turn_failed", agent=agent, error=turn.error)
+            emit("escalated", agent=agent, question=escalation["question"])
             blocked = True
             break
         decision = turn.decision
@@ -307,10 +391,14 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                         ) or "评审仍有未解决项"
                         escalation = {
                             "from": "critic_agent",
-                            "question": f"评审连续 {max_rounds} 轮未通过：{detail}。你希望怎么处理？",
+                            "question": (
+                                f"评审连续 {max_rounds} 轮未通过：{detail}。"
+                                "继续返工会消耗新的回合；也可以停止并保留问题清单。"
+                            ),
+                            "type": "review_rounds_exhausted",
                             "options": [
-                                {"value": "revise", "label": "再调整一轮"},
-                                {"value": "accept_risk", "label": "按当前方案出稿，并标注未解决项"},
+                                {"value": "restart", "label": "调整需求后重新规划"},
+                                {"value": "stop", "label": "停止并保留问题清单"},
                             ],
                             "say": detail,
                         }
@@ -336,9 +424,19 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     continue
                 if not active_task or kind != "proposal" or not _delivery_valid(agent, decision.get("delivery"), ctx, brief):
                     raise ValueError("专业交付必须用 proposal，并且 delivery 与实际工具选择/完整日期一致")
+                # 把专业交付引用的工具证据转交主控，主控提交评审时据此引用，避免无工具角色凭空造证据。
+                delivered_evidence = [
+                    item["id"] for item in decision.get("evidence") or []
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                ]
                 tasks[active_task]["status"] = "delivered"
-                tasks[active_task]["delivery"] = {"version": ctx.plan_version, **decision["delivery"]}
-                post(agent, ["orchestrator"], "proposal", f"任务 {active_task} 已交付", {"task": tasks[active_task]})
+                tasks[active_task]["delivery"] = {
+                    "version": ctx.plan_version,
+                    "evidence_ids": delivered_evidence,
+                    **decision["delivery"],
+                }
+                post(agent, ["orchestrator"], "proposal", f"任务 {active_task} 已交付",
+                     {"task": tasks[active_task], "evidence_ids": delivered_evidence})
                 # 依赖 DAG 已由主控定义，交付后按依赖直接调度下一个任务，
                 # 不再为“批准下一步”额外消耗一轮主控模型调用。
                 next_owner, next_task = schedule()
@@ -379,12 +477,6 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 # Writer 无写工具；最终数值方案始终保持原样，再执行硬校验。
                 if not execute(ctx, "check_plan", {}).get("passed"):
                     raise ValueError("最终硬校验失败，不交付")
-                if accepted_risk:
-                    note = "用户确认接受评审未解决项后出稿，相关风险未消除"
-                    ctx.itinerary.warnings.append(note)
-                    notes = list(ctx.document.get("practical_notes") or [])
-                    ctx.document["practical_notes"] = [note, *notes]
-                    warnings.append(note)
                 converged = True
                 emit("converged", rounds=reviews, turns=turns)
                 break
@@ -398,12 +490,29 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
 
     if not escalation and not converged:
         blocked = True
-        warnings.append("专业团队尚未完成有效评审与整合，不交付草案")
+        detail = "协作回合预算已耗尽，专业团队尚未完成评审与整合"
+        if ctx.itinerary is not None:
+            detail += "；当前草案仍须解决已报告的硬约束问题"
+        else:
+            detail += "；当前没有完整、可验证的行程草案"
+        warnings.append(detail)
+        escalation = {
+            "from": "orchestrator",
+            "question": f"{detail}。请提高本次协作预算后继续，或停止并保留未完成状态。",
+            "options": [
+                {"value": "continue", "label": "继续协作处理"},
+                {"value": "stop", "label": "停止并保留未完成状态"},
+            ],
+            "say": detail,
+        }
+        pending_agent, pending_task = "orchestrator", None
+        emit("escalated", agent="orchestrator", question=escalation["question"])
     session = {
         "architecture": "professional_team", "bus": bus.to_dict(), "context": dump_context(ctx),
         "tasks": tasks, "histories": histories, "trace": trace, "turns": turns,
         "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
-        "pending_rejections": pending_rejections, "warnings": warnings,
+        "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes,
+        "pending_agent": pending_agent, "pending_task": pending_task, "warnings": warnings,
     }
     return PeerResult(bus=bus, ctx=ctx, itinerary=ctx.itinerary if converged else None,
                       escalation=escalation, converged=converged, rounds=reviews, turns=turns,
