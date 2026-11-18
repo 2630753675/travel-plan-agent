@@ -150,7 +150,8 @@ def test_meal_consistency() -> None:
     })
     materialized = execute(ctx, "materialize_plan", {})
     check("排程成功", materialized.get("ok"), str(materialized.get("error")))
-    plan = execute(ctx, "get_plan", {})
+    # 这里断言排程器内部字段（notes / meal_estimate），需要完整视图。
+    plan = execute(ctx, "get_plan", {"view": "full"})
     days = {d["date"]: d for d in plan.get("itinerary", {}).get("days", [])}
     arrival = days.get("2026-11-20", {})
     last = days.get("2026-11-24", {})

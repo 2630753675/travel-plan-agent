@@ -32,8 +32,15 @@ class Role:
     instruction: str
     max_steps: int = 32
 
+    def system_text(self) -> str:
+        """静态部分（角色设定 + 协作契约）放 system，动态内容才进 user 提示。
+
+        契约每轮都一样，放在 system 里既能缩短 user 提示，也让服务端更容易命中前缀缓存。
+        """
+        return f"{self.system}\n{CONTRACT}"
+
     def prompt(self, ctx: ToolContext, bus: Bus) -> str:
-        return f"用户需求：{brief_text(ctx)}\n团队已投递消息：\n{render_bus(bus, self.name, limit=12)}\n你的职责：{self.instruction}\n{CONTRACT}"
+        return f"用户需求：{brief_text(ctx)}\n团队已投递消息：\n{render_bus(bus, self.name, limit=6)}\n你的职责：{self.instruction}"
 
 
 ROLES: dict[str, Role] = {
@@ -96,7 +103,7 @@ ROLES: dict[str, Role] = {
     "writer": Role(
         "writer", "行程整合 Agent", ["get_plan"],
         "你是行程整合与文案专员，只能整理已经通过独立评审与硬校验的版本。不得查询新事实或修改航班、酒店、日期、项目、价格。",
-        '调用 get_plan 读取获批结构化版本，输出 kind=final，额外字段 document 为 {"title":"旅行计划书标题","overview":"简短总览","days":[{"date":"YYYY-MM-DD","summary":"只解释当天已有项目和提示"}],"practical_notes":["来自已知证据的提醒"]}。'
+        '调用 get_plan 读取获批结构化版本（默认 view=summary 已含逐日时间与费用，够写文案；确需原始字段再传 view=full），输出 kind=final，额外字段 document 为 {"title":"旅行计划书标题","overview":"简短总览","days":[{"date":"YYYY-MM-DD","summary":"只解释当天已有项目和提示"}],"practical_notes":["来自已知证据的提醒"]}。'
         '每个日期必须与批准行程完全对应，景点名/航班号/费用以工具事实为准，不新增未验证项目，不写已预订。'
         '没有获批版本必须拒绝整合并通知 orchestrator。',
     ),

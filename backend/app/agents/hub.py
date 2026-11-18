@@ -131,12 +131,12 @@ def _prefetch_summary(agent: str, ctx: ToolContext) -> dict:
                     "arr": row.arr_time.strftime("%H:%M"), "price": row.price,
                     "seats": row.seats_left}
         return {
-            "outbound": [flight(f) for f in ctx.transport.outbound[:4]],
-            "inbound": [flight(f) for f in ctx.transport.inbound[:4]],
+            "outbound": [flight(f) for f in ctx.transport.outbound[:3]],
+            "inbound": [flight(f) for f in ctx.transport.inbound[:3]],
             "hotels": [
                 {"name": h.name, "price": h.price_per_night, "distance_km": h.distance_to_center_km,
-                 "rating": h.rating, "tags": list(h.tags)[:4]}
-                for h in ctx.lodging.candidates[:5]
+                 "tags": list(h.tags)[:3]}
+                for h in ctx.lodging.candidates[:4]
             ],
         }
     if agent == "local_expert":
@@ -144,12 +144,12 @@ def _prefetch_summary(agent: str, ctx: ToolContext) -> dict:
             "pois": [
                 {"id": p.id, "name": p.name, "duration_min": p.duration_min,
                  "open": f"{p.open_time.strftime('%H:%M')}-{p.close_time.strftime('%H:%M')}",
-                 "closed_days": list(p.closed_days), "tags": list(p.tags)[:4]}
-                for p in ctx.poi.candidates[:14]
+                 "tags": list(p.tags)[:3]}
+                for p in ctx.poi.candidates[:8]
             ],
-            "excluded": list(ctx.poi.excluded)[:5],
+            "excluded": list(ctx.poi.excluded)[:3],
             "weather": [
-                {"date": str(w.date), "condition": w.condition, "rainy": w.is_rainy}
+                {"date": str(w.date), "rainy": w.is_rainy}
                 for w in ctx.weather.days
             ],
         }
@@ -683,7 +683,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         # 专业 Agent 只在自己那份上下文里改；主控/评审/文案没有领域写入，直接用共享上下文。
         sandbox_base = ctx.plan_version
         turn_ctx = _sandbox_context(ctx) if agent in SANDBOX_FIELDS else ctx
-        turn = await run_turn(agent=agent, system=role.system, prompt=prompt, tools=role.tools,
+        turn = await run_turn(agent=agent, system=role.system_text(), prompt=prompt, tools=role.tools,
                               ctx=turn_ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
                               history=histories.get(agent), allowed_tools=allowed_repair_tools)
         histories[agent] = turn.history

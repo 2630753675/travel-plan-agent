@@ -425,16 +425,17 @@ def _summarize_result(result: dict) -> str:
     return "完成"
 
 
-def render_bus(bus: Bus, agent: str, limit: int = 12) -> str:
-    """把该 Agent 相关的对话渲染成文本，作为它的上下文。"""
+def render_bus(bus: Bus, agent: str, limit: int = 6, content_limit: int = 180) -> str:
+    """把该 Agent 相关的对话渲染成文本，作为它的上下文。
+
+    只给最近几条、且单条截断：完整消息都在各自历史里，总线的作用是“谁说了什么”。
+    """
     lines: list[str] = []
     for m in bus.messages[-limit:]:
-        if m.sender == agent:
-            who = "你"
-        else:
-            who = m.sender
+        who = "你" if m.sender == agent else m.sender
         to = "、".join(m.recipients) or "所有人"
-        lines.append(f"[{who} → {to}] ({m.kind}) {m.content}")
+        text = m.content if len(m.content) <= content_limit else m.content[:content_limit] + "…"
+        lines.append(f"[{who} → {to}] ({m.kind}) {text}")
         hard_check = (m.payload or {}).get("hard_check")
         if hard_check is not None:
             lines.append("  硬约束检查：" + json.dumps(hard_check, ensure_ascii=False))

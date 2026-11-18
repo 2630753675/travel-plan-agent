@@ -520,22 +520,53 @@ def _check_plan(ctx: ToolContext, args: dict) -> dict:
 def _get_plan(ctx: ToolContext, args: dict) -> dict:
     if ctx.itinerary is None:
         return _err("还没有行程，先调用 materialize_plan")
-    return _ok(
-        plan_version=ctx.plan_version,
-        itinerary_version=ctx.itinerary_version,
-        approved_version=ctx.approved_version,
-        document=ctx.document,
-        itinerary=ctx.itinerary.model_dump(mode="json"),
-        flights={
-            "outbound": ctx.transport.chosen_outbound.model_dump(mode="json") if ctx.transport.chosen_outbound else None,
-            "inbound": ctx.transport.chosen_inbound.model_dump(mode="json") if ctx.transport.chosen_inbound else None,
-        },
-        hotel=next((h.model_dump(mode="json") for h in ctx.lodging.candidates if h.name == ctx.hotel_id), None),
-        assignment={str(d): list(ids) for d, ids in ctx.assignment.items()},
-        fixed_events={str(d): [e.model_dump(mode="json") for e in events] for d, events in ctx.fixed_events.items()},
-        hard_check=ctx.hard_check,
-        total_cost=ctx.itinerary.total_cost,
-    )
+    view = str(args.get("view") or "summary")
+    if view not in {"summary", "full"}:
+        return _err("view 只能是 summary 或 full")
+    base = {
+        "plan_version": ctx.plan_version,
+        "itinerary_version": ctx.itinerary_version,
+        "approved_version": ctx.approved_version,
+        "document": ctx.document,
+        "fixed_events": {str(d): [e.model_dump(mode="json") for e in events] for d, events in ctx.fixed_events.items()},
+        "total_cost": ctx.itinerary.total_cost,
+    }
+    flights = {
+        "outbound": ctx.transport.chosen_outbound.model_dump(mode="json") if ctx.transport.chosen_outbound else None,
+        "inbound": ctx.transport.chosen_inbound.model_dump(mode="json") if ctx.transport.chosen_inbound else None,
+    }
+    hotel = next((h.model_dump(mode="json") for h in ctx.lodging.candidates if h.name == ctx.hotel_id), None)
+    if view == "full":
+        return _ok(
+            **base,
+            itinerary=ctx.itinerary.model_dump(mode="json"),
+            flights=flights,
+            hotel=hotel,
+            assignment={str(d): list(ids) for d, ids in ctx.assignment.items()},
+            hard_check=ctx.hard_check,
+        )
+    # 摘要视图：只给"哪天有什么、花多少"，不给原始模型字段与完整硬校验结构。
+    days = [
+        {
+            "date": str(day.date),
+            "day_cost": round(day.day_cost, 1),
+            "meal_estimate": day.meal_estimate,
+            "notes": list(day.notes or [])[:2],
+            "items": [
+                {
+                    "start": i.start_time.strftime("%H:%M"),
+                    "end": i.end_time.strftime("%H:%M"),
+                    "title": i.title,
+                    "type": i.type,
+                    "cost": round(i.cost, 1),
+                    "ref_id": i.ref_id,
+                }
+                for i in day.items if i.type != "rest"
+            ],
+        }
+        for day in ctx.itinerary.days
+    ]
+    return _ok(**base, days=days, flights=flights, hotel=hotel)
 
 
 def _route_distances(ctx: ToolContext, args: dict) -> dict:
@@ -741,8 +772,11 @@ TOOLS: dict[str, ToolSpec] = {
     ),
     "get_plan": ToolSpec(
         "get_plan",
-        "只读获取当前方案的完整行程、航班、酒店、景点分配、硬约束检查、费用和版本信息",
-        {"type": "object", "properties": {}},
+        "只读获取当前方案。默认 view=summary 返回逐日摘要（时间、项目、费用、固定事件）；"
+        "需要原始模型字段时传 view=full",
+        {"type": "object", "properties": {
+            "view": {"type": "string", "enum": ["summary", "full"], "description": "默认 summary"},
+        }},
         _get_plan,
     ),
     "route_distances": ToolSpec(
