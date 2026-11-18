@@ -309,7 +309,14 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         if pending_rejections:
             # 恢复后收件箱可能已空，必须显式带上待返工问题，否则主控只能盲目再次送审。
             prompt += "\n待返工问题（必须返回 rework 逐项派回责任方）：" + json.dumps(pending_rejections, ensure_ascii=False)
+            scoped = [item for item in pending_rejections if item.get("owner") == agent]
+            if scoped:
+                allowed = sorted({tool for item in scoped for tool in item.get("repair_tools", [])})
+                prompt += "\n本次返工允许的工具（服务端将强制限制）：" + "、".join(allowed)
+        active_task_state = tasks.get(active_task) if active_task else None
         if agent == "local_expert":
+            if active_task_state and active_task_state.get("allowed_repair_tools"):
+                prompt += "\n本次返工强制工具范围：" + json.dumps(active_task_state["allowed_repair_tools"], ensure_ascii=False)
             prompt += "\n交通住宿依赖交付事实：" + json.dumps({
                 "outbound": ctx.transport.chosen_outbound.model_dump(mode="json") if ctx.transport.chosen_outbound else None,
                 "inbound": ctx.transport.chosen_inbound.model_dump(mode="json") if ctx.transport.chosen_inbound else None,
@@ -322,9 +329,14 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             review_packet = (latest_proposal.payload.get("review_packet") if latest_proposal else None)
             prompt += "\n结构化 ReviewPacket（唯一事实来源）：" + json.dumps(review_packet or {}, ensure_ascii=False)
             prompt += "\n当前 Issue Ledger：" + json.dumps(pending_issue_codes, ensure_ascii=False)
+        allowed_repair_tools = (
+            set(active_task_state.get("allowed_repair_tools") or [])
+            if active_task_state and active_task_state.get("allowed_repair_tools") is not None
+            else None
+        )
         turn = await run_turn(agent=agent, system=role.system, prompt=prompt, tools=role.tools,
                               ctx=ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
-                              history=histories.get(agent))
+                              history=histories.get(agent), allowed_tools=allowed_repair_tools)
         histories[agent] = turn.history
         turns += 1
         trace.append({"agent": agent, "task_id": active_task, "ok": turn.ok, "error": turn.error,
@@ -403,6 +415,13 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     owners = {candidate_tasks[tid]["owner"] for tid in affected}
                     if pending_rejections and not {c["owner"] for c in pending_rejections} <= owners:
                         raise ValueError("主控返工遗漏 Critic 指定责任方")
+                    for task in candidate_tasks.values():
+                        if task["owner"] in owners and task["status"] == "pending":
+                            scoped_issues = [item for item in pending_rejections if item["owner"] == task["owner"]]
+                            if scoped_issues:
+                                task["allowed_repair_tools"] = sorted({
+                                    tool for issue in scoped_issues for tool in issue.get("repair_tools", [])
+                                })
                     tasks = candidate_tasks
                     pending_rejections = []
                     ctx.approved_version, ctx.document = None, None
@@ -412,7 +431,13 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     next_agent, active_task = schedule()
                     if active_task is None:
                         raise ValueError("任务无法就绪，检查依赖或先返工失败任务")
-                    post("orchestrator", [next_agent], "request", tasks[active_task]["goal"], {"task": tasks[active_task]})
+                    task = tasks[active_task]
+                    goal = task["goal"]
+                    if task.get("allowed_repair_tools"):
+                        scoped = [item for item in pending_issue_codes if item.get("owner") == next_agent and item.get("status") == "open"]
+                        goal += "\n返工问题与验收：" + json.dumps(scoped, ensure_ascii=False)
+                        goal += "\n只能使用 allowed_repair_tools 指定的工具；修复后必须 materialize_plan 并 check_plan。"
+                    post("orchestrator", [next_agent], "request", goal, {"task": task})
                 else:
                     if reviews >= max_rounds:
                         changes = pending_rejections or []
@@ -492,6 +517,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 if not isinstance(review_packet, dict) or review_packet.get("packet_id") is None:
                     raise ValueError("评审缺少有效 ReviewPacket，必须重新提交评审")
                 check = review_packet.get("hard_check") or {}
+                # Ledger closure is computed from this packet's deterministic issue list before Critic runs.
+                pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
                 if kind == "accept":
                     if decision.get("changes") or decision.get("approved_version") != review_version or not check.get("passed"):
                         raise ValueError("评审接受必须版本一致、没有待办修改且硬约束通过")

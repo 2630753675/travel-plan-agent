@@ -19,7 +19,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.agents import hub, review  # noqa: E402
+from app.agents import hub, review, runtime  # noqa: E402
 from app.models import TripBrief  # noqa: E402
 from app.tools.mock import MockSource  # noqa: E402
 
@@ -177,6 +177,8 @@ class ScriptedTeam:
             })
 
         if role == "local_expert":
+            if "DAY_EMPTY" in prompt_text(messages) and "assign_pois" not in tools:
+                raise AssertionError("DAY_EMPTY 返工未获批 assign_pois 工具")
             if "list_pois" not in used:
                 return tool("list_pois")
             if "get_weather" not in used:
@@ -303,12 +305,12 @@ async def main() -> int:
     packet = {
         "packet_id": "packet-test", "plan_version": 8,
         "hard_check": {"issues": [{
-            "severity": "blocker", "code": "DAY_EMPTY", "day": "2026-11-21",
-            "message": "当天没有景点", "repair_tools": ["assign_pois"],
+            "severity": "blocker", "code": "CLOSED_DAY", "day": "2026-11-21",
+            "message": "成都博物馆当日闭馆", "repair_tools": ["assign_pois"],
         }]},
     }
     ledger = review.make_issue_ledger(packet, [{
-        "code": "DAY_EMPTY", "owner": "local_expert", "acceptance": "当天有合适景点",
+        "code": "CLOSED_DAY", "day": "2026-11-21", "owner": "local_expert", "acceptance": "替换为开放景点",
     }], [])
     check("确定性问题进入 open 账本", len(ledger) == 1 and ledger[0]["status"] == "open")
     try:
@@ -320,16 +322,78 @@ async def main() -> int:
     repeated = review.make_issue_ledger({
         "packet_id": "packet-renewed", "plan_version": 9,
         "hard_check": {"issues": [{
-            "severity": "blocker", "code": "DAY_EMPTY", "day": "2026-11-21",
-            "message": "当天仍没有景点", "repair_tools": ["assign_pois"],
+            "severity": "blocker", "code": "CLOSED_DAY", "day": "2026-11-21",
+            "message": "成都博物馆仍闭馆", "repair_tools": ["assign_pois"],
         }]},
-    }, [{"code": "DAY_EMPTY", "owner": "local_expert", "acceptance": "当天有合适景点"}], ledger)
+    }, [{"code": "CLOSED_DAY", "day": "2026-11-21", "owner": "local_expert", "acceptance": "替换为开放景点"}], ledger)
     check("同一问题跨版本保持 issue_id 和首见版本",
           repeated[0]["issue_id"] == ledger[0]["issue_id"] and repeated[0]["first_seen_version"] == 8)
     closed = review.make_issue_ledger({"packet_id": "packet-next", "plan_version": 10, "hard_check": {"issues": []}}, [], repeated)
     check("问题消失后记录关闭版本", closed[0]["status"] == "closed" and closed[0]["fixed_in_version"] == 10)
 
-    print("\n[3] 评审上限后升级")
+    print("\n[3] 确定性修复工具映射")
+    from app.agents.tools_spec import ToolContext
+    ctx = ToolContext(brief=brief(), source=MockSource())
+    ctx.evidence["ev-test"] = {"evidence_id": "ev-test"}
+
+    class UnauthorizedToolCall:
+        async def chat_tools(self, messages, tools):
+            if not any(m.get("role") == "tool" for m in messages):
+                return tool("set_hotel", hotel_id=HOTEL)
+            return say("note", "ev-test")
+
+    async def test_repair_tool_gate():
+        return await runtime.run_turn(
+            agent="logistics", system="交通住宿专员", prompt="修复 budget issue",
+            tools=["search_hotels", "set_hotel"], ctx=ctx, bus=None,  # type: ignore[arg-type]
+            client=UnauthorizedToolCall(), emit=lambda *_a, **_k: None,
+            allowed_tools={"search_hotels"},
+        )
+
+    gated = await test_repair_tool_gate()
+    tool_messages = [m for m in gated.history if m.get("role") == "tool"]
+    gate_result = json.loads(tool_messages[-1]["content"]) if tool_messages else {}
+    check("未映射的返工工具被运行时拒绝", gate_result.get("ok") is False and "未授权" in gate_result.get("error", ""))
+    check("被拒工具未产生酒店写入", ctx.hotel_id is None)
+
+    print("\n[4] 实际硬校验修复与关闭")
+    repair_ctx = ToolContext(brief=brief(), source=MockSource())
+    from app.agents.review import build_review_packet
+    from app.agents.tools_spec import execute
+    execute(repair_ctx, "search_flights", {})
+    execute(repair_ctx, "set_flights", {"outbound_flight_no": OUTBOUND, "inbound_flight_no": INBOUND})
+    execute(repair_ctx, "search_hotels", {})
+    execute(repair_ctx, "set_hotel", {"hotel_id": HOTEL})
+    execute(repair_ctx, "list_pois", {"include_unsuitable": True})
+    for day, ids in ASSIGNMENT.items():
+        execute(repair_ctx, "assign_pois", {"date": day, "poi_ids": ids})
+    materialized = execute(repair_ctx, "materialize_plan", {})
+    check("修复夹具方案成功落定", materialized.get("ok"))
+    first_transfer = execute(repair_ctx, "add_fixed_event", {
+        "date": "2026-11-24", "title": "送机 1", "start_time": "05:40", "end_time": "07:00", "kind": "airport_transfer",
+    })
+    second_transfer = execute(repair_ctx, "add_fixed_event", {
+        "date": "2026-11-24", "title": "送机 2", "start_time": "07:00", "end_time": "08:20", "kind": "airport_transfer",
+    })
+    duplicate_result = execute(repair_ctx, "materialize_plan", {})
+    issue_packet = build_review_packet(repair_ctx)
+    issue_fact = next((i for i in issue_packet.get("hard_check", {}).get("issues", []) if i["code"] == "AIRPORT_TRANSFER_DUPLICATE"), None)
+    issue_ledger = review.make_issue_ledger(issue_packet, [{
+        "code": "AIRPORT_TRANSFER_DUPLICATE", "day": "2026-11-24", "owner": "local_expert",
+        "acceptance": "返程日只保留一条送机安排",
+    }], [])
+    check("硬校验问题生成 AIRPORT_TRANSFER_DUPLICATE 账本",
+          bool(first_transfer.get("ok") and second_transfer.get("ok") and issue_fact)
+          and issue_ledger[0]["status"] == "open")
+    execute(repair_ctx, "remove_fixed_event", {"event_id": second_transfer.get("event_id")})
+    execute(repair_ctx, "materialize_plan", {})
+    fixed_packet = build_review_packet(repair_ctx)
+    closed_ledger = review.make_issue_ledger(fixed_packet, [], issue_ledger)
+    check("修复后硬校验清除重复送机并关闭账本",
+          not any(i["code"] == "AIRPORT_TRANSFER_DUPLICATE" for i in fixed_packet["hard_check"]["issues"])
+          and closed_ledger[0]["status"] == "closed")
+
+    print("\n[5] 评审上限后升级")
     ok, escalation = await unresolved_conflict_reaches_user(result.session)
     check("评审上限后升级给用户", ok, str(escalation)[:240])
     check("升级说明评审已到上限", "评审" in str(escalation.get("question", "")), str(escalation)[:160])

@@ -88,7 +88,7 @@ ROLES: dict[str, Role] = {
         '检查预算、酒店晚数、航班方向和老人出行时刻、抵达/返程转场、每日强度、闭馆、雨天、项目被静默丢弃及需求偏好。'
         '只有 ReviewPacket 中可验证、且有 repair_tools 的确定性 blocker 可以拒绝交付；主观体验偏好、缺少数据的房型/楼层/发票/确认号只能写入 advisory，不得阻塞或编造事实。'
         '若硬约束没有问题，且 Issue Ledger 无未关闭问题，kind=accept，approved_version 使用当前待审版本号。'
-        '有问题用 kind=objection，approved_version=null，changes 必须为 [{"code":"ReviewPacket 中的 issue code","owner":"映射的责任角色","acceptance":"可由工具/校验器确认的关闭条件"}]，to=["orchestrator"]。'
+        '有问题用 kind=objection，approved_version=null，changes 必须为 [{"code":"ReviewPacket 中的 issue code","day":"问题日期；跨日问题可省略","owner":"映射的责任角色","acceptance":"可由工具/校验器确认的关闭条件"}]，to=["orchestrator"]。'
         '不得创建不在 ReviewPacket 确定性问题中的 blocker；无法映射到数据或修复工具的问题只能作为非阻塞 advisory。',
     ),
     "writer": Role(

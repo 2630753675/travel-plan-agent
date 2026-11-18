@@ -183,6 +183,7 @@ async def run_turn(
     emit: Callable[..., None],
     max_steps: int = DEFAULT_MAX_STEPS,
     history: list[dict] | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> AgentTurn:
     """跑完一个 Agent 回合。
 
@@ -198,7 +199,11 @@ async def run_turn(
         return AgentTurn(error=str(exc), error_type="HistoryCorrupt", history=messages)
     messages.append({"role": "user", "content": prompt})
     schemas = tools_spec.schemas_for(tools)
-    allowed_tools = set(tools) & {schema["function"]["name"] for schema in schemas}
+    role_allowed_tools = set(tools) & {schema["function"]["name"] for schema in schemas}
+    if allowed_tools is not None:
+        role_allowed_tools &= allowed_tools
+        schemas = [schema for schema in schemas if schema["function"]["name"] in role_allowed_tools]
+    allowed_tools = role_allowed_tools
     used: list[str] = []
     evidence_ids: list[str] = []
 
@@ -237,7 +242,8 @@ async def run_turn(
                     # 恢复后同一调用已成功过：复用结果，避免重复写副作用。
                     result = {**deepcopy(prior.get("result") or {}), "replayed": True}
                 elif call["name"] not in allowed_tools:
-                    result = {"ok": False, "error": f"角色 {agent} 无权调用工具：{call['name']}"}
+                    reason = "本次返工未授权此工具" if allowed_tools is not None else f"角色 {agent} 无权调用工具"
+                    result = {"ok": False, "error": f"{reason}：{call['name']}"}
                 elif not isinstance(call["arguments"], dict):
                     result = {"ok": False, "error": "工具参数必须是 JSON 对象"}
                 else:

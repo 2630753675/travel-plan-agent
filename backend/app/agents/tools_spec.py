@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, time
 from typing import Any, Callable
+from uuid import uuid4
 
 from ..models import FixedEvent, Itinerary, POI, TripBrief
 from ..tools.base import SourceError, TravelSource
@@ -27,6 +30,24 @@ from .weather import WeatherPlan
 from .negotiators.tools import day_cost_breakdown, poi_irreplaceability
 
 ELDER_UNFIT = {"老人不宜", "老人慎选", "爬山", "体力消耗大"}
+
+# 每个 blocker 对应的可执行修复工具；Agent 不需要猜“该找谁”。
+REPAIR_HINTS: dict[str, list[str]] = {
+    "AIRPORT_TRANSFER_LATE": ["replace_fixed_event", "remove_fixed_event"],
+    "AIRPORT_TRANSFER_DUPLICATE": ["replace_fixed_event", "remove_fixed_event"],
+    "TIME_OVERLAP": ["replace_fixed_event", "assign_pois"],
+    "MISSED_AIRPORT_DEADLINE": ["replace_fixed_event", "assign_pois"],
+    "OUTSIDE_OPEN_HOURS": ["assign_pois", "replace_fixed_event"],
+    "CLOSED_DAY": ["assign_pois"],
+    "ELDER_UNFIT": ["assign_pois"],
+    "DAY_TOO_LONG": ["assign_pois"],
+    "DAY_EMPTY": ["assign_pois"],
+    "RAIN_OUTDOOR": ["assign_pois"],
+    "BUDGET_EXCEEDED": ["set_hotel", "assign_pois"],
+    "MEAL_BEFORE_ARRIVAL": ["replace_fixed_event"],
+    "MEAL_AFTER_FLIGHT": ["replace_fixed_event"],
+    "MEAL_AFTER_AIRPORT_DEPARTURE": ["replace_fixed_event"],
+}
 
 
 @dataclass
@@ -49,6 +70,10 @@ class ToolContext:
     document: dict | None = None
     itinerary_version: int | None = None
     evidence: dict[str, dict] = field(default_factory=dict)
+    # 工具调用账本：恢复时复用成功操作，避免重复副作用。
+    operations: dict[str, dict] = field(default_factory=dict)
+    # 只读结果缓存：同一次会话内相同参数的查询不重复打数据源。
+    cache: dict[str, Any] = field(default_factory=dict)
 
     def poi_map(self) -> dict[str, POI]:
         return {p.id: p for p in self.poi.candidates}
@@ -168,6 +193,8 @@ def _assign_pois(ctx: ToolContext, args: dict) -> dict:
     unknown = [i for i in ids if i not in valid]
     if unknown:
         return _err(f"不存在的景点 id：{unknown}")
+    if ctx.assignment.get(d) == ids:
+        return _ok(date=str(d), assigned=[valid[i].name for i in ids], plan_version=ctx.plan_version, unchanged=True)
     ctx.assignment[d] = ids
     ctx.plan_version += 1
     ctx.hard_check = None
@@ -206,6 +233,7 @@ def _add_fixed_event(ctx: ToolContext, args: dict) -> dict:
         if start_m < ee and es < end_m:
             return _err(f"与已有固定事件「{event.title}」时间重叠")
     event = FixedEvent(
+        event_id=str(args.get("event_id") or f"fe-{uuid4().hex[:12]}"),
         date=d,
         title=title,
         start_time=start,
@@ -219,7 +247,130 @@ def _add_fixed_event(ctx: ToolContext, args: dict) -> dict:
     ctx.hard_check = None
     ctx.approved_version = None
     ctx.document = None
-    return _ok(date=str(d), title=title, start=start.strftime("%H:%M"), end=end.strftime("%H:%M"), plan_version=ctx.plan_version)
+    return _ok(event_id=event.event_id, date=str(d), title=title, start=start.strftime("%H:%M"), end=end.strftime("%H:%M"), plan_version=ctx.plan_version)
+
+
+def _find_fixed_event(ctx: ToolContext, event_id: str) -> tuple[date, FixedEvent] | None:
+    for d, events in ctx.fixed_events.items():
+        for event in events:
+            if event.event_id == event_id:
+                return d, event
+    return None
+
+
+def _replace_fixed_event(ctx: ToolContext, args: dict) -> dict:
+    event_id = str(args.get("event_id") or "")
+    found = _find_fixed_event(ctx, event_id)
+    if found is None:
+        return _err(f"不存在固定事件：{event_id}")
+    old_date, old = found
+    patch = dict(args.get("event") or {})
+    patch.setdefault("event_id", old.event_id)
+    patch.setdefault("date", str(old.date))
+    patch.setdefault("title", old.title)
+    patch.setdefault("start_time", old.start_time.strftime("%H:%M"))
+    patch.setdefault("end_time", old.end_time.strftime("%H:%M"))
+    patch.setdefault("kind", old.kind)
+    patch.setdefault("note", old.note)
+    try:
+        d = date.fromisoformat(str(patch["date"]))
+        start = time.fromisoformat(str(patch["start_time"]))
+        end = time.fromisoformat(str(patch["end_time"]))
+    except (KeyError, TypeError, ValueError):
+        return _err("替换固定事件需要有效的 date/start_time/end_time")
+    if end <= start or d < ctx.brief.start_date or d > ctx.brief.end_date:
+        return _err("替换固定事件的日期或时间范围无效")
+    kind = str(patch.get("kind") or old.kind)
+    if kind not in {"activity", "airport_transfer"}:
+        return _err("kind 只能是 activity 或 airport_transfer")
+    for event in ctx.fixed_events.get(d, []):
+        if event.event_id == old.event_id:
+            continue
+        if start < event.end_time and event.start_time < end:
+            return _err(f"与已有固定事件「{event.title}」时间重叠")
+    replacement = FixedEvent(
+        event_id=old.event_id, date=d, title=str(patch.get("title") or old.title),
+        start_time=start, end_time=end, kind=kind, note=str(patch.get("note") or old.note),
+    )
+    ctx.fixed_events[old_date] = [e for e in ctx.fixed_events.get(old_date, []) if e.event_id != old.event_id]
+    if not ctx.fixed_events[old_date]:
+        ctx.fixed_events.pop(old_date, None)
+    ctx.fixed_events.setdefault(d, []).append(replacement)
+    ctx.fixed_events[d].sort(key=lambda e: (e.start_time.hour * 60 + e.start_time.minute))
+    ctx.plan_version += 1
+    ctx.hard_check = None
+    ctx.approved_version = None
+    ctx.document = None
+    return _ok(event_id=old.event_id, replaced=True, plan_version=ctx.plan_version,
+               previous=old.model_dump(mode="json"), current=replacement.model_dump(mode="json"))
+
+
+def _remove_fixed_event(ctx: ToolContext, args: dict) -> dict:
+    event_id = str(args.get("event_id") or "")
+    found = _find_fixed_event(ctx, event_id)
+    if found is None:
+        return _err(f"不存在固定事件：{event_id}")
+    d, old = found
+    ctx.fixed_events[d] = [e for e in ctx.fixed_events[d] if e.event_id != event_id]
+    if not ctx.fixed_events[d]:
+        ctx.fixed_events.pop(d, None)
+    ctx.plan_version += 1
+    ctx.hard_check = None
+    ctx.approved_version = None
+    ctx.document = None
+    return _ok(event_id=event_id, removed=True, previous=old.model_dump(mode="json"), plan_version=ctx.plan_version)
+
+
+def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
+    """声明式批量提交多日行程：先全量校验，再原子应用，只递增一次版本。"""
+    items = args.get("days")
+    if not isinstance(items, list) or not items:
+        return _err("days 必须是非空数组，每项包含 date 与 poi_ids")
+    expected = args.get("expected_version")
+    if expected is not None and int(expected) != ctx.plan_version:
+        return _err(f"方案版本冲突：期望 {expected}，当前 {ctx.plan_version}；请重新读取后再提交")
+    valid = ctx.poi_map()
+    staged: dict[date, list[str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            return _err("days 每一项必须是对象")
+        try:
+            d = date.fromisoformat(str(item.get("date") or ""))
+        except ValueError:
+            return _err(f"日期格式不对：{item.get('date')}")
+        if d < ctx.brief.start_date or d > ctx.brief.end_date:
+            return _err(f"{d} 不在行程区间内")
+        ids = [str(i) for i in (item.get("poi_ids") or [])]
+        if len(ids) != len(set(ids)):
+            return _err(f"{d} 的景点 id 有重复")
+        unknown = [i for i in ids if i not in valid]
+        if unknown:
+            return _err(f"不存在的景点 id：{unknown}")
+        closed = [valid[i].name for i in ids if not valid[i].is_open_on(d)]
+        if closed:
+            return _err(f"{d} 闭馆，不能安排：" + "、".join(closed))
+        staged[d] = ids
+    if all(ctx.assignment.get(d) == ids for d, ids in staged.items()):
+        return _ok(
+            plan_version=ctx.plan_version,
+            changed=[],
+            assignment={str(d): list(v) for d, v in ctx.assignment.items()},
+            unchanged=True,
+        )
+    before = {str(d): list(ctx.assignment.get(d, [])) for d in staged}
+    ctx.assignment.update(staged)
+    ctx.plan_version += 1
+    ctx.hard_check = None
+    ctx.approved_version = None
+    ctx.document = None
+    return _ok(
+        plan_version=ctx.plan_version,
+        changed=[
+            {"date": str(d), "before": before[str(d)], "after": list(ids)}
+            for d, ids in staged.items()
+        ],
+        assignment={str(d): list(v) for d, v in ctx.assignment.items()},
+    )
 
 
 def _set_hotel(ctx: ToolContext, args: dict) -> dict:
@@ -227,6 +378,8 @@ def _set_hotel(ctx: ToolContext, args: dict) -> dict:
     names = {h.name for h in ctx.lodging.candidates}
     if name not in names:
         return _err(f"没有这家酒店：{name}")
+    if ctx.hotel_id == name:
+        return _ok(hotel=name, unchanged=True)
     ctx.hotel_id = name
     ctx.plan_version += 1
     ctx.hard_check = None
@@ -243,16 +396,7 @@ def _set_flights(ctx: ToolContext, args: dict) -> dict:
         result = _search_flights(ctx, {})
         if not result.get("ok"):
             return result
-        # _search_flights 暴露候选数据但不落入 typed context
-        try:
-            ctx.transport.outbound = ctx.source.search_flights(
-                ctx.brief.origin, ctx.brief.destination, ctx.brief.start_date
-            )
-            ctx.transport.inbound = ctx.source.search_flights(
-                ctx.brief.destination, ctx.brief.origin, ctx.brief.end_date
-            )
-        except SourceError as e:
-            return _err(str(e))
+        # _search_flights 已经写入 ctx.transport，不再重复请求数据源。
     outbound = next((f for f in ctx.transport.outbound if f.flight_no == outbound_id), None)
     inbound = next((f for f in ctx.transport.inbound if f.flight_no == inbound_id), None)
     if outbound is None or inbound is None:
@@ -262,6 +406,17 @@ def _set_flights(ctx: ToolContext, args: dict) -> dict:
             + "）；inbound_flight_no 必须选返程（"
             + "、".join(f.flight_no for f in ctx.transport.inbound)
             + "）"
+        )
+    if (
+        ctx.transport.chosen_outbound is not None
+        and ctx.transport.chosen_inbound is not None
+        and ctx.transport.chosen_outbound.flight_no == outbound.flight_no
+        and ctx.transport.chosen_inbound.flight_no == inbound.flight_no
+    ):
+        return _ok(
+            outbound={"flight_no": outbound.flight_no, "dep": outbound.dep_time.strftime("%H:%M"), "arr": outbound.arr_time.strftime("%H:%M"), "price": outbound.price},
+            inbound={"flight_no": inbound.flight_no, "dep": inbound.dep_time.strftime("%H:%M"), "arr": inbound.arr_time.strftime("%H:%M"), "price": inbound.price},
+            unchanged=True,
         )
     ctx.transport.chosen_outbound = outbound
     ctx.transport.chosen_inbound = inbound
@@ -280,22 +435,14 @@ def _materialize(ctx: ToolContext, args: dict) -> dict:
     expected_dates = {ctx.brief.start_date.fromordinal(ctx.brief.start_date.toordinal() + i) for i in range(ctx.brief.days)}
     missing_dates = sorted(expected_dates - ctx.assignment.keys())
     if missing_dates:
-        return _err("规划前必须由 Agent 对每个日期调用 assign_pois：" + ", ".join(map(str, missing_dates)))
+        return _err("规划前必须由 Agent 对每个日期提交景点安排（优先 submit_day_plans，也可逐日 assign_pois）：" + ", ".join(map(str, missing_dates)))
     if ctx.brief.days > 1 and not ctx.hotel_id:
         return _err("过夜行程必须由 Agent 通过 set_hotel 选定酒店")
     if not ctx.transport.outbound or not ctx.transport.inbound:
         result = _search_flights(ctx, {})
         if not result.get("ok"):
             return result
-        try:
-            ctx.transport.outbound = ctx.source.search_flights(
-                ctx.brief.origin, ctx.brief.destination, ctx.brief.start_date
-            )
-            ctx.transport.inbound = ctx.source.search_flights(
-                ctx.brief.destination, ctx.brief.origin, ctx.brief.end_date
-            )
-        except SourceError as e:
-            return _err(str(e))
+        # _search_flights 已经写入 ctx.transport，不再重复请求数据源。
     if ctx.transport.chosen_outbound is None or ctx.transport.chosen_inbound is None:
         return _err("规划前必须由 Agent 通过 set_flights 选出去程和返程航班")
 
@@ -322,7 +469,12 @@ def _materialize(ctx: ToolContext, args: dict) -> dict:
         "version": ctx.plan_version,
         "passed": verdict.passed,
         "issues": [
-            {"severity": i.severity, "code": i.code, "message": i.message}
+            {
+                "severity": i.severity,
+                "code": i.code,
+                "message": i.message,
+                "repair_tools": REPAIR_HINTS.get(i.code, []),
+            }
             for i in verdict.issues
         ],
         "suggestions": verdict.suggestions,
@@ -352,7 +504,12 @@ def _check_plan(ctx: ToolContext, args: dict) -> dict:
             "version": ctx.plan_version,
             "passed": verdict.passed,
             "issues": [
-                {"severity": i.severity, "code": i.code, "message": i.message}
+                {
+                    "severity": i.severity,
+                    "code": i.code,
+                    "message": i.message,
+                    "repair_tools": REPAIR_HINTS.get(i.code, []),
+                }
                 for i in verdict.issues
             ],
             "suggestions": verdict.suggestions,
@@ -402,7 +559,16 @@ def _route_distances(ctx: ToolContext, args: dict) -> dict:
         dlat, dlng = lat2 - lat1, radians(poi.lng - hotel.lng)
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlng / 2) ** 2
         distances.append({"poi_id": pid, "name": poi.name, "distance_km": round(6371 * 2 * asin(sqrt(a)), 2), "note": "坐标直线距离估算，不是道路/地图路线"})
-    return _ok(hotel=hotel.name, distances=distances, limitation="仅为坐标直线距离估算，不含道路绕行或交通方式")
+    return _ok(
+        hotel=hotel.name,
+        distances=distances,
+        mode="straight_line",
+        road_data_available=False,
+        limitation=(
+            "仅为坐标直线距离估算，不含道路绕行、步行可行性、车程或车费；"
+            "不得据此声称景点相邻、步行可达或给出步行分钟数"
+        ),
+    )
 
 
 def _day_costs(ctx: ToolContext, args: dict) -> dict:
@@ -498,6 +664,7 @@ TOOLS: dict[str, ToolSpec] = {
         {
             "type": "object",
             "properties": {
+                "event_id": {"type": "string", "description": "可选稳定事件 ID；恢复或重试时复用"},
                 "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
                 "title": {"type": "string", "description": "事件名称"},
                 "start_time": {"type": "string", "description": "开始 HH:MM"},
@@ -508,6 +675,17 @@ TOOLS: dict[str, ToolSpec] = {
             "required": ["date", "title", "start_time", "end_time"],
         },
         _add_fixed_event,
+    ),
+    "replace_fixed_event": ToolSpec(        "replace_fixed_event",
+        "按 event_id 原子替换已有固定事件，适用于修正错误时间；不会删除其他事件",
+        {"type": "object", "properties": {"event_id": {"type": "string"}, "event": {"type": "object"}}, "required": ["event_id", "event"]},
+        _replace_fixed_event,
+    ),
+    "remove_fixed_event": ToolSpec(
+        "remove_fixed_event",
+        "按 event_id 删除错误固定事件，返回删除前快照",
+        {"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]},
+        _remove_fixed_event,
     ),
     "set_hotel": ToolSpec(
         "set_hotel",
@@ -531,6 +709,29 @@ TOOLS: dict[str, ToolSpec] = {
             "required": ["outbound_flight_no", "inbound_flight_no"],
         },
         _set_flights,
+    ),
+    "submit_day_plans": ToolSpec(
+        "submit_day_plans",
+        "声明式批量提交多日景点安排：先校验全部日期与景点，再原子应用，只递增一次版本；可替代逐日 assign_pois",
+        {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
+                            "poi_ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["date", "poi_ids"],
+                    },
+                },
+                "expected_version": {"type": "integer", "description": "可选：要求当前方案版本一致，防止覆盖并发修改"},
+            },
+            "required": ["days"],
+        },
+        _submit_day_plans,
     ),
     "materialize_plan": ToolSpec(
         "materialize_plan",
@@ -613,7 +814,30 @@ def execute(ctx: ToolContext, name: str, args: dict) -> dict:
     spec = TOOLS.get(name)
     if spec is None:
         return _err(f"不存在这个工具：{name}")
+    key = _cache_key(ctx, name, args)
+    if key is not None and key in ctx.cache:
+        return {**deepcopy(ctx.cache[key]), "cached": True}
     try:
-        return spec.run(ctx, args or {})
+        result = spec.run(ctx, args or {})
     except Exception as e:  # 工具异常不能让整场协作崩掉
         return _err(f"{type(e).__name__}: {e}")
+    if key is not None and result.get("ok"):
+        ctx.cache[key] = deepcopy(result)
+    return result
+
+
+# 只读且结果不随方案版本变化的查询：整场会话只打一次数据源。
+_STATIC_READS = {"search_flights", "search_hotels", "list_pois", "get_weather"}
+# 只读但结果绑定方案版本：版本变化后必须重新计算。
+_STATEFUL_READS = {
+    "get_plan", "check_plan", "day_costs", "hotel_prices",
+    "route_distances", "elder_fit", "experience_check", "irreplaceability",
+}
+
+
+def _cache_key(ctx: ToolContext, name: str, args: dict) -> str | None:
+    if name not in _STATIC_READS and name not in _STATEFUL_READS:
+        return None
+    payload = json.dumps(args or {}, sort_keys=True, ensure_ascii=False)
+    version = ctx.plan_version if name in _STATEFUL_READS else "-"
+    return f"{name}|{version}|{payload}"

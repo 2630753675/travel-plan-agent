@@ -10,9 +10,9 @@ from .tools_spec import ToolContext, execute
 # Only deterministic checks with a known repair path may block delivery.
 BLOCKING_ISSUES = {
     "AIRPORT_TRANSFER_LATE", "AIRPORT_TRANSFER_DUPLICATE", "TIME_OVERLAP",
-    "MISSED_AIRPORT_DEADLINE", "OUTSIDE_OPEN_HOURS", "DAY_TOO_LONG",
-    "DAY_EMPTY", "BUDGET_EXCEEDED", "MEAL_BEFORE_ARRIVAL", "MEAL_AFTER_FLIGHT",
-    "MEAL_AFTER_AIRPORT_DEPARTURE",
+    "MISSED_AIRPORT_DEADLINE", "OUTSIDE_OPEN_HOURS", "DAY_TOO_LONG", "CLOSED_DAY",
+    "BUDGET_EXCEEDED", "MEAL_BEFORE_ARRIVAL", "MEAL_AFTER_FLIGHT",
+    "MEAL_AFTER_AIRPORT_DEPARTURE", "ELDER_UNFIT",
 }
 
 OWNER_BY_TOOL = {
@@ -92,7 +92,7 @@ def make_issue_ledger(packet: dict, changes: list[dict], previous: list[dict]) -
         if not acceptance:
             raise ValueError(f"问题 {code} 缺少可验证的 acceptance 条件")
         repair_tools = list(fact.get("repair_tools") or [])
-        if not repair_tools:
+        if not repair_tools or any(tool not in OWNER_BY_TOOL for tool in repair_tools):
             raise ValueError(f"问题 {code} 没有已知修复工具，不能要求自动返工")
         owner = OWNER_BY_TOOL.get(repair_tools[0])
         requested_owner = change.get("owner")
@@ -133,5 +133,6 @@ def make_issue_ledger(packet: dict, changes: list[dict], previous: list[dict]) -
         elif key in still_present:
             item["status"] = "open"
             item["evidence"] = facts[key]["message"]
+            item["fixed_in_version"] = None
         ledger.append(item)
     return ledger
