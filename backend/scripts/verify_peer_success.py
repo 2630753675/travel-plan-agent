@@ -147,6 +147,10 @@ class ScriptedTeam:
                 except json.JSONDecodeError:
                     delivered = False
             if "请按 Issue Ledger 将问题打回" in prompt_text(messages) or "待返工问题" in prompt_text(messages):
+                if "DAY_EMPTY" in prompt_text(messages):
+                    return say("request", evidence, to=["local_expert"], wake=["local_expert"], rework=[
+                        {"task_id": "T2", "reason": "补上问题日期的景点安排"},
+                    ])
                 return say("request", evidence, to=["logistics"], wake=["logistics"], rework=[
                     {"task_id": "T1", "reason": "换更便宜的酒店与航班，把总价压回预算内"},
                 ])
@@ -299,6 +303,7 @@ async def main() -> int:
           not ({"get_plan", "check_plan", "day_costs", "experience_check"} & set(critic_trace.get("tools", []))))
     converged = [p for k, p in events if k == "converged"]
     check("发出收敛事件", bool(converged))
+    check("脚本团队首轮未模拟返工", team.roles.get("logistics") == 5 and team.roles.get("local_expert") == 10)
     print(f"调用次数 {team.calls}，各角色回合 {team.roles}，总花费 {result.itinerary.total_cost if result.itinerary else '-'}")
 
     print("\n[2] Issue Ledger 校验与关闭")

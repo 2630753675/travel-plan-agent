@@ -130,18 +130,21 @@ def _validate_tasks(raw: object) -> dict[str, dict]:
 def _request_rework(tasks: dict[str, dict], requests: object) -> set[str]:
     if not isinstance(requests, list) or not requests:
         raise ValueError("返工必须列出 rework 数组和原任务编号")
-    affected = set()
+    affected: set[str] = set()
+    propagate = False
     for request in requests:
         tid = request.get("task_id") if isinstance(request, dict) else None
         if tid not in tasks or not request.get("reason"):
             raise ValueError("返工必须引用已存在任务和具体 reason")
         tasks[tid]["rework"].append(str(request["reason"]))
         affected.add(tid)
-    changed = True
-    while changed:
-        new = {tid for tid, task in tasks.items() if set(task["depends_on"]) & affected} - affected
-        changed = bool(new)
-        affected |= new
+        propagate = propagate or bool(request.get("propagate", True))
+    if propagate:
+        changed = True
+        while changed:
+            new = {tid for tid, task in tasks.items() if set(task["depends_on"]) & affected} - affected
+            changed = bool(new)
+            affected |= new
     for tid in affected:
         tasks[tid]["status"] = "pending"
         tasks[tid]["delivery"] = None
@@ -410,7 +413,19 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 elif decision.get("rework"):
                     from copy import deepcopy
                     candidate_tasks = deepcopy(tasks)
-                    affected = _request_rework(candidate_tasks, decision["rework"])
+                    rework_requests = decision["rework"]
+                    if pending_rejections:
+                        policy_by_owner = {}
+                        for issue in pending_rejections:
+                            owner = issue.get("owner")
+                            policy_by_owner[owner] = policy_by_owner.get(owner, False) or bool(issue.get("propagate", True))
+                        rework_requests = [
+                            {**request, "propagate": policy_by_owner.get(
+                                candidate_tasks.get(request.get("task_id"), {}).get("owner"), True
+                            )}
+                            for request in rework_requests
+                        ]
+                    affected = _request_rework(candidate_tasks, rework_requests)
                     # Critic 指明的每个责任方都必须被主控实际重新派工。
                     owners = {candidate_tasks[tid]["owner"] for tid in affected}
                     if pending_rejections and not {c["owner"] for c in pending_rejections} <= owners:
@@ -542,6 +557,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                             "required_change": item["acceptance"],
                             "acceptance": item["acceptance"],
                             "repair_tools": item["repair_tools"],
+                            "propagate": item["propagate_rework"],
                         }
                         for item in pending_issue_codes if item.get("status") == "open"
                     ]

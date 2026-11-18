@@ -42,7 +42,7 @@ ROLES: dict[str, Role] = {
         '初次必须返回 kind=request，并附 tasks 数组：每项 {"id":"任务编号","owner":"logistics或local_expert","goal":"本次具体交付要求","depends_on":["依赖任务编号"]}。'
         '根据用户需求拆成交通住宿与本地体验任务；本地活动依赖交通住宿以获得实际可用时段。'
         '不要只复制角色介绍；明确预算、人群、节奏、日期和必要约束。'
-        '收到 Critic objection 后，返回 kind=request 和 rework 数组：每项 {"task_id":"原任务编号","reason":"具体问题和修改目标"}。'
+        '收到 Critic objection 后，返回 kind=request 和 rework 数组：每项 {"task_id":"原任务编号","reason":"具体问题和修改目标"}；按问题责任方派工，不要重开未受影响任务。'
         '必须把问题派回责任专业 Agent，不能自己代查代改；交通变更影响日程时，重开交通及其依赖的本地任务。'
         '数据源没有的酒店房型、楼层、发票、确认号等信息，标为"未核实，需向酒店确认"即可，'
         '不得因此反复要求专业 Agent 核实，也不得为这类数据缺口打断用户。'

@@ -15,6 +15,21 @@ BLOCKING_ISSUES = {
     "MEAL_AFTER_AIRPORT_DEPARTURE", "ELDER_UNFIT",
 }
 
+REWORK_PROPAGATES: dict[str, bool] = {
+    "AIRPORT_TRANSFER_LATE": False,
+    "AIRPORT_TRANSFER_DUPLICATE": False,
+    "TIME_OVERLAP": False,
+    "MISSED_AIRPORT_DEADLINE": False,
+    "OUTSIDE_OPEN_HOURS": False,
+    "DAY_TOO_LONG": False,
+    "CLOSED_DAY": False,
+    "BUDGET_EXCEEDED": True,
+    "MEAL_BEFORE_ARRIVAL": False,
+    "MEAL_AFTER_FLIGHT": False,
+    "MEAL_AFTER_AIRPORT_DEPARTURE": False,
+    "ELDER_UNFIT": False,
+}
+
 OWNER_BY_TOOL = {
     "set_hotel": "logistics",
     "set_flights": "logistics",
@@ -86,7 +101,7 @@ def make_issue_ledger(packet: dict, changes: list[dict], previous: list[dict]) -
             else:
                 raise ValueError(f"评审问题 {code or '(缺少 code)'} 不存在于当前 ReviewPacket 的确定性检查结果")
         fact = facts[fact_key]
-        if fact.get("severity") != "blocker" or code not in BLOCKING_ISSUES:
+        if fact.get("severity") != "blocker" or code not in BLOCKING_ISSUES or code not in REWORK_PROPAGATES:
             raise ValueError(f"问题 {code} 不是允许阻塞交付的确定性问题")
         acceptance = str(change.get("acceptance") or "").strip()
         if not acceptance:
@@ -114,6 +129,7 @@ def make_issue_ledger(packet: dict, changes: list[dict], previous: list[dict]) -
             "evidence": fact["message"],
             "acceptance": acceptance or (previous_issue or {}).get("acceptance", "对应确定性硬校验通过"),
             "repair_tools": repair_tools,
+            "propagate_rework": REWORK_PROPAGATES[code],
             "status": "open",
             "first_seen_version": (previous_issue or {}).get("first_seen_version", packet["plan_version"]),
             "fixed_in_version": None,

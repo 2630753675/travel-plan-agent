@@ -63,6 +63,28 @@ def main() -> int:
         {"id": "T2", "owner": "local_expert", "goal": "编排行程", "depends_on": ["T1"]},
     ])
     check("合法 DAG 通过", set(valid) == {"T1", "T2"})
+    local_rework = {key: dict(value) for key, value in valid.items()}
+    affected_local = hub._request_rework(local_rework, [{"task_id": "T2", "reason": "替换闭馆景点", "propagate": False}])
+    check("日期级问题只重开被点名任务", affected_local == {"T2"}
+          and local_rework["T1"]["status"] == "pending" and local_rework["T2"]["status"] == "pending")
+    upstream_rework = {key: dict(value) for key, value in valid.items()}
+    affected_upstream = hub._request_rework(upstream_rework, [{"task_id": "T1", "reason": "更换航班酒店", "propagate": True}])
+    check("上游交通住宿变更传播到依赖行程", affected_upstream == {"T1", "T2"})
+    independent = hub._validate_tasks([
+        {"id": "T1", "owner": "logistics", "goal": "确认交通住宿"},
+        {"id": "T2", "owner": "local_expert", "goal": "编排行程", "depends_on": ["T1"]},
+        {"id": "T3", "owner": "logistics", "goal": "独立核对酒店发票政策"},
+        {"id": "T4", "owner": "local_expert", "goal": "检查老人步行强度", "depends_on": ["T1"]},
+    ])
+    independent["T1"]["status"] = "delivered"
+    independent["T2"]["status"] = "delivered"
+    independent["T3"]["status"] = "delivered"
+    independent["T4"]["status"] = "delivered"
+    affected_local_group = hub._request_rework(independent, [{
+        "task_id": "T2", "reason": "替换闭馆景点", "propagate": False,
+    }])
+    check("同一责任角色的无关任务保持交付", affected_local_group == {"T2"}
+          and independent["T4"]["status"] == "delivered")
     try:
         hub._validate_tasks([
             {"id": "T1", "owner": "logistics", "goal": "确认交通住宿", "depends_on": ["T9"]},
