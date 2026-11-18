@@ -163,7 +163,10 @@ def _validate_decision(decision: dict) -> None:
             raise ValueError("提供 escalate 对象时 kind 必须为 escalate")
     if kind == "accept" and any(decision.get(key) for key in ("changes", "requested_changes")):
         raise ValueError("changes 或 requested_changes 非空时不能 accept，请修改 kind 后重新回复")
-    if kind in {"proposal", "objection", "accept", "final"} and not (kind == "accept" and decision.get("agent") == "critic_agent"):
+    # Critic 没有工具，它的证据是服务端生成的 ReviewPacket：objection 必须映射到该包中的
+    # 确定性 issue 才能进入 Issue Ledger，accept 还要满足硬校验通过，均已在 hub 复核。
+    critic_packet_evidence = decision.get("agent") == "critic_agent" and kind in {"accept", "objection"}
+    if kind in {"proposal", "objection", "accept", "final"} and not critic_packet_evidence:
         evidence = decision.get("evidence")
         if evidence is not None and (not isinstance(evidence, list) or any(not isinstance(item, dict) for item in evidence)):
             raise ValueError("关键结论的 evidence 必须是对象数组")

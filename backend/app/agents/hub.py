@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
 import json
@@ -146,9 +147,52 @@ def _request_rework(tasks: dict[str, dict], requests: object) -> set[str]:
             changed = bool(new)
             affected |= new
     for tid in affected:
+        if tasks[tid].get("delivery") is not None:
+            tasks[tid]["delivery_base"] = deepcopy(tasks[tid]["delivery"])
         tasks[tid]["status"] = "pending"
         tasks[tid]["delivery"] = None
     return affected
+
+
+def _merge_delivery(task: dict, decision: dict) -> dict:
+    """Merge a version-bound delivery patch without mutating its stored baseline."""
+    patch = decision.get("delivery_patch")
+    if patch is None:
+        return decision.get("delivery")
+    if decision.get("delivery") is not None:
+        raise ValueError("delivery 与 delivery_patch 不能同时提交")
+    base = task.get("delivery_base")
+    if not isinstance(base, dict) or not isinstance(patch, dict):
+        raise ValueError("差异交付必须有已交付基线和对象类型 patch")
+    if type(patch.get("base_version")) is not int or patch["base_version"] != base.get("version"):
+        raise ValueError("差异交付 base_version 与任务基线不一致")
+    fields = {"rationale", "days"} if task["owner"] == "local_expert" else {
+        "rationale", "hotel_id", "outbound_flight_no", "inbound_flight_no"
+    }
+    if set(patch) - fields - {"base_version"}:
+        raise ValueError("差异交付包含未知字段")
+    if not isinstance(patch.get("rationale"), str) or not patch["rationale"].strip():
+        raise ValueError("差异交付必须说明本次修改依据")
+    merged = {k: deepcopy(v) for k, v in base.items() if k not in {"version", "evidence_ids"}}
+    if "days" in patch:
+        rows = patch["days"]
+        if not isinstance(rows, list):
+            raise ValueError("差异日期必须是数组")
+        by_date = {row["date"]: row for row in merged.get("days", [])}
+        seen = set()
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"date", "poi_ids"}:
+                raise ValueError("差异日期必须包含 date 和 poi_ids")
+            day = row["date"]
+            if not isinstance(day, str) or day not in by_date or day in seen:
+                raise ValueError("差异日期未知或重复")
+            if not isinstance(row["poi_ids"], list) or not all(isinstance(pid, str) for pid in row["poi_ids"]):
+                raise ValueError("poi_ids 必须是字符串数组")
+            seen.add(day)
+            by_date[day] = deepcopy(row)
+        merged["days"] = list(by_date.values())
+    merged.update({k: deepcopy(v) for k, v in patch.items() if k not in {"base_version", "days"}})
+    return merged
 
 
 def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripBrief) -> bool:
@@ -434,9 +478,14 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                         if task["owner"] in owners and task["status"] == "pending":
                             scoped_issues = [item for item in pending_rejections if item["owner"] == task["owner"]]
                             if scoped_issues:
-                                task["allowed_repair_tools"] = sorted({
+                                repair_tools = {
                                     tool for issue in scoped_issues for tool in issue.get("repair_tools", [])
-                                })
+                                }
+                                if task["owner"] == "local_expert":
+                                    # get_plan 是只读视图，用于取得 fixed_events[].event_id；
+                                    # materialize/check 用于落定并复核修复结果，都不是任意写入。
+                                    repair_tools.update({"get_plan", "materialize_plan", "check_plan"})
+                                task["allowed_repair_tools"] = sorted(repair_tools)
                     tasks = candidate_tasks
                     pending_rejections = []
                     ctx.approved_version, ctx.document = None, None
@@ -501,7 +550,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     post(agent, ["orchestrator"], kind, decision["say"], {"task_id": active_task, "changes": decision.get("changes") or []})
                     next_agent, active_task = "orchestrator", None
                     continue
-                if not active_task or kind != "proposal" or not _delivery_valid(agent, decision.get("delivery"), ctx, brief):
+                delivery = _merge_delivery(tasks[active_task], decision) if active_task else None
+                if not active_task or kind != "proposal" or not _delivery_valid(agent, delivery, ctx, brief):
                     raise ValueError("专业交付必须用 proposal，并且 delivery 与实际工具选择/完整日期一致")
                 # 把专业交付引用的工具证据转交主控，主控提交评审时据此引用，避免无工具角色凭空造证据。
                 delivered_evidence = [
@@ -512,8 +562,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 tasks[active_task]["delivery"] = {
                     "version": ctx.plan_version,
                     "evidence_ids": delivered_evidence,
-                    **decision["delivery"],
+                    **delivery,
                 }
+                tasks[active_task].pop("delivery_base", None)
                 post(agent, ["orchestrator"], "proposal", f"任务 {active_task} 已交付",
                      {"task": tasks[active_task], "evidence_ids": delivered_evidence})
                 # 依赖 DAG 已由主控定义，交付后按依赖直接调度下一个任务，

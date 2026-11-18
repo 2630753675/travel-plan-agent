@@ -15,6 +15,7 @@ CONTRACT = """只输出 JSON 对象：
 需要修改就用 objection 并填写结构化 changes；accept 表示没有待修改项。proposal、objection、accept、final 必须填写 evidence 对象数组，格式为 [{"id":"工具结果返回的 evidence_id"}]；不得自行编造 ID。事实不足时明确写“未核实/待确认”，不得补造事实。
 无法自行协调的取舍用 escalate，并提供 {"question":"问题","options":[{"value":"选择值","label":"选择说明"}]}。
 所有工具错误均是真实失败，必须修正调用或如实报告，不得编造查询结果、预订确认或校验通过。
+专业任务有 delivery_base 时可用 delivery_patch 代替 delivery：必须含 base_version（基线 version）及 rationale。本地体验仅提交改变日期的 days（每项 date/poi_ids）；交通住宿仅提交改变的 hotel_id/outbound_flight_no/inbound_flight_no。先通过工具修改实际方案，再提交差异；未改变字段由后端继承，合并后仍须与完整工具事实一致。
 """
 
 
