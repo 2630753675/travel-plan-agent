@@ -58,6 +58,101 @@ class ArtifactStore:
             )
         return json.loads(path.read_bytes().decode("utf-8"))
 
+    # --- retention ------------------------------------------------------
+
+    def iter_files(self):
+        """遍历磁盘上的工件文件，返回 (artifact_id, path)。不跟随目录外路径。"""
+        if not self.root.is_dir():
+            return
+        for path in self.root.glob("*/*.json"):
+            artifact_id = path.stem
+            if len(artifact_id) == 64 and all(c in "0123456789abcdef" for c in artifact_id):
+                yield artifact_id, path
+
+    def collect_garbage(self, referenced: set[str], *, min_age_seconds: float) -> dict:
+        """删除“未被引用且已超过保护期”的工件。
+
+        - 只处理工件根目录下符合哈希命名的文件，路径由 artifact_id 重新推导；
+        - 保护期内的文件一律保留，避免删掉尚未写入检查点的在途会话；
+        - 返回统计，便于日志与验收。
+        """
+        import time
+
+        removed = 0
+        freed = 0
+        kept_fresh = 0
+        kept_used = 0
+        cutoff = time.time() - max(0.0, min_age_seconds)
+        for artifact_id, path in list(self.iter_files()):
+            if artifact_id in referenced:
+                kept_used += 1
+                continue
+            try:
+                if path.stat().st_mtime > cutoff:
+                    kept_fresh += 1
+                    continue
+                size = path.stat().st_size
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            removed += 1
+            freed += size
+        return {
+            "removed": removed,
+            "freed_bytes": freed,
+            "kept_referenced": kept_used,
+            "kept_fresh": kept_fresh,
+        }
+
+
+def referenced_ids(obj, found: set[str] | None = None) -> set[str]:
+    """递归收集任意会话结构中的工件引用 ID。"""
+    found = set() if found is None else found
+    if isinstance(obj, dict):
+        artifact_id = obj.get("artifact_id")
+        if isinstance(artifact_id, str) and len(artifact_id) == 64:
+            found.add(artifact_id)
+        for value in obj.values():
+            referenced_ids(value, found)
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            referenced_ids(value, found)
+    return found
+
+
+_HEX64 = __import__("re").compile(rb"[0-9a-f]{64}")
+
+
+def scan_checkpoint_references(paths) -> set[str]:
+    """从检查点文件字节里收集被引用的工件 ID。
+
+    LangGraph 把状态序列化成 msgpack 再放进 pickle，直接反序列化需要注册全部自定义类型；
+    这里改为扫描原始字节：工件 ID 会以字面量出现在序列化结果中，扫描不会漏，也不会误删。
+    """
+    found: set[str] = set()
+    for path in paths:
+        path = Path(path)
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            continue
+        for match in _HEX64.findall(data):
+            found.add(match.decode("ascii"))
+    return found
+
+
+def checkpoint_files(root: Path) -> list[Path]:
+    """列出检查点分片与旧的单文件检查点。"""
+    root = Path(root)
+    files: list[Path] = []
+    legacy = root / "checkpoints.pkl"
+    if legacy.is_file():
+        files.append(legacy)
+    shard_dir = root / "checkpoints.pkl.d"
+    if shard_dir.is_dir():
+        files.extend(sorted(shard_dir.glob("*.pkl")))
+    return files
+
 
 # 默认实例按需创建，测试可以用自己的目录覆盖。
 _default_store: ArtifactStore | None = None

@@ -150,6 +150,8 @@ $env:PYTHONPATH=(Get-Location).Path
 
 专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式；`critic_agent` 是评审角色，不能被声明为交付任务负责人。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文、方案版本，以及指向会话工件的引用——历史消息、消息总线、证据与工具账本按内容哈希存放在 `backend/data/artifacts/`，避免同一份数据在每份快照里重复；工件缺失时恢复会明确报错，不会退化成空会话。`wake` 是 Agent 的协作意图/事件元数据，实际出场顺序由代码集中式调度器按 DAG 和消息决定，并不表示自主并行抢占。
 
+工件保留：`backend/scripts/collect_artifacts.py` 默认**只预览**可清理的工件，加 `--apply` 才删除；规则是“未被任何检查点引用且超过保护期（默认 24 小时）”，不做启动时自动清理，避免误删仍在恢复中的会话。
+
 ### 4.2 循环、成本与交付边界
 
 `plan_version` 记录专业选择变更；`itinerary_version` 表示当前时间表由哪个版本生成；`approved_version` 表示 Critic 批准的版本。版本不一致不能交付。
