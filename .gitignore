@@ -21,3 +21,5 @@ frontend/dist/
 *.log
 backend/data/artifacts/
 backend/data/checkpoints.pkl.d/
+backend/data/*.txt
+backend/data/*.json
