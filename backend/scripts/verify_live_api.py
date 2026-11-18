@@ -12,7 +12,7 @@ from app.settings import load
 
 def main():
     cfg = load()
-    assert cfg.llm.configured and cfg.orchestration.agent_mode == 'peer', 'Real peer configuration required'
+    assert cfg.llm.configured, 'Real model configuration required'
     print('REAL MODEL:', cfg.llm.model, 'DATA:', cfg.datasource.kind, flush=True)
     brief = dict(origin='上海', destination='成都', start_date='2026-11-20', end_date='2026-11-24', travelers=2, budget_total=20000, companions=['老人'], preferences=['人文'], pace='适中')
     events = []

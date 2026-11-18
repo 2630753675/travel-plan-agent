@@ -20,7 +20,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from ..agents import clarify, critic, lodging, llm_selector, planner, poi, transport, weather
+from ..agents import clarify, critic, lodging, planner, poi, transport, weather
 from ..agents import negotiators
 from ..agents.protocol import AgentMessage, AgentProposal, CollaborationRequest
 from ..agents import reviewers
@@ -302,37 +302,25 @@ def _log_lines(node: str, upd: dict, state: TripState) -> list:
     return lines
 
 
-def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None, cancellation=None):
+def build(source: TravelSource, settings: AppSettings | None = None, checkpointer=None, cancellation=None, initial_stats=None):
     settings = settings or AppSettings()
-    max_revisions = settings.orchestration.max_revisions
-    selected_mode = settings.orchestration.agent_mode
-    if selected_mode == "legacy":
-        selected_mode = "expert"
-    # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"
-    enable_interrupt = checkpointer is not None
-    # 配置了模型时，三种模式都进入同一 Agent 消息引擎；模式只控制协作预算。
-    # legacy 保留旧规则图，仅用于历史轨迹兼容，不作为默认路径。
-    peer_mode = settings.llm.configured and selected_mode in {"fast", "expert", "peer"}
-    fast_mode = selected_mode == "fast" and not peer_mode
-    mode_call_limit = {
-        # 一个完整轻量团队至少需要主控、两位专业 Agent、Critic 和 Writer 的回合；
-        # 仍受用户配置的运行级上限约束，触顶时由 Agent 升级为待确认而非伪造完成。
-        "fast": settings.orchestration.max_model_calls,
-        "expert": settings.orchestration.max_model_calls,
-        "peer": settings.orchestration.max_model_calls,
-    }.get(selected_mode, 1)
-    shared_llm = (
-        LLMClient(
-            settings.llm,
-            settings.orchestration.node_timeout_s,
-            budget=None,
-            max_calls=mode_call_limit,
-            # 不再下发 max_tokens；旧配置里的数值在 settings.load 已迁移为 None。
-            max_output_tokens=None,
-            cancellation=cancellation,
+    if not settings.llm.configured:
+        raise ValueError(
+            "未配置模型：深度团队模式只使用真实模型。请先在设置页填写 base_url、model、api_key 并启用模型。"
         )
-        if settings.llm.configured
-        else None
+    max_revisions = settings.orchestration.max_revisions
+    mode_call_limit = settings.orchestration.max_model_calls
+    # 没有 checkpointer 就无法中断与恢复，此时图退化为"全自动、不询问"。
+    enable_interrupt = checkpointer is not None
+    shared_llm = LLMClient(
+        settings.llm,
+        settings.orchestration.node_timeout_s,
+        budget=None,
+        max_calls=mode_call_limit,
+        # 不再下发 max_tokens；旧配置里的数值在 settings.load 已迁移为 None。
+        max_output_tokens=None,
+        cancellation=cancellation,
+        initial_stats=initial_stats,
     )
 
     async def clarify_node(state: TripState) -> dict:
@@ -533,12 +521,6 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         )
 
         llm_selection = None
-        if settings.llm.configured and not budget_pressure and selected_mode in {"fast", "expert"}:
-            client = shared_llm
-            llm_selection = await llm_selector.select_pois(
-                state["brief"], state["poi"].candidates, state["weather"].days, client
-            )
-
         itinerary = planner.run(
             brief=state["brief"],
             transport=state["transport"],
@@ -557,9 +539,6 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         if budget_pressure and settings.llm.enabled:
             itinerary.warnings.append("降配重排由规则引擎执行，以保证确实省钱")
         summary = f"我排出 {len(itinerary.days)} 天行程，总花费 {itinerary.total_cost:.0f} 元。"
-        # fast 只需硬校验，不构造评审消息链，避免把确定性路径伪装成多 Agent 工作流。
-        if fast_mode:
-            return {"draft": itinerary, "llm_stats": shared_llm.stats() if shared_llm else {}}
         constraints = ["单日活动不超过 600 分钟", "景点必须在开放时间内", "返程日预留机场时间"]
         proposals = []
         messages = []
@@ -653,33 +632,6 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         })
         # 预算/体验评审是 Agent；这里是确定性的硬约束 Workflow，合并结果并决定路由。
         return {"critique": critique, "revision": state.get("revision", 0) + 1}
-
-    async def fast_planner_node(state: TripState) -> dict:
-        """快速路径只生成行程，不构造专家评审 proposal/message。"""
-        return await planner_node(state)
-
-    async def fast_review_node(state: TripState) -> dict:
-        """快速路径只运行确定性硬约束校验，不调用模型评审或协商。"""
-        result = critic.run(
-            brief=state["brief"],
-            itinerary=state["draft"],
-            poi_plan=state["poi"],
-            transport=state["transport"],
-            weather=state["weather"],
-        )
-        _emit({
-            "phase": "validation",
-            "node": "critic",
-            "stage": "check",
-            "passed": result.passed,
-            "issues": [issue.model_dump(mode="json") for issue in result.issues],
-            "suggestions": result.suggestions,
-        })
-        return {
-            "critique": result,
-            "revision": state.get("revision", 0) + 1,
-            "llm_stats": shared_llm.stats() if shared_llm else {},
-        }
 
     async def negotiation_node(state: TripState) -> dict:
         """预算官 vs 体验官，由调解者裁决。支持多轮：谈崩时交给用户表态后重谈。"""
@@ -1036,11 +988,8 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
             source=source,
             client=client,
             emit=_peer_emit,
-            max_rounds={"fast": 1, "expert": max(1, settings.orchestration.max_revisions), "peer": max(1, settings.orchestration.max_revisions)}.get(selected_mode, 1),
-            max_turns=min(
-                settings.orchestration.max_agent_turns,
-                {"fast": 8, "expert": 12, "peer": settings.orchestration.max_agent_turns}.get(selected_mode, 1),
-            ),
+            max_rounds=max(1, settings.orchestration.max_revisions),
+            max_turns=settings.orchestration.max_agent_turns,
             resume=state.get("peer_state"),
             user_answer=state.get("peer_answer") or "",
             finalize_feedback=str(state.get("peer_finalize_feedback") or ""),
@@ -1243,92 +1192,27 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
 
     g = StateGraph(TripState)
     g.add_node("clarify", wrap("clarify", clarify_node))
-    g.add_node("critic", wrap("critic", critic_node))
     g.add_edge(START, "clarify")
 
-    if peer_mode:
-        # 配置了模型：走真正的多 Agent 对等协作。
-        # 规则节点不参与，避免"Agent 谈完又被规则重排"这种自相矛盾的路径。
-        g.add_node("peer_run", wrap("peer_run", peer_run_node))
-        g.add_node("peer_ask", wrap("peer_ask", peer_ask_node))
-        g.add_node("peer_finalize", wrap("peer_finalize", peer_finalize_node))
-        g.add_edge("clarify", "peer_run")
-        g.add_conditional_edges(
-            "peer_run",
-            route_after_peer,
-            {END: END, "peer_ask": "peer_ask", "peer_finalize": "peer_finalize"},
-        )
-        g.add_edge("peer_ask", "peer_run")
-        peer_targets: dict = {END: END, "peer_run": "peer_run"}
-        if enable_interrupt:
-            peer_targets["confirm"] = "confirm"
-        g.add_conditional_edges("peer_finalize", route_after_peer_finalize, peer_targets)
-
-        if enable_interrupt:
-            g.add_node("confirm", confirm_node)
-            g.add_conditional_edges(
-                "confirm", route_after_confirm_peer, {"peer_run": "peer_run", END: END}
-            )
-        return g.compile(checkpointer=checkpointer)
-
-    # fast 使用最小图：并行查事实 -> 一次选景点/排程 -> 一次硬校验。
-    if fast_mode:
-        g.add_node("fast_planner", wrap("fast_planner", fast_planner_node))
-        g.add_node("fast_review", wrap("critic", fast_review_node))
-        for name in ("transport", "lodging", "poi", "weather"):
-            g.add_node(name, wrap(name, {"transport": transport_node, "lodging": lodging_node, "poi": poi_node, "weather": weather_node}[name]))
-            g.add_edge("clarify", name)
-            g.add_edge(name, "fast_planner")
-        g.add_edge("fast_planner", "fast_review")
-        g.add_edge("fast_review", END)
-        return g.compile(checkpointer=checkpointer)
-
-    # expert/legacy 使用受控规则链路；未配置模型时也明确作为规则规划运行。
-    g.add_node("transport", wrap("transport", transport_node))
-    g.add_node("lodging", wrap("lodging", lodging_node))
-    g.add_node("poi", wrap("poi", poi_node))
-    g.add_node("weather", wrap("weather", weather_node))
-    g.add_node("planner", wrap("planner", planner_node))
-    g.add_node("budget_review", wrap("budget_review", budget_review_node))
-    g.add_node("experience_review", wrap("experience_review", experience_review_node))
-
-    g.add_edge(START, "clarify")
-    for name in ("transport", "lodging", "poi", "weather"):
-        g.add_edge("clarify", name)
-        g.add_edge(name, "coordinator")
-
-    g.add_node("coordinator", coordinator_node)
-    g.add_node("lodging_fix", lodging_fix_node)
+    # 单模式：只保留深度团队图，不再生成 fast/expert/legacy 分支。
+    g.add_node("peer_run", wrap("peer_run", peer_run_node))
+    g.add_node("peer_ask", wrap("peer_ask", peer_ask_node))
+    g.add_node("peer_finalize", wrap("peer_finalize", peer_finalize_node))
+    g.add_edge("clarify", "peer_run")
     g.add_conditional_edges(
-        "coordinator",
-        lambda s: "lodging_fix" if s.get("collab_requests") else "planner",
-        {"lodging_fix": "lodging_fix", "planner": "planner"},
+        "peer_run",
+        route_after_peer,
+        {END: END, "peer_ask": "peer_ask", "peer_finalize": "peer_finalize"},
     )
-    g.add_edge("lodging_fix", "planner")
-    g.add_edge("planner", "budget_review")
-    g.add_edge("planner", "experience_review")
-    g.add_edge("budget_review", "critic")
-    g.add_edge("experience_review", "critic")
-
-    g.add_node("negotiation", negotiation_node)
-
-    critic_targets: dict = {"planner": "planner", "negotiation": "negotiation", END: END}
+    g.add_edge("peer_ask", "peer_run")
+    peer_targets: dict = {END: END, "peer_run": "peer_run"}
     if enable_interrupt:
-        critic_targets["confirm"] = "confirm"
-
-    g.add_conditional_edges("critic", route_after_critic, critic_targets)
-
-    negotiation_targets: dict = {"planner": "planner", END: END}
-    if enable_interrupt:
-        negotiation_targets["confirm"] = "confirm"
-        g.add_node("ask", ask_node)
-        negotiation_targets["ask"] = "ask"
-        # 用户表态后带着倾向重谈一轮
-        g.add_edge("ask", "negotiation")
-    g.add_conditional_edges("negotiation", route_after_negotiation, negotiation_targets)
+        peer_targets["confirm"] = "confirm"
+    g.add_conditional_edges("peer_finalize", route_after_peer_finalize, peer_targets)
 
     if enable_interrupt:
         g.add_node("confirm", confirm_node)
-        g.add_conditional_edges("confirm", route_after_confirm, {"planner": "planner", END: END})
-
+        g.add_conditional_edges(
+            "confirm", route_after_confirm_peer, {"peer_run": "peer_run", END: END}
+        )
     return g.compile(checkpointer=checkpointer)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -25,7 +26,6 @@ class TripBrief(BaseModel):
     companions: list[Companion] = Field(default_factory=lambda: ["无"])
     preferences: list[str] = Field(default_factory=list)
     pace: Literal["轻松", "适中", "紧凑"] = "适中"
-    planning_mode: Literal["fast", "expert", "peer"] = "fast"
 
     @model_validator(mode="after")
     def _check(self) -> TripBrief:
@@ -130,6 +130,7 @@ class DayPlan(BaseModel):
 class FixedEvent(BaseModel):
     """Agent 明确指定的固定时段安排（如去机场、预约参观）。"""
 
+    event_id: str = Field(default_factory=lambda: f"fe-{uuid4().hex[:12]}", min_length=1)
     date: date
     title: str = Field(min_length=1)
     start_time: time

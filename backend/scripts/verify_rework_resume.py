@@ -140,6 +140,14 @@ async def main():
     assert set(task["allowed_repair_tools"]) >= {"remove_fixed_event", "materialize_plan", "check_plan"}
     events = interrupted.session["context"]["fixed_events"]["2026-11-24"]
     extra = next(e for e in events if e["title"] == EXTRA_TITLE and e["kind"] == "airport_transfer")
+    # 返工模型必须能自己读到 event_id，否则"删除固定事件"在真实模型下不可执行。
+    from app.agents.tools_spec import execute
+    plan = execute(interrupted.ctx, "get_plan", {})
+    visible = [e for e in (plan.get("fixed_events") or {}).get("2026-11-24", [])
+               if e.get("title") == EXTRA_TITLE]
+    assert visible and visible[0].get("event_id") == extra["event_id"], visible
+    assert "get_plan" in set(task["allowed_repair_tools"])
+    print("PASS repair scope exposes get_plan and its fixed_events[].event_id")
     print("PASS Critic objection creates issue-scoped repair task; interruption keeps baseline")
 
     resumed_client = RepairTeam(remove_event_id=extra["event_id"])

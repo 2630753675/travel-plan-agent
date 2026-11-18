@@ -80,6 +80,20 @@ def _timeline_issues(day, poi_map: dict, is_first: bool, is_last: bool, transpor
     # 3. 返程日不能错过赶飞机的时间
     if is_last and transport.chosen_inbound:
         deadline = _m(transport.chosen_inbound.dep_time) - AIRPORT_LEAD_MIN - AIRPORT_TRANSFER_MIN
+        transfers = [i for i in acts if i.type == "fixed" and i.ref_id == "fixed:airport_transfer"]
+        if len(transfers) > 1:
+            detail = "、".join(
+                f"{t.title}（{t.start_time.strftime('%H:%M')}-{t.end_time.strftime('%H:%M')}）"
+                for t in transfers
+            )
+            issues.append(
+                Issue(
+                    severity="blocker",
+                    code="AIRPORT_TRANSFER_DUPLICATE",
+                    day=day.date,
+                    message=f"返程日存在多条互斥的送机安排：{detail}；必须只保留一条，并满足提前量要求",
+                )
+            )
         for item in acts:
             if item.type == "transport":
                 continue

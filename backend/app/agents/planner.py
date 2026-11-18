@@ -19,6 +19,7 @@ from .poi import PoiPlan
 from .transport import TransportPlan
 from .weather import WeatherPlan
 
+MEAL_BREAKFAST = 30
 MEAL_LUNCH = 60
 MEAL_DINNER = 80
 LOCAL_TRANSPORT_PER_PERSON_DAY = 50
@@ -400,6 +401,17 @@ def run(
         unplaced_notes = _unplaced_notes(requested, placed_ids, pool, d)
 
         lunch_blocked = any(s < LUNCH_END and LUNCH_START < e for s, e in busy)
+        # 固定事件本身包含午餐时（如“入住+午餐+午休”），不能再报“没有午餐时间窗”。
+        fixed_meal = next(
+            (
+                e
+                for e in fixed
+                if _minutes(e.start_time) < LUNCH_END
+                and LUNCH_START < _minutes(e.end_time)
+                and any(word in f"{e.title}{e.note}" for word in ("午餐", "午休", "用餐"))
+            ),
+            None,
+        )
         if lunch_reserved and not lunch_blocked:
             lunch = (LUNCH_START, LUNCH_END)
         else:
@@ -429,10 +441,18 @@ def run(
         if lunch:
             meal_notes.append(f"午餐休息窗口 {_to_time(lunch[0]):%H:%M}-{_to_time(lunch[1]):%H:%M}；费用为估算")
             meal_estimate += MEAL_LUNCH * brief.travelers
+        elif fixed_meal is not None:
+            meal_notes.append(f"午餐已包含在固定安排「{fixed_meal.title}」中；费用按每人 {MEAL_LUNCH} 元估算")
+            meal_estimate += MEAL_LUNCH * brief.travelers
+        elif is_last and transport.chosen_inbound:
+            # 返程日不能把餐费记 0：至少早餐与机场/落地午餐要计入估算。
+            meal_estimate += (MEAL_BREAKFAST + MEAL_LUNCH) * brief.travelers
+            meal_notes.append(
+                f"返程日按早餐+机场/落地午餐约 {meal_estimate:.0f} 元估算"
+                "（酒店打包或机场购买，实际价格未核实）；市区午餐不安排"
+            )
         elif is_first and transport.chosen_outbound and arrival >= LUNCH_END:
             meal_notes.append("去程抵达较晚，午餐按实际到达与转场时间自行安排；费用未计入固定时间表")
-        elif is_last and transport.chosen_inbound:
-            meal_notes.append("返程日时间不足以安排市区午餐，请在机场自行安排；费用未计入固定时间表")
         else:
             meal_notes.append("当天没有足够午餐时间窗，建议自行安排；费用未计入固定时间表")
         if dinner:

@@ -1,5 +1,7 @@
 # Peer 多 Agent 整改计划
 
+> 2026-11-17 单模式改造：`fast` / `expert` 已删除，系统只保留深度团队。本文是历史整改记录，保留用于追溯；其中提到的 fast/expert/legacy 分支已不再适用。
+
 ## 目标与边界
 
 本轮聚焦显式深度模式 `peer`。目标是把它做成可诊断、可恢复、事实可追溯的分层多 Agent 编排：专业判断由 Agent 通过消息协作完成；代码负责确定性调度、工具权限、版本状态、硬约束、安全预算和持久化。当前实现属于集中式调度，不声称 Agent 自主唤醒或并行。
@@ -68,7 +70,10 @@
 | 3 事实与内容 | 部分完成 | 服务端 `evidence_id` 与引用校验、专业交付向主控转交 `evidence_ids`、恢复后渲染待返工问题、Writer 未验证承诺拦截 | 通用自然语言事实校验；Writer 受控模板生成 |
 | 4 检查点 | 部分完成 | 按 thread_id 分片、旧文件只读兼容、tombstone 删除、异步线程事务、并发实测 | 分片清理/保留策略、体积与写入耗时观测 |
 | 5 回归与文档 | 完成 | `verify_peer_success.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、编译与构建 | 真实模型验收与浏览器验收由用户执行 |
+| 6 恢复与工具闭环 | 完成 | 历史按完整 tool 事务裁剪并在本地拒绝孤立 tool 结果；固定事件带稳定 `event_id` 且支持 `replace/remove`；`submit_day_plans` 批量声明式提交（全量校验后原子应用、单次版本递增、版本冲突检测）；工具操作账本防重放；只读结果缓存；跨恢复累计请求/字符/token/耗时；blocker 返回 `repair_tools`；返程日重复送机判 `AIRPORT_TRANSFER_DUPLICATE`；固定午餐事件不再误报“无午餐窗口”，返程日餐费不再记 0；`route_distances` 明确 `road_data_available=false` | 真实道路/步行数据、完整确定性工具 DAG、checkpoint 清理策略 |
 
-验证证据：五角色成功路径 24 次调用、6 个 Agent 回合、总价 5700/8000；API 中断→恢复→停止返回 `run_needs_input`；分片 checkpoint 旧文件 405 线程可读、主文件大小不变、并发 `aput_writes` 安全。测试过程中发现并修复了两个真实缺陷：主控无工具却必须提供证据、恢复后看不到待返工问题。
+验证证据：五角色成功路径 24 次调用、6 个 Agent 回合、总价 5880/8000；API 中断→恢复→停止返回 `run_needs_input`；分片 checkpoint 旧文件 405 线程可读、主文件大小不变、并发 `aput_writes` 安全。测试过程中发现并修复了两个真实缺陷：主控无工具却必须提供证据、恢复后看不到待返工问题。
+
+阶段 6 追加验证（2026-11-17）：`verify_peer_deep_team.py` 覆盖跨恢复累计用量、恢复接口把累计用量带进新图、只读缓存、写操作不重放、固定午餐与返程日餐费、重复送机修复闭环、`submit_day_plans` 闭馆/版本冲突/单次版本递增、路线工具无道路数据声明；`verify_budget_cancel.py` 覆盖历史裁剪、孤立 tool 拒绝、固定事件增删改。`verify_graph.py` 仍有 1 条改动前已存在的规则图断言失败（revision），与本轮无关。
 
 执行顺序回顾：先修 API 中断与诊断，再做预算/升级语义，最后处理证据契约与持久化形态；未新增依赖，未破坏旧 checkpoint 格式。

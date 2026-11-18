@@ -88,9 +88,6 @@ async def run(brief: TripBrief) -> int:
     if not settings.llm.configured:
         print("FAIL: 当前应用配置未启用模型；拒绝退回规则模式。")
         return 2
-    if settings.orchestration.agent_mode != "peer":
-        print("FAIL: 当前应用配置不是 peer 多 Agent 模式；拒绝改写配置。")
-        return 2
 
     # Respect the user's configured provider, model, key, timeout, and datasource.
     source = make_source(settings.datasource)

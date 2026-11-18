@@ -53,6 +53,44 @@ def fake_reply(content: str = "ok") -> dict:
     }
 
 
+def test_history_and_fixed_event_recovery() -> None:
+    print("\n[H] 恢复历史与固定事件修复")
+    from app.agents.runtime import _complete_history, _validate_history_messages
+    from app.agents.tools_spec import ToolContext, execute
+    from app.tools.mock import MockSource
+
+    history = [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "list_pois", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"ok":true}'},
+        {"role": "assistant", "content": '{"kind":"note"}'},
+    ]
+    selected = _complete_history(history, limit=3)
+    check("历史裁剪保留完整 tool 事务", selected[0].get("role") == "assistant" and selected[1].get("role") == "tool", str(selected))
+    try:
+        _validate_history_messages([{"role": "tool", "tool_call_id": "orphan", "content": "{}"}])
+    except ValueError as exc:
+        check("孤立 tool 结果在本地拒绝", "没有对应" in str(exc), str(exc))
+    else:
+        check("孤立 tool 结果在本地拒绝", False, "未抛出")
+
+    ctx = ToolContext(brief=brief(), source=MockSource())
+    added = execute(ctx, "add_fixed_event", {
+        "event_id": "airport-old", "date": "2026-11-24", "title": "旧送机",
+        "start_time": "07:00", "end_time": "08:20", "kind": "airport_transfer",
+    })
+    check("固定事件带稳定 ID", added.get("ok") and added.get("event_id") == "airport-old", str(added))
+    replaced = execute(ctx, "replace_fixed_event", {
+        "event_id": "airport-old", "event": {"start_time": "05:40", "end_time": "07:00", "title": "正确送机"},
+    })
+    check("可按 ID 替换固定事件", replaced.get("ok") and ctx.fixed_events[date(2026, 11, 24)][0].start_time.strftime("%H:%M") == "05:40", str(replaced))
+    removed = execute(ctx, "remove_fixed_event", {"event_id": "airport-old"})
+    check("可按 ID 删除固定事件", removed.get("ok") and not ctx.fixed_events, str(removed))
+    missing = execute(ctx, "remove_fixed_event", {"event_id": "missing"})
+    check("删除未知 ID 返回可诊断错误", missing.get("ok") is False and "不存在" in missing.get("error", ""), str(missing))
+
+
 def test_no_max_tokens() -> None:
     print("\n[A] 请求不再发送 max_tokens")
     import app.llm as llm
@@ -251,8 +289,9 @@ def test_build_accepts_cancellation() -> None:
     from app.tools.mock import MockSource
 
     token = cancellation.begin("run-build")
+    cfg = AppSettings(llm=LLMSettings(enabled=True, base_url="http://x", model="x", api_key="k"))
     try:
-        build(MockSource(), AppSettings(), cancellation=token)
+        build(MockSource(), cfg, cancellation=token)
         check("build(cancellation=...) 正常", True)
     except Exception as exc:  # noqa: BLE001
         check("build(cancellation=...) 正常", False, f"{type(exc).__name__}: {exc}")
@@ -260,7 +299,75 @@ def test_build_accepts_cancellation() -> None:
         cancellation.finish("run-build", token)
 
 
+def test_resume_budget_override() -> None:
+    print("\n[H] 恢复时可直接提高模型请求上限")
+    from fastapi.testclient import TestClient
+
+    import app.api.main as api
+    from app.checkpoint import PersistentSaver
+    from app.settings import OrchestrationSettings
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    original_db = config_store.DB_PATH
+    original_cp = api._CHECKPOINTER
+    config_store.DB_PATH = tmp / "cfg.db"
+    api._CHECKPOINTER = PersistentSaver(tmp / "cp.pkl")
+    try:
+        config_store.save(AppSettings(orchestration=OrchestrationSettings(max_model_calls=8)))
+        client = TestClient(api.app, headers={"X-Access-Token": api._ACCESS_TOKEN})
+
+        r = client.post(
+            "/api/plan/no-such-run/resume",
+            json={"decision": "continue", "max_model_calls": 40},
+        )
+        check("没有待确认中断时返回 400", r.status_code == 400, f"{r.status_code} {r.text[:120]}")
+        check(
+            "校验失败时不会先改配置",
+            config_store.load().orchestration.max_model_calls == 8,
+            str(config_store.load().orchestration.max_model_calls),
+        )
+
+        r = client.post(
+            "/api/plan/no-such-run/resume",
+            json={"decision": "continue", "max_model_calls": 999},
+        )
+        check("超过 80 被拒绝", r.status_code == 422, f"{r.status_code} {r.text[:120]}")
+
+        r = client.put("/api/config", json={"orchestration": {"max_model_calls": 40}})
+        saved = config_store.load().orchestration.max_model_calls
+        check("配置接口能持久化上限", r.status_code == 200 and saved == 40, f"{r.status_code} saved={saved}")
+    finally:
+        config_store.DB_PATH = original_db
+        api._CHECKPOINTER = original_cp
+
+
+def test_budget_escalation_fields() -> None:
+    print("\n[I] 额度耗尽的升级信息带可执行建议值")
+    from app.agents import hub
+    from app.llm import ModelCallBudgetExceeded
+    from app.tools.mock import MockSource
+
+    class BudgetClient:
+        def __init__(self) -> None:
+            self.max_calls = 8
+
+        async def chat_tools(self, messages, tools):
+            raise ModelCallBudgetExceeded("已达到本次运行模型调用上限 8")
+
+    result = asyncio.run(hub.run_session(
+        brief=brief(), source=MockSource(), client=BudgetClient(),
+        emit=lambda *a, **k: None, max_turns=2, max_rounds=1,
+    ))
+    escalation = result.escalation or {}
+    check("升级类型为额度耗尽", escalation.get("type") == "model_call_budget_exhausted", str(escalation)[:160])
+    check("带出当前上限", escalation.get("max_calls") == 8, str(escalation.get("max_calls")))
+    check("给出建议上限 40", escalation.get("suggested_max_calls") == 40, str(escalation.get("suggested_max_calls")))
+    check("仍提供继续/停止", {o["value"] for o in escalation.get("options", [])} == {"continue", "stop"},
+          str(escalation.get("options")))
+
+
 def main() -> int:
+    test_history_and_fixed_event_recovery()
     test_no_max_tokens()
     test_settings_migration()
     test_cancellation_registry()
@@ -268,6 +375,8 @@ def main() -> int:
     test_run_graph_cancel()
     test_cancel_endpoint()
     test_build_accepts_cancellation()
+    test_resume_budget_override()
+    test_budget_escalation_fields()
     print()
     if failures:
         print(f"FAIL  {len(failures)} 项未通过")

@@ -39,6 +39,58 @@ class PeerResult:
     session: dict = field(default_factory=dict)
 
 
+def _task_view(task: dict) -> dict:
+    """任务表的可读投影：只给决策需要的状态与交付摘要，不带整份交付内容。"""
+    view = {
+        "id": task.get("id"),
+        "owner": task.get("owner"),
+        "status": task.get("status"),
+        "depends_on": list(task.get("depends_on") or []),
+    }
+    delivery = task.get("delivery") or {}
+    if delivery:
+        summary = {"version": delivery.get("version")}
+        if "days" in delivery:
+            summary["days"] = len(delivery.get("days") or [])
+        for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id"):
+            if delivery.get(key) is not None:
+                summary[key] = delivery[key]
+        view["delivered"] = summary
+    if task.get("allowed_repair_tools"):
+        view["allowed_repair_tools"] = list(task["allowed_repair_tools"])
+    base = task.get("delivery_base")
+    if isinstance(base, dict):
+        # 差异交付必须引用基线版本；只给版本号，不重复整份交付内容。
+        view["delivery_base"] = {"version": base.get("version")}
+    return view
+
+
+def _compact_payload(payload: dict) -> dict:
+    """消息 payload 的精简投影。
+
+    原始 payload 往往就是整份决策对象（say/kind/to/...），还会带上整份 ReviewPacket
+    和任务表；这些要么与 content 重复，要么已由专门的提示段单独提供。
+    """
+    keep = {}
+    for key in ("version", "approved_version", "evidence_ids", "changes", "escalation",
+                "task_id", "issue_ledger", "max_calls", "suggested_max_calls"):
+        if key in payload and payload[key] not in (None, [], {}):
+            keep[key] = payload[key]
+    task = payload.get("task")
+    if isinstance(task, dict):
+        keep["task"] = _task_view(task)
+    return keep
+
+
+def _compact_message(env: Envelope, content_limit: int = 300) -> dict:
+    content = env.content if len(env.content) <= content_limit else env.content[:content_limit] + "…"
+    view = {"sender": env.sender, "kind": env.kind, "content": content}
+    payload = _compact_payload(env.payload or {})
+    if payload:
+        view["payload"] = payload
+    return view
+
+
 def dump_context(ctx: ToolContext) -> dict:
     return {
         "transport": ctx.transport.model_dump(mode="json"),
@@ -351,7 +403,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         emit("wake", agent=agent, reason=f"执行任务 {active_task}" if active_task else "处理团队交付或评审", unread=bus.unread(agent))
         inbox = bus.take(agent)
         prompt = role.prompt(ctx, bus)
-        prompt += "\n任务状态：" + json.dumps(tasks, ensure_ascii=False)
+        prompt += "\n任务状态：" + json.dumps({tid: _task_view(t) for tid, t in tasks.items()}, ensure_ascii=False)
         prompt += f"\n当前任务：{active_task}；待审版本：{review_version}；已批准版本：{ctx.approved_version}"
         if pending_rejections:
             # 恢复后收件箱可能已空，必须显式带上待返工问题，否则主控只能盲目再次送审。
@@ -370,7 +422,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 "hotel": next((h.model_dump(mode="json") for h in ctx.lodging.candidates if h.name == ctx.hotel_id), None),
             }, ensure_ascii=False)
         if inbox:
-            prompt += "\n本回合收件：" + json.dumps([m.to_dict() for m in inbox], ensure_ascii=False)
+            prompt += "\n本回合收件：" + json.dumps([_compact_message(m) for m in inbox], ensure_ascii=False)
         if agent == "critic_agent":
             latest_proposal = next((m for m in reversed(inbox) if m.kind == "proposal"), None)
             review_packet = (latest_proposal.payload.get("review_packet") if latest_proposal else None)

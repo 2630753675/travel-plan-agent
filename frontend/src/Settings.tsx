@@ -18,7 +18,6 @@ type Orchestration = {
   max_agent_turns: number
   max_output_tokens: number | null
   token_budget: number
-  agent_mode: 'fast' | 'expert' | 'peer' | 'legacy'
 }
 
 type DataSource = {
@@ -245,7 +244,7 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
                 </label>
               </div>
               <p className="cfg-hint">
-                当前 peer 深度团队最多使用 {s.orchestration.max_model_calls} 次供应商请求、{s.orchestration.max_agent_turns} 个 Agent 回合。
+                当前深度团队最多使用 {s.orchestration.max_model_calls} 次供应商请求、{s.orchestration.max_agent_turns} 个 Agent 回合。
                 两种预算分别计数；工具调用也会消耗供应商请求额度。单次运行最长 {s.orchestration.max_runtime_s} 秒。
                 单次输出 token 不再设硬上限，只记录实际用量；运行中可随时取消。
                 达到任一上限会暂停并说明实际原因；请求额度不足时可提高设置后恢复，不会自动扩大费用上限。

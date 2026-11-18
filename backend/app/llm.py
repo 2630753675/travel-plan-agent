@@ -77,6 +77,7 @@ class LLMClient:
         max_calls: int | None = None,
         max_output_tokens: int | None = None,
         cancellation=None,
+        initial_stats: dict | None = None,
     ):
         self.cfg = cfg
         self.timeout_s = timeout_s
@@ -94,6 +95,15 @@ class LLMClient:
         self.usage_calls = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        # 恢复运行：沿用同一 run_id 的累计用量，不把账本清零。
+        if initial_stats:
+            self.calls = int(initial_stats.get("calls") or 0)
+            self.input_chars = int(initial_stats.get("input_chars") or 0)
+            self.output_chars = int(initial_stats.get("output_chars") or 0)
+            self.latency_ms = int(initial_stats.get("latency_ms") or 0)
+            self.usage_calls = int(initial_stats.get("usage_calls") or 0)
+            self.prompt_tokens = int(initial_stats.get("prompt_tokens") or 0)
+            self.completion_tokens = int(initial_stats.get("completion_tokens") or 0)
 
     def _reserve_call(self) -> None:
         if self.max_calls is not None and self.calls >= self.max_calls:
@@ -242,8 +252,11 @@ class LLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
+        # 统计真实请求输入，不再只截前 4000 字符：否则 UI 的成本/预算都不可信。
+        payload_text = json.dumps(payload, ensure_ascii=False)
+        self.input_chars += len(payload_text)
         if self.budget:
-            self.budget.add(json.dumps(payload, ensure_ascii=False)[:4000])
+            self.budget.add(payload_text)
             if self.budget.exceeded():
                 raise LLMError(f"已超出 token 预算 {self.budget.budget}")
 

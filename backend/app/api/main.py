@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import access
 from .. import cancellation
@@ -109,6 +109,9 @@ class ResumeRequest(BaseModel):
     kind: str | None = None
     accepted_issue_codes: list[str] = []
     note: str = ""
+    # 可选：本次继续时把模型请求上限提高到该值（1-80），并写回设置。
+    # 用于“额度耗尽后继续”，避免用户还要跳到设置页重新保存。
+    max_model_calls: int | None = Field(default=None, ge=1, le=80)
 
 
 class RollbackRequest(BaseModel):
@@ -123,6 +126,12 @@ _CHECKPOINTER = PersistentSaver(DATA_DIR / "checkpoints.pkl")
 def _sse(event: str, data: dict, *, event_id: str | None = None) -> str:
     prefix = f"id: {event_id}\n" if event_id else ""
     return f"{prefix}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _prior_run_stats(plan_id: str) -> dict:
+    """恢复运行时沿用同一 run 的累计用量；没有历史记录时从 0 开始。"""
+    record = store.load_run(plan_id) or {}
+    return (record.get("payload") or {}).get("llm_stats") or {}
 
 
 async def _run_graph(
@@ -255,16 +264,20 @@ async def _run_graph(
 
     if final.get("peer_stopped"):
         reason = str(final.get("peer_stop_reason") or "本次协作已停止，未形成可验证的完整方案。")
+        critique = final.get("critique")
         issues = [
             {"code": issue.code, "message": issue.message, "severity": issue.severity}
-            for issue in (final.get("critique").issues if final.get("critique") else [])
+            for issue in (critique.issues if critique else [])
         ]
         payload = {
             "plan_id": plan_id,
             "message": reason,
             "issues": issues,
+            "blockers": [i["message"] for i in issues if i["severity"] == "blocker"],
+            "issue_codes": [i["code"] for i in issues if i["severity"] == "blocker"],
             "llm_stats": stats,
             "recovery_status": "stopped",
+            "deliverable": False,
         }
         store.save_run(plan_id, "needs_input", payload)
         yield publish(factory.make("run_needs_input", actor="system", payload=payload))
@@ -402,9 +415,15 @@ async def _run_graph(
     )
 
 
+def _require_configured_model(cfg: AppSettings) -> None:
+    if not cfg.llm.configured:
+        raise HTTPException(
+            status_code=400,
+            detail="未配置模型：深度团队模式只使用真实模型。请先在设置页填写 base_url、model、api_key 并启用模型。",
+        )
+
+
 async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
-    # 请求级模式优先于全局配置：普通请求默认 fast，peer 必须由用户显式选择。
-    cfg.orchestration.agent_mode = brief.planning_mode
     cancel_token = cancellation.begin(plan_id)
     try:
         graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER, cancellation=cancel_token)
@@ -424,6 +443,7 @@ async def _plan_stream(brief: TripBrief, plan_id: str, cfg: AppSettings):
 @app.post("/api/plan")
 async def create_plan(brief: TripBrief):
     cfg = config_store.load()
+    _require_configured_model(cfg)
     try:
         make_source(cfg.datasource)
     except ValueError as e:
@@ -480,6 +500,7 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
 
     # 中断时还没落库，因此从 checkpointer 里取原始 brief
     cfg = config_store.load()
+    _require_configured_model(cfg)
     config = {"configurable": {"thread_id": plan_id}}
     probe_graph = build(make_source(cfg.datasource), cfg, checkpointer=_CHECKPOINTER)
     snapshot = await probe_graph.aget_state(config)
@@ -493,7 +514,13 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
         if raw is None:
             raise HTTPException(status_code=400, detail="找不到该规划的原始需求")
         brief = raw
-    cfg.orchestration.agent_mode = brief.planning_mode
+    # “额度耗尽后继续”允许在恢复请求里直接提高上限，并明确写回设置；
+    # 只升不降，避免误把全局预算压小；未传该字段时维持当前设置。
+    if body.max_model_calls is not None and body.max_model_calls > cfg.orchestration.max_model_calls:
+        cfg.orchestration.max_model_calls = body.max_model_calls
+        config_store.save(cfg)
+    # 恢复段沿用同一 run 的累计用量：不清零调用数，也不让预算被“续杯”重置。
+    prior_stats = _prior_run_stats(plan_id)
 
     async def stream():
         cancel_token = cancellation.begin(plan_id)
@@ -501,6 +528,7 @@ async def resume_plan(plan_id: str, body: ResumeRequest):
             graph = build(
                 make_source(cfg.datasource), cfg,
                 checkpointer=_CHECKPOINTER, cancellation=cancel_token,
+                initial_stats=prior_stats,
             )
             async for chunk in _run_graph(
                 graph,
@@ -557,6 +585,7 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         raise HTTPException(status_code=400, detail=f"{target} 不在该行程日期范围内")
 
     cfg = config_store.load()
+    _require_configured_model(cfg)
     src = make_source(cfg.datasource)
     t_plan = transport.run(brief, src)
     l_plan = lodging.run(brief, src)

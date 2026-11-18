@@ -212,7 +212,6 @@ type Form = {
   child: boolean
   preferences: string[]
   pace: (typeof PACE)[number]
-  planning_mode: 'fast' | 'expert' | 'peer'
 }
 
 const DEFAULT_FORM: Form = {
@@ -226,7 +225,6 @@ const DEFAULT_FORM: Form = {
   child: false,
   preferences: ['美食', '人文'],
   pace: '适中',
-  planning_mode: 'fast',
 }
 
 async function consume(res: Response, onEvent: (name: string, data: any) => void) {
@@ -445,43 +443,48 @@ function LogGroups({ entries }: { entries: LogEntry[] }) {
 function Conversation({ events }: { events: RunEvent[] }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const groups: { key: string; label: string; items: RunEvent[] }[] = []
-  const pendingTools = new Map<string, RunEvent>()
+  const callsById = new Map<string, RunEvent>()
+  const pendingToolsByActor = new Map<string, RunEvent[]>()
   const messageEvents: RunEvent[] = []
 
-  // 先把 tool_call / tool_result 配对，工具仍然是证据，不抢 Agent 发言的位置。
+  // tool_call / tool_result 先配对；工具调用挂到同一 Agent 的下一条消息上，
+  // 不再用 seq 窗口猜 parent_id（否则 4 个工具会只显示 1 个）。
   const hasStructuredMessages = events.some((ev) => Boolean(ev.payload?.message_id))
   for (const ev of events) {
     if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor) && ev.event_type !== 'tool_call' && ev.event_type !== 'tool_result') continue
     if (ev.event_type === 'agent_message' && !ev.payload?.message_id) {
-      // 旧 activity 投影中的查询工具行不是 Agent 消息；工具调用单独显示为证据卡片。
       if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor)) continue
       if (hasStructuredMessages) continue
     }
     if (ev.event_type === 'tool_call') {
       const id = String(ev.payload?.tool_call_id ?? ev.event_id)
-      pendingTools.set(id, ev)
+      callsById.set(id, ev)
+      const pending = pendingToolsByActor.get(ev.actor) ?? []
+      pending.push(ev)
+      pendingToolsByActor.set(ev.actor, pending)
       continue
     }
     if (ev.event_type === 'tool_result') {
       const id = String(ev.payload?.tool_call_id ?? '')
-      const call = pendingTools.get(id)
+      const call = callsById.get(id)
       if (call) {
         call.payload = { ...call.payload, _result: ev.payload, _resultEventId: ev.event_id }
-        pendingTools.delete(id)
-        messageEvents.push(call)
-      } else {
-        messageEvents.push(ev)
       }
       continue
     }
     if (ev.event_type === 'tool_exchange') continue
-    if (ev.event_type === 'tool_call') {
-      messageEvents.push(ev)
-      continue
-    }
     if (['agent_message', 'route_decision', 'validation_result', 'user_question', 'user_answer', 'agent_resumed'].includes(ev.event_type)) {
+      const pending = pendingToolsByActor.get(ev.actor)
+      if (pending?.length) {
+        ev.payload = { ...ev.payload, _tools: pending }
+        pendingToolsByActor.set(ev.actor, [])
+      }
       messageEvents.push(ev)
     }
+  }
+  // 没有后续消息的工具调用仍然保留，避免失败回合的证据消失。
+  for (const pending of pendingToolsByActor.values()) {
+    messageEvents.push(...pending)
   }
 
   for (const ev of messageEvents) {
@@ -532,15 +535,8 @@ function Conversation({ events }: { events: RunEvent[] }) {
             {!isCollapsed && (
               <div className="conversation-messages">
                 {group.items.map((ev) => {
-                  const tools = events.filter((candidate) => candidate.event_type === 'tool_call' && candidate.parent_id === ev.event_id)
-                  const orphanTools = tools.length === 0 && ev.event_type === 'agent_message'
-                    ? events.filter((candidate) => candidate.event_type === 'tool_call' && candidate.actor === ev.actor && candidate.seq < ev.seq && ev.seq - candidate.seq <= 3)
-                    : []
-                  const evidence = ev.event_type === 'tool_call'
-                    ? [ev]
-                    : tools.length
-                      ? tools
-                      : orphanTools
+                  const attached = Array.isArray(ev.payload?._tools) ? ev.payload._tools as RunEvent[] : []
+                  const evidence = ev.event_type === 'tool_call' ? [ev] : attached
                   const evidenceKey = `${ev.event_id}-evidence`
                   const evidenceOpen = collapsed[evidenceKey]
                   return (
@@ -784,6 +780,8 @@ type InterruptInfo = {
   ratio?: number
   options: InterruptOption[]
   plan_id: string
+  max_calls?: number
+  suggested_max_calls?: number
   negotiation?: Negotiation | null
   events?: RunEvent[]
   activity?: LogEntry[]
@@ -801,7 +799,6 @@ export default function App() {
   const [feedback, setFeedback] = useState<Record<string, string>>({})
   const [refineNote, setRefineNote] = useState<Record<string, string>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [agentMode, setAgentMode] = useState<'fast' | 'expert' | 'peer'>('fast')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
   const [versions, setVersions] = useState<VersionInfo[]>([])
@@ -818,17 +815,6 @@ export default function App() {
     return () => {
       onAuthRequired = null
     }
-  }, [])
-
-  useEffect(() => {
-    apiFetch('/api/config')
-      .then((r) => r.json())
-      .then((c) =>
-        setAgentMode(
-          (c?.orchestration?.agent_mode ?? 'fast') as 'fast' | 'expert' | 'peer',
-        ),
-      )
-      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -997,10 +983,12 @@ export default function App() {
   }
 
   async function cancelPlan() {
-    if (!activePlanId || cancelling) return
+    // run_started 事件之前、或页面从 URL 恢复时，activePlanId 可能还没赋值，用 URL 里的 plan 兜底。
+    const pid = activePlanId ?? new URLSearchParams(location.search).get('plan')
+    if (!pid || cancelling) return
     setCancelling(true)
     try {
-      const res = await apiFetch(`/api/plan/${activePlanId}/cancel`, { method: 'POST' })
+      const res = await apiFetch(`/api/plan/${pid}/cancel`, { method: 'POST' })
       if (!res.ok) {
         const detail = await res.json().catch(() => null)
         throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
@@ -1012,7 +1000,7 @@ export default function App() {
     }
   }
 
-  async function resumePlan(decision: string) {
+  async function resumePlan(decision: string, maxModelCalls?: number) {
     const pid = interruptInfo?.plan_id
     if (!pid) return
     setInterruptInfo(null)
@@ -1027,9 +1015,14 @@ export default function App() {
           kind: interruptInfo?.type === 'peer_escalation' ? 'peer_review_risk' : interruptInfo?.type,
           accepted_issue_codes: decision === 'accept_risk' ? ['REVIEW_RISK_ACCEPTED'] : [],
           note: decision === 'accept_risk' ? '用户确认接受当前评审风险' : '',
+          // 额度耗尽时把建议上限随恢复请求一起提交，后端会写回设置。
+          ...(maxModelCalls ? { max_model_calls: maxModelCalls } : {}),
         }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
       await consume(res, handleEvent)
       setPhase((p) => (p === 'running' ? 'done' : p))
     } catch (e) {
@@ -1058,7 +1051,6 @@ export default function App() {
         : ['无'],
       preferences: form.preferences,
       pace: form.pace,
-      planning_mode: form.planning_mode,
     }
     try {
       const res = await apiFetch('/api/plan', {
@@ -1066,7 +1058,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
       await consume(res, handleEvent)
       setPhase((p) => (p === 'running' ? 'done' : p))
     } catch (e) {
@@ -1196,7 +1191,7 @@ export default function App() {
           <p className="sub">LangGraph 编排 · 四路并行检索 · 校验回退 · 单日重排</p>
         </div>
         <div className="topbar-right">
-          <span className="mode-pill">{form.planning_mode === 'peer' ? '深度团队协作 · 高成本' : form.planning_mode === 'expert' ? '专家模式 · 最多 12 个 Agent 回合' : '快速规划 · 最多 8 个 Agent 回合'}</span>
+          <span className="mode-pill">深度团队 · 单模式</span>
           <div className="status-pill">
             {phase === 'form' && '待提交'}
             {phase === 'running' && `执行中 ${doneCount}/7`}
@@ -1212,6 +1207,11 @@ export default function App() {
           >
             执行轨迹{liveLogs.length > 0 ? ` · ${liveLogs.length}` : ''}
           </button>
+          {phase === 'running' && (
+            <button className="ghost" onClick={cancelPlan} disabled={cancelling}>
+              {cancelling ? '正在取消…' : '停止运行'}
+            </button>
+          )}
           <button className="ghost" onClick={() => setSettingsOpen(true)}>
             设置
           </button>
@@ -1244,9 +1244,7 @@ export default function App() {
       {settingsOpen && (
         <SettingsPanel
           onClose={() => setSettingsOpen(false)}
-          onSaved={(s) =>
-            setAgentMode((s.orchestration?.agent_mode ?? 'fast') as 'fast' | 'expert' | 'peer')
-          }
+          onSaved={() => undefined}
         />
       )}
 
@@ -1349,25 +1347,6 @@ export default function App() {
                 }
               >
                 {p}
-              </button>
-            ))}
-          </div>
-
-          <div className="chips">
-            <span className="chip-label">规划模式</span>
-            {([
-              ['fast', '快速', '默认，回合更少'],
-              ['expert', '专家', '复杂约束时使用'],
-              ['peer', '深度团队', '高成本，显式启用'],
-            ] as const).map(([mode, label, title]) => (
-              <button
-                key={mode}
-                title={title}
-                className={`chip ${form.planning_mode === mode ? 'on' : ''}`}
-                disabled={phase === 'running'}
-                onClick={() => setForm({ ...form, planning_mode: mode })}
-              >
-                {label}
               </button>
             ))}
           </div>
@@ -1490,11 +1469,23 @@ export default function App() {
                 </p>
               )}
               <div className="interrupt-actions">
-                {(interruptInfo.options ?? []).map((o) => (
-                  <button key={o.value} onClick={() => resumePlan(o.value)}>
-                    {o.label}
-                  </button>
-                ))}
+                {(interruptInfo.options ?? []).map((o) => {
+                  const bump =
+                    interruptInfo.type === 'model_call_budget_exhausted' &&
+                    o.value === 'continue' &&
+                    interruptInfo.suggested_max_calls
+                      ? interruptInfo.suggested_max_calls
+                      : undefined
+                  return (
+                    <button
+                      key={o.value}
+                      onClick={() => resumePlan(o.value, bump)}
+                      title={bump ? `本次继续会把模型请求上限提高到 ${bump} 次并写入设置` : undefined}
+                    >
+                      {bump ? `提高到 ${bump} 次并继续` : o.label}
+                    </button>
+                  )
+                })}
               </div>
               {liveLogs.length > 0 && (
                 <button className="ghost" onClick={() => setDrawerOpen(true)}>
