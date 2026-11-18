@@ -23,6 +23,14 @@ from .tools_spec import ToolContext
 # 单回合最多几轮"模型→工具"。上限的意义是防止模型原地打转烧钱，不是限制它的判断。
 DEFAULT_MAX_STEPS = 6
 
+# 允许在同一个模型响应里真并发执行的只读工具：各自只写不同字段，且都不推进 plan_version。
+PARALLEL_READ_TOOLS = {"search_flights", "search_hotels", "list_pois", "get_weather"}
+
+# 回填给模型的历史字符预算：工具结果动辄几千字符，只按消息条数裁剪会让上下文被少数大结果吃掉。
+# 回填给模型的历史字符预算。实测（15 次请求）总输入 82,612 字符里，本回合提示占 81%、
+# 工具结果 12%、上一回合历史≈0；预算压到 3000 只会把上下文裁空而不降总量，故取 6000 作为安全上限。
+DEFAULT_HISTORY_CHARS = 6000
+
 
 @dataclass
 class AgentTurn:
@@ -54,12 +62,23 @@ def _assistant_msg(content: str, calls: list[dict]) -> dict:
     }
 
 
-def _complete_history(history: list[dict] | None, limit: int = 12) -> list[dict]:
+def _message_chars(message: dict) -> int:
+    """近似上下文成本：正文 + 工具调用参数的字符数。"""
+    content = message.get("content") or ""
+    calls = message.get("tool_calls") or []
+    return len(content) + (len(json.dumps(calls, ensure_ascii=False)) if calls else 0)
+
+
+def _complete_history(history: list[dict] | None, limit: int = 12,
+                      max_chars: int = DEFAULT_HISTORY_CHARS) -> list[dict]:
     """按完整的 assistant tool_calls + tool 结果事务裁剪历史。
 
     不能直接对消息做 ``history[-limit:]``：那会把 role=tool 留在列表里，
     却丢掉它前面的 assistant.tool_calls，供应商会拒绝整个请求。每个工具事务
     必须作为一个不可分割的 group 保存；即使一个事务超过 limit，也完整保留。
+
+    除消息条数外还受字符预算约束：工具结果往往几千字符，只按条数裁剪会让
+    上下文被少数大结果吃掉；最新一组永远保留。
     """
     prior = [deepcopy(m) for m in (history or []) if m.get("role") != "system"]
     groups: list[list[dict]] = []
@@ -80,13 +99,34 @@ def _complete_history(history: list[dict] | None, limit: int = 12) -> list[dict]
         groups.append(group)
     selected: list[list[dict]] = []
     count = 0
+    chars = 0
     for group in reversed(groups):
-        if selected and count + len(group) > limit:
+        group_chars = sum(_message_chars(message) for message in group)
+        if selected and (count + len(group) > limit or chars + group_chars > max_chars):
             break
         selected.append(group)
         count += len(group)
+        chars += group_chars
     selected.reverse()
     return [message for group in selected for message in group]
+
+
+def _trim_for_request(messages: list[dict], max_chars: int = DEFAULT_HISTORY_CHARS) -> list[dict]:
+    """请求前按字符预算裁剪**上一回合**的历史，本回合的步骤一律保留。
+
+    试验过把本回合较早的工具事务也裁掉：模型会忘记"已经做过什么"并重复执行
+    （脚本模型上表现为把请求数从 15 次涨到 50 次），因此这里只裁剪更早的回合。
+    """
+    if len(messages) < 3:
+        return messages
+    system = messages[0]
+    prompts = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if not prompts:
+        return messages
+    last_user = prompts[-1]
+    budget = max(0, max_chars - _message_chars(messages[last_user]))
+    head = _complete_history(messages[1:last_user], limit=12, max_chars=budget)
+    return [system] + head + messages[last_user:]
 
 
 def _validate_history_messages(messages: list[dict]) -> None:
@@ -215,6 +255,7 @@ async def run_turn(
         resp = None
         for attempt in range(2):
             try:
+                messages = _trim_for_request(messages)
                 resp = await client.chat_tools(messages, schemas)
                 break
             except (LLMError, TimeoutError, asyncio.TimeoutError) as e:
@@ -232,8 +273,24 @@ async def run_turn(
         if calls:
             messages.append(_assistant_msg(resp.get("content") or "", calls))
             for call in calls:
-                used.append(call["name"])
                 emit("tool_call", agent=agent, tool=call["name"], arguments=call["arguments"])
+            precomputed: dict[str, dict] = {}
+            if len(calls) > 1 and all(
+                call["name"] in PARALLEL_READ_TOOLS
+                and isinstance(call["arguments"], dict)
+                and call["name"] in allowed_tools
+                and str(call["id"]) not in ctx.operations
+                for call in calls
+            ):
+                # 四个只读查询写的是互不相干的字段（transport / lodging / poi / weather），
+                # 且都不推进 plan_version，可以真并发；其余工具保持串行。
+                results = await asyncio.gather(*(
+                    asyncio.to_thread(tools_spec.execute, ctx, call["name"], call["arguments"])
+                    for call in calls
+                ))
+                precomputed = {str(call["id"]): result for call, result in zip(calls, results)}
+            for call in calls:
+                used.append(call["name"])
                 prior = ctx.operations.get(str(call["id"]))
                 fresh = False
                 if (
@@ -252,7 +309,10 @@ async def run_turn(
                 else:
                     fresh = True
                     before_version = ctx.plan_version
-                    result = tools_spec.execute(ctx, call["name"], call["arguments"])
+                    if str(call["id"]) in precomputed:
+                        result = precomputed[str(call["id"])]
+                    else:
+                        result = tools_spec.execute(ctx, call["name"], call["arguments"])
                 if result.get("ok") and not result.get("evidence_id"):
                     from uuid import uuid4
                     evidence_id = uuid4().hex

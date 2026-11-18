@@ -105,7 +105,33 @@ def main() -> int:
     check("空响应形成用户升级", bool(result.escalation))
     check("升级原因包含回合失败", "回合失败" in (result.escalation or {}).get("question", ""))
 
-    print("[3] 证据边界")
+    print("[3] 只读工具并发")
+    parallel_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+
+    class TwoReads:
+        def __init__(self):
+            self.calls = 0
+
+        async def chat_tools(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "c1", "name": "list_pois", "arguments": {}},
+                    {"id": "c2", "name": "get_weather", "arguments": {}},
+                ]}
+            return reply(kind="note", say="已并行查询景点与天气")
+
+    two = TwoReads()
+    turn = asyncio.run(runtime.run_turn(
+        agent="local_expert", system="s", prompt="p",
+        tools=["list_pois", "get_weather"], ctx=parallel_ctx, bus=Bus(),
+        client=two, emit=lambda *_a, **_k: None, max_steps=2,
+    ))
+    check("两个只读调用都被执行", turn.ok and turn.tool_calls == ["list_pois", "get_weather"], str(turn.tool_calls))
+    check("并发结果按原顺序回填", parallel_ctx.poi.candidates and parallel_ctx.weather.days)
+    check("只读并发不推进版本", parallel_ctx.plan_version == 0, str(parallel_ctx.plan_version))
+
+    print("[4] 证据边界")
     ctx = hub.ToolContext(brief=brief(), source=MockSource())
     bad = asyncio.run(runtime.run_turn(
         agent="critic_agent", system="s", prompt="p", tools=[], ctx=ctx, bus=Bus(),

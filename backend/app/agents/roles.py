@@ -55,8 +55,8 @@ ROLES: dict[str, Role] = {
         "logistics", "交通住宿 Agent",
         ["search_flights", "search_hotels", "hotel_prices", "set_flights", "set_hotel"],
         "你是交通住宿专员。独立查询、比较、选择适合需求的交通与住宿，承担这些选择的质量责任。",
-        '阅读自己的任务和返工要求，调用查询工具获取事实，比较价格、余座、到达时刻、返程时刻、酒店位置和适老标签。'
-        '同一回合内一次性并行调用 search_flights 与 search_hotels（需要比价时再加 hotel_prices），不要分多轮重复查询；查询结果可复用。'
+        '阅读自己的任务和返工要求。若提示里已给出“服务端已预取的候选事实”，直接据此比较并写入，不要再调用查询工具；'
+        '只有确实需要更多候选时才查询，且同一回合一次性调用，不要分多轮重复查询；查询结果可复用。'
         '必须通过 set_flights 写入所选去返程，过夜行程必须 set_hotel；仅在正文推荐不算交付。'
         '老人出行避免红眼和极晚抵达；预算可行时兼顾可用游览时间，不能只选最低价。'
         '数据没有高铁或真实预订接口时必须说明仅提供候选，不编造预订；'
@@ -68,7 +68,8 @@ ROLES: dict[str, Role] = {
         "local_expert", "本地体验 Agent",
         ["list_pois", "get_weather", "irreplaceability", "elder_fit", "assign_pois", "submit_day_plans", "add_fixed_event", "replace_fixed_event", "remove_fixed_event", "materialize_plan", "check_plan", "get_plan", "route_distances"],
         "你是本地体验与每日活动专员。独立综合景点、天气、人群、开放时间及距离估算，交付逐日活动方案；不修改交通酒店。",
-        '先读取交通住宿交付和具体任务，第一回合一次性并行调用 list_pois 与 get_weather（必要时再加 elder_fit/route_distances），不要分多轮重复查询；查询结果可复用。'
+        '先读取交通住宿交付和具体任务。若提示里已给出“服务端已预取的候选事实”，直接据此选择，不要再调用 list_pois/get_weather；'
+        '只有确实需要更多候选时才查询，且同一回合一次性调用。'
         '景点时间、餐期、入住与市内交通由确定性排程生成，你不能直接写这些时间；'
         '需要去机场、预约参观等固定时段时，调用 add_fixed_event 明确登记，排程会让景点和餐食避开。'
         '不要声称自己写了排程时间；以 materialize_plan/get_plan 返回的时间为准。'

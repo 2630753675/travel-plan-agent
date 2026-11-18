@@ -428,7 +428,9 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 
 本次没有调用真实模型做验收，也没有重启服务后的浏览器验收；已运行确定性自检：后端 `compileall`、前端 `npm run build`、`verify_peer_success.py`、`verify_peer_deep_team.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、`verify_budget_cancel.py`、`verify_delivery_patch.py`、`verify_rework_resume.py`，以及单模式/无模型 400 的 smoke 测试。
 
-脚本化成功路径当前为 **20 次供应商请求 / 6 个 Agent 回合**（引入结构化评审包后由 24 次下降）；这是成本基线，不代表真实模型的实际用量。
+脚本化成功路径当前为 **15 次供应商请求 / 6 个 Agent 回合**（评审包把 Critic 的四次查询合成一次，代码预取再省掉四个角色的查询往返，任务交付后由代码直接提交评审；此前基线为 24、20、16）；这是成本基线，不代表真实模型的实际用量。
+
+任务拆解完成后，代码会并发预取航班、酒店、景点与天气，并把紧凑摘要注入专业 Agent 的提示；预取失败不影响后续流程，角色仍可自行查询。
 
 进度与剩余项以 [深度团队架构评审](<docs/deep-team-architecture-review.md>) 第 19 节为准；该节要求**每个阶段完成后同步更新**。
 

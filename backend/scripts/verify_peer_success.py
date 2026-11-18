@@ -167,9 +167,10 @@ class ScriptedTeam:
                        to=["critic_agent"], wake=["critic_agent"])
 
         if role == "logistics":
-            if "search_flights" not in used:
+            prefetched = "服务端已预取的候选事实" in prompt_text(messages)
+            if "search_flights" not in used and not prefetched:
                 return tool("search_flights")
-            if "search_hotels" not in used:
+            if "search_hotels" not in used and not prefetched:
                 return tool("search_hotels")
             if "set_flights" not in used:
                 return tool("set_flights", outbound_flight_no=OUTBOUND, inbound_flight_no=INBOUND)
@@ -181,11 +182,12 @@ class ScriptedTeam:
             })
 
         if role == "local_expert":
+            local_prefetched = "服务端已预取的候选事实" in prompt_text(messages)
             if "DAY_EMPTY" in prompt_text(messages) and "assign_pois" not in tools:
                 raise AssertionError("DAY_EMPTY 返工未获批 assign_pois 工具")
-            if "list_pois" not in used:
+            if "list_pois" not in used and not local_prefetched:
                 return tool("list_pois")
-            if "get_weather" not in used:
+            if "get_weather" not in used and not local_prefetched:
                 return tool("get_weather")
             assigned = {a.get("date") for a in called_args(messages, "assign_pois")}
             for day in DAYS:
@@ -293,7 +295,7 @@ async def main() -> int:
           f"{result.ctx.approved_version} vs {result.ctx.plan_version}")
     check("文档覆盖全部日期", [d["date"] for d in (result.ctx.document or {}).get("days", [])] == DAYS)
     check("调用数在默认预算内", team.calls <= 40, str(team.calls))
-    check("评审包减少重复请求", team.calls <= 20, str(team.calls))
+    check("评审包与预取减少重复请求", team.calls <= 17, str(team.calls))
     check("五个角色都参与了", set(team.roles) == {"orchestrator", "logistics", "local_expert", "critic_agent", "writer"},
           str(team.roles))
     review_packets = [m for m in result.bus.messages if m.sender == "orchestrator" and m.kind == "proposal"]
@@ -303,7 +305,11 @@ async def main() -> int:
           not ({"get_plan", "check_plan", "day_costs", "experience_check"} & set(critic_trace.get("tools", []))))
     converged = [p for k, p in events if k == "converged"]
     check("发出收敛事件", bool(converged))
-    check("脚本团队首轮未模拟返工", team.roles.get("logistics") == 5 and team.roles.get("local_expert") == 10)
+    check("代码预取省掉四次查询往返", team.roles.get("logistics") == 3 and team.roles.get("local_expert") == 8,
+          str(team.roles))
+    check("预取事件已发出", any(k == "prefetch_done" for k, _ in events))
+    check("主控不再为提交评审消耗回合", team.roles.get("orchestrator") == 1, str(team.roles))
+    check("评审由代码提交", any(k == "review_submitted" for k, _ in events))
     print(f"调用次数 {team.calls}，各角色回合 {team.roles}，总花费 {result.itinerary.total_cost if result.itinerary else '-'}")
 
     print("\n[2] Issue Ledger 校验与关闭")

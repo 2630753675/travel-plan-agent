@@ -7,6 +7,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
+import asyncio
 import json
 
 from ..artifacts import default_store
@@ -100,6 +101,59 @@ def _compact_histories(histories: dict[str, list[dict]]) -> dict[str, list[dict]
     from .runtime import _complete_history
 
     return {agent: _complete_history(messages, limit=12) for agent, messages in histories.items()}
+
+
+# 代码预取：一次并发拉齐专业 Agent 起步就要的事实，避免每个角色各花一轮模型请求去查。
+PREFETCH_TOOLS = ("search_flights", "search_hotels", "list_pois", "get_weather")
+
+
+async def _prefetch_facts(ctx: ToolContext, emit) -> int:
+    """并发预取航班/酒店/景点/天气。失败不影响后续流程，角色仍可自行查询。"""
+    results = await asyncio.gather(
+        *(asyncio.to_thread(execute, ctx, name, {}) for name in PREFETCH_TOOLS),
+        return_exceptions=True,
+    )
+    ok = 0
+    for name, result in zip(PREFETCH_TOOLS, results):
+        if isinstance(result, Exception) or not (isinstance(result, dict) and result.get("ok")):
+            emit("prefetch_failed", tool=name, error=str(result)[:200])
+        else:
+            ok += 1
+    emit("prefetch_done", ok=ok, total=len(PREFETCH_TOOLS))
+    return ok
+
+
+def _prefetch_summary(agent: str, ctx: ToolContext) -> dict:
+    """给角色的紧凑事实摘要：只保留做选择需要的字段，不灌原始 JSON。"""
+    if agent == "logistics":
+        def flight(row):
+            return {"flight_no": row.flight_no, "dep": row.dep_time.strftime("%H:%M"),
+                    "arr": row.arr_time.strftime("%H:%M"), "price": row.price,
+                    "seats": row.seats_left}
+        return {
+            "outbound": [flight(f) for f in ctx.transport.outbound[:4]],
+            "inbound": [flight(f) for f in ctx.transport.inbound[:4]],
+            "hotels": [
+                {"name": h.name, "price": h.price_per_night, "distance_km": h.distance_to_center_km,
+                 "rating": h.rating, "tags": list(h.tags)[:4]}
+                for h in ctx.lodging.candidates[:5]
+            ],
+        }
+    if agent == "local_expert":
+        return {
+            "pois": [
+                {"id": p.id, "name": p.name, "duration_min": p.duration_min,
+                 "open": f"{p.open_time.strftime('%H:%M')}-{p.close_time.strftime('%H:%M')}",
+                 "closed_days": list(p.closed_days), "tags": list(p.tags)[:4]}
+                for p in ctx.poi.candidates[:14]
+            ],
+            "excluded": list(ctx.poi.excluded)[:5],
+            "weather": [
+                {"date": str(w.date), "condition": w.condition, "rainy": w.is_rainy}
+                for w in ctx.weather.days
+            ],
+        }
+    return {}
 
 
 def _pack_session(session: dict, store) -> dict:
@@ -295,6 +349,77 @@ def _merge_delivery(task: dict, decision: dict) -> dict:
     return merged
 
 
+class SandboxConflict(RuntimeError):
+    """工作副本与共享上下文版本冲突：不能用副本覆盖更新的方案。"""
+
+
+# 专业 Agent 的写入域：只有这些字段会从它自己的工作副本合并回共享上下文。
+# 目的是让“交通住宿”改不了日程、“本地体验”改不了航班酒店，而不是靠提示词自觉。
+SANDBOX_FIELDS: dict[str, tuple[str, ...]] = {
+    "logistics": ("transport", "lodging", "hotel_id", "plan_version"),
+    "local_expert": (
+        "poi", "weather", "assignment", "fixed_events", "itinerary", "hard_check",
+        "itinerary_version", "approved_version", "document", "plan_version",
+    ),
+}
+
+
+def _sandbox_context(ctx: ToolContext) -> ToolContext:
+    """专业 Agent 的工作副本。
+
+    证据目录、工具账本与只读缓存与主上下文共享（它们记录的是“发生过什么”，必须全局一致），
+    其余方案状态全部拷贝，避免执行中途直接改共享状态。
+    """
+    sandbox = ToolContext(brief=ctx.brief, source=ctx.source)
+    sandbox.transport = ctx.transport.model_copy(deep=True)
+    sandbox.lodging = ctx.lodging.model_copy(deep=True)
+    sandbox.poi = ctx.poi.model_copy(deep=True)
+    sandbox.weather = ctx.weather.model_copy(deep=True)
+    sandbox.assignment = {d: list(ids) for d, ids in ctx.assignment.items()}
+    sandbox.fixed_events = {d: [e.model_copy(deep=True) for e in events] for d, events in ctx.fixed_events.items()}
+    sandbox.hotel_id = ctx.hotel_id
+    sandbox.itinerary = ctx.itinerary.model_copy(deep=True) if ctx.itinerary else None
+    sandbox.hard_check = deepcopy(ctx.hard_check)
+    sandbox.plan_version = ctx.plan_version
+    sandbox.itinerary_version = ctx.itinerary_version
+    sandbox.approved_version = ctx.approved_version
+    sandbox.document = deepcopy(ctx.document)
+    sandbox.evidence = ctx.evidence
+    sandbox.operations = ctx.operations
+    sandbox.cache = ctx.cache
+    return sandbox
+
+
+_SANDBOX_MUTABLE = (
+    "transport", "lodging", "poi", "weather", "assignment", "fixed_events", "hotel_id",
+    "itinerary", "hard_check", "plan_version", "itinerary_version", "approved_version", "document",
+)
+
+
+def _merge_sandbox(ctx: ToolContext, sandbox: ToolContext, owner: str, *, base_version: int) -> list[str]:
+    """按角色白名单把工作副本里允许的字段写回共享上下文，返回被忽略的越域字段。
+
+    base_version 是副本开始执行时的版本。如果共享上下文在副本执行期间已经变化
+    （并行兄弟提议抢先用掉了版本号），这里不覆盖、不静默推进，而是抛冲突让调用方
+    把任务退回重做——避免后写覆盖前写，也避免版本号重复使用。
+    """
+    if ctx.plan_version != base_version:
+        raise SandboxConflict(
+            f"{owner} 的工作副本基于 v{base_version}，但共享上下文已是 v{ctx.plan_version}"
+        )
+    allowed = set(SANDBOX_FIELDS.get(owner, ()))
+    ignored: list[str] = []
+    for field in _SANDBOX_MUTABLE:
+        value = getattr(sandbox, field)
+        if value == getattr(ctx, field):
+            continue
+        if field in allowed:
+            setattr(ctx, field, value)
+        else:
+            ignored.append(field)
+    return ignored
+
+
 def _delivery_change_summary(base: dict, patch: dict, plan_version: int) -> dict:
     """差异交付的人类可读摘要：只记录真正变化的日期/字段，用于界面展示。"""
     fields = []
@@ -466,6 +591,52 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 return task["owner"], task["id"]
         return "orchestrator", None
 
+    def submit_review() -> str:
+        """所有专业任务交付后由代码直接提交评审。
+
+        主控的职责是拆解与派工；"把合并方案转交评审"这一步没有任何判断，
+        再消耗一次模型请求纯属浪费，所以由代码完成。返回 "escalate" 表示
+        评审轮次已用尽、需要用户决策。
+        """
+        nonlocal reviews, review_version, proposal_id, pending_issue_codes, escalation
+        if reviews >= max_rounds:
+            changes = pending_rejections or []
+            detail = "；".join(
+                f"{c.get('owner')}：{c.get('problem')} → {c.get('required_change')}"
+                for c in changes if isinstance(c, dict)
+            ) or "评审仍有未解决项"
+            escalation = {
+                "from": "critic_agent",
+                "question": (
+                    f"评审连续 {max_rounds} 轮未通过：{detail}。"
+                    "继续返工会消耗新的回合；也可以停止并保留问题清单。"
+                ),
+                "type": "review_rounds_exhausted",
+                "options": [
+                    {"value": "restart", "label": "调整需求后重新规划"},
+                    {"value": "stop", "label": "停止并保留问题清单"},
+                ],
+                "say": detail,
+            }
+            emit("escalated", agent="critic_agent", question=escalation["question"])
+            return "escalate"
+        review_packet = build_review_packet(ctx)
+        if not review_packet.get("ok"):
+            raise ValueError(f"无法生成 ReviewPacket：{review_packet.get('error')}")
+        pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
+        reviews += 1
+        bus.round = reviews
+        review_version = ctx.plan_version
+        proposal = post("orchestrator", ["critic_agent"], "proposal", "提交结构化 ReviewPacket 供独立评审", {
+            "version": review_version,
+            "review_packet": review_packet,
+            "tasks": tasks,
+            "issue_ledger": pending_issue_codes,
+        })
+        proposal_id = proposal.mid
+        emit("review_submitted", version=review_version, rounds=reviews)
+        return "review"
+
     while turns < max_turns:
         agent = next_agent
         role = roles.get(agent)
@@ -486,6 +657,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 allowed = sorted({tool for item in scoped for tool in item.get("repair_tools", [])})
                 prompt += "\n本次返工允许的工具（服务端将强制限制）：" + "、".join(allowed)
         active_task_state = tasks.get(active_task) if active_task else None
+        prefetched = _prefetch_summary(agent, ctx) if agent in {"logistics", "local_expert"} else {}
+        if prefetched:
+            prompt += "\n服务端已预取的候选事实（直接据此选择，不要重复查询）：" + json.dumps(prefetched, ensure_ascii=False)
         if agent == "local_expert":
             if active_task_state and active_task_state.get("allowed_repair_tools"):
                 prompt += "\n本次返工强制工具范围：" + json.dumps(active_task_state["allowed_repair_tools"], ensure_ascii=False)
@@ -506,11 +680,33 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             if active_task_state and active_task_state.get("allowed_repair_tools") is not None
             else None
         )
+        # 专业 Agent 只在自己那份上下文里改；主控/评审/文案没有领域写入，直接用共享上下文。
+        sandbox_base = ctx.plan_version
+        turn_ctx = _sandbox_context(ctx) if agent in SANDBOX_FIELDS else ctx
         turn = await run_turn(agent=agent, system=role.system, prompt=prompt, tools=role.tools,
-                              ctx=ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
+                              ctx=turn_ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
                               history=histories.get(agent), allowed_tools=allowed_repair_tools)
         histories[agent] = turn.history
         turns += 1
+        if turn_ctx is not ctx:
+            # 无论本回合是否成功，工具已经产生的真实写入都按域白名单合并回共享上下文；
+            # 越域字段直接丢弃，不进入方案。若期间上下文版本已被推进，则不覆盖。
+            try:
+                ignored_fields = _merge_sandbox(ctx, turn_ctx, agent, base_version=sandbox_base)
+            except SandboxConflict as exc:
+                ignored_fields = []
+                warnings.append(f"{exc}；本回合结果作废")
+                if active_task:
+                    tasks[active_task]["status"] = "pending"
+                emit("sandbox_conflict", agent=agent, reason=str(exc),
+                     base_version=sandbox_base, current_version=ctx.plan_version)
+                trace.append({"agent": agent, "task_id": active_task, "ok": False,
+                              "error": str(exc), "error_type": "SandboxConflict",
+                              "tools": turn.tool_calls, "decision": {}, "plan_version": ctx.plan_version})
+                next_agent, active_task = "orchestrator", None
+                continue
+            if ignored_fields:
+                warnings.append(f"{agent} 的越域写入已忽略：{', '.join(ignored_fields)}")
         trace.append({"agent": agent, "task_id": active_task, "ok": turn.ok, "error": turn.error,
                       "error_type": turn.error_type, "tools": turn.tool_calls,
                       "decision": turn.decision, "plan_version": ctx.plan_version})
@@ -579,6 +775,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             if agent == "orchestrator":
                 if not tasks:
                     tasks = _validate_tasks(decision.get("tasks"))
+                    # 任务一确定就用代码并发拉齐基础事实，专业 Agent 不必各自花一轮去查。
+                    await _prefetch_facts(ctx, emit)
                 elif decision.get("rework"):
                     from copy import deepcopy
                     candidate_tasks = deepcopy(tasks)
@@ -628,44 +826,10 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                         goal += "\n只能使用 allowed_repair_tools 指定的工具；修复后必须 materialize_plan 并 check_plan。"
                     post("orchestrator", [next_agent], "request", goal, {"task": task})
                 else:
-                    if reviews >= max_rounds:
-                        changes = pending_rejections or []
-                        detail = "；".join(
-                            f"{c.get('owner')}：{c.get('problem')} → {c.get('required_change')}"
-                            for c in changes if isinstance(c, dict)
-                        ) or "评审仍有未解决项"
-                        escalation = {
-                            "from": "critic_agent",
-                            "question": (
-                                f"评审连续 {max_rounds} 轮未通过：{detail}。"
-                                "继续返工会消耗新的回合；也可以停止并保留问题清单。"
-                            ),
-                            "type": "review_rounds_exhausted",
-                            "options": [
-                                {"value": "restart", "label": "调整需求后重新规划"},
-                                {"value": "stop", "label": "停止并保留问题清单"},
-                            ],
-                            "say": detail,
-                        }
-                        emit("escalated", agent="critic_agent", question=escalation["question"])
+                    # 兜底路径：主控回合恰好发生在“所有任务已交付”时（例如恢复后）。
+                    outcome = submit_review()
+                    if outcome == "escalate":
                         break
-                    # 由真实主控明确提交，而非专业 Agent 一交付就假定通过。
-                    if kind != "proposal" or "critic_agent" not in (decision.get("to") or []):
-                        raise ValueError("所有任务已交付，请主控以 proposal 通知 critic_agent 评审")
-                    review_packet = build_review_packet(ctx)
-                    if not review_packet.get("ok"):
-                        raise ValueError(f"无法生成 ReviewPacket：{review_packet.get('error')}")
-                    pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
-                    reviews += 1
-                    bus.round = reviews
-                    review_version = ctx.plan_version
-                    proposal = post("orchestrator", ["critic_agent"], "proposal", "提交结构化 ReviewPacket 供独立评审", {
-                        "version": review_version,
-                        "review_packet": review_packet,
-                        "tasks": tasks,
-                        "issue_ledger": pending_issue_codes,
-                    })
-                    proposal_id = proposal.mid
                     next_agent, active_task = "critic_agent", None
             elif agent in {"logistics", "local_expert"}:
                 if kind in {"objection", "request"}:
@@ -705,7 +869,11 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     next_agent, active_task = next_owner, next_task
                     post("orchestrator", [next_owner], "request", tasks[next_task]["goal"], {"task": tasks[next_task]})
                 else:
-                    next_agent, active_task = "orchestrator", None
+                    # 所有专业任务已交付：代码直接提交评审，不再让主控做一次纯转发。
+                    outcome = submit_review()
+                    if outcome == "escalate":
+                        break
+                    next_agent, active_task = "critic_agent", None
             elif agent == "critic_agent":
                 if ctx.plan_version != review_version:
                     raise ValueError("评审期间方案版本发生变化，必须重新提交")
