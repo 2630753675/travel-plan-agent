@@ -172,7 +172,8 @@ async def main():
     allowed = set(resumed.session["tasks"]["T2"].get("allowed_repair_tools") or [])
     assert resumed_client.rework_tool_schemas, "返工回合应当有工具 schema"
     for names in resumed_client.rework_tool_schemas:
-        assert set(names) <= allowed | {"remove_fixed_event", "replace_fixed_event"}
+        # 决策工具在任何返工范围内都必须可用，否则模型无法提交结论。
+        assert set(names) <= allowed | {"remove_fixed_event", "replace_fixed_event", "submit_decision"}, names
     print("PASS resume keeps scoped tools, submits patch delivery, closes issue, reaches Writer")
     print(f"PASS continuation used {resumed_client.calls} scripted requests and did not rerun logistics")
 

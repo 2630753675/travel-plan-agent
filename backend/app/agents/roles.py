@@ -8,7 +8,8 @@ from .bus import Bus
 from .runtime import render_bus
 from .tools_spec import ToolContext
 
-CONTRACT = """只输出 JSON 对象：
+CONTRACT = """提交决策的两种方式：优先调用 submit_decision 工具，参数就是下面这个决策对象（格式错误会作为一次工具错误返回，可直接在同一回合修正）；不支持时再在正文里只输出 JSON 对象。
+决策对象：
 {"say":"不超过 500 字的结论、问题或依据，不要复述完整方案/全量数字", "kind":"request|proposal|objection|accept|escalate|final|note",
  "to":[], "wake":[], "done":true, "changes":[], "evidence":[], "escalate":null}
 角色代号：orchestrator / logistics / local_expert / critic_agent / writer。

@@ -140,7 +140,45 @@ def main() -> int:
     ))
     check("伪造 evidence 被拒绝", not bad.ok)
 
-    print("[4] stop 终态")
+    print("[5] 结构化决策工具")
+    decision_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+
+    class Structured:
+        def __init__(self, first: dict):
+            self.first = first
+            self.calls = 0
+
+        async def chat_tools(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "d1", "name": "submit_decision", "arguments": self.first},
+                ]}
+            return {"content": "", "tool_calls": [
+                {"id": "d2", "name": "submit_decision", "arguments": {
+                    "kind": "note", "say": "补齐字段后重新提交",
+                    "to": [], "wake": [], "done": True, "changes": [], "evidence": [], "escalate": None,
+                }},
+            ]}
+
+    good = asyncio.run(runtime.run_turn(
+        agent="orchestrator", system="s", prompt="p", tools=[], ctx=decision_ctx, bus=Bus(),
+        client=Structured({"kind": "note", "say": "直接提交",
+                           "to": [], "wake": [], "done": True, "changes": [], "evidence": [], "escalate": None}),
+        emit=lambda *_a, **_k: None, max_steps=2,
+    ))
+    check("结构化决策可直接提交", good.ok and good.decision.get("kind") == "note", str(good.decision)[:120])
+    check("决策工具出现在工具清单", "submit_decision" in good.tool_calls, str(good.tool_calls))
+
+    repaired = Structured({"say": "缺少 kind 字段"})
+    fixed = asyncio.run(runtime.run_turn(
+        agent="orchestrator", system="s", prompt="p", tools=[], ctx=decision_ctx, bus=Bus(),
+        client=repaired, emit=lambda *_a, **_k: None, max_steps=3,
+    ))
+    check("缺字段时用工具错误并要求同回合修正", fixed.ok and repaired.calls == 2, f"{fixed.ok}/{repaired.calls}")
+    check("修正后决策生效", fixed.decision.get("say") == "补齐字段后重新提交", str(fixed.decision)[:120])
+
+    print("[6] stop 终态")
     resume = {
         "architecture": "professional_team", "bus": {}, "context": {}, "tasks": {},
         "histories": {}, "trace": [], "turns": 1, "reviews": 0,

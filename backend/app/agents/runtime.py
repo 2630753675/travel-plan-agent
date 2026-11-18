@@ -27,6 +27,37 @@ DEFAULT_MAX_STEPS = 6
 PARALLEL_READ_TOOLS = {"search_flights", "search_hotels", "list_pois", "get_weather"}
 
 # 回填给模型的历史字符预算：工具结果动辄几千字符，只按消息条数裁剪会让上下文被少数大结果吃掉。
+# 结构化决策工具：参数就是决策对象。用它替代"在正文里输出 JSON"，
+# 让格式错误变成一次短工具结果，而不是整轮重发完整上下文。
+DECISION_TOOL = "submit_decision"
+
+DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": sorted(KINDS)},
+        "say": {"type": "string", "description": "不超过 500 字"},
+        "to": {"type": "array", "items": {"type": "string"}},
+        "wake": {"type": "array", "items": {"type": "string"}},
+        "done": {"type": "boolean"},
+        "escalate": {"type": ["object", "null"]},
+        "changes": {"type": "array", "items": {"type": "object"}},
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "advisory": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": ["kind", "say"],
+    "additionalProperties": True,
+}
+
+
+def _decision_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": DECISION_TOOL,
+            "description": "提交本回合决策，参数即决策对象（kind/say/to/wake/done 等）。用它代替在正文里写 JSON。",
+            "parameters": DECISION_SCHEMA,
+        },
+    }
 # 回填给模型的历史字符预算。实测（15 次请求）总输入 82,612 字符里，本回合提示占 81%、
 # 工具结果 12%、上一回合历史≈0；预算压到 3000 只会把上下文裁空而不降总量，故取 6000 作为安全上限。
 DEFAULT_HISTORY_CHARS = 6000
@@ -214,6 +245,36 @@ def _validate_decision(decision: dict) -> None:
             raise ValueError("关键结论必须提供 evidence 引用，或明确标记事实未核实/待确认")
 
 
+def _finalize_decision(agent: str, decision: dict, ctx: ToolContext) -> dict:
+    """把"模型给出的决策"变成可执行决策：统一做协议、角色与证据校验。"""
+    if not isinstance(decision, dict):
+        raise ValueError("决策必须是 JSON 对象")
+    if agent == "critic_agent":
+        decision["agent"] = "critic_agent"
+    _validate_decision(decision)
+    if agent == "critic_agent" and decision.get("kind") == "objection":
+        changes = decision.get("changes")
+        if not isinstance(changes, list) or not changes or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("code"), str)
+            or not isinstance(item.get("acceptance"), str)
+            for item in changes
+        ):
+            raise ValueError("Critic objection 的 changes 必须包含 code 和 acceptance")
+    evidence = decision.get("evidence") or []
+    if evidence and (
+        not isinstance(evidence, list)
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or item["id"] not in ctx.evidence
+            for item in evidence
+        )
+    ):
+        raise ValueError("evidence 必须引用本会话工具成功结果中的 evidence_id")
+    return decision
+
+
 async def run_turn(
     *,
     agent: str,
@@ -242,9 +303,11 @@ async def run_turn(
         return AgentTurn(error=str(exc), error_type="HistoryCorrupt", history=messages)
     messages.append({"role": "user", "content": prompt})
     schemas = tools_spec.schemas_for(tools)
+    schemas = schemas + [_decision_tool()]
     role_allowed_tools = set(tools) & {schema["function"]["name"] for schema in schemas}
+    role_allowed_tools.add(DECISION_TOOL)
     if allowed_tools is not None:
-        role_allowed_tools &= allowed_tools
+        role_allowed_tools &= allowed_tools | {DECISION_TOOL}
         schemas = [schema for schema in schemas if schema["function"]["name"] in role_allowed_tools]
     allowed_tools = role_allowed_tools
     used: list[str] = []
@@ -291,6 +354,25 @@ async def run_turn(
                 precomputed = {str(call["id"]): result for call, result in zip(calls, results)}
             for call in calls:
                 used.append(call["name"])
+                if call["name"] == DECISION_TOOL:
+                    try:
+                        if not isinstance(call["arguments"], dict):
+                            raise ValueError("参数必须是 JSON 对象")
+                        decision = _finalize_decision(agent, dict(call["arguments"]), ctx)
+                    except ValueError as exc:
+                        result = {"ok": False, "error": f"决策不合协议：{exc}"}
+                        emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=False,
+                             summary=_summarize_result(result), evidence_id=None)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(result, ensure_ascii=False),
+                        })
+                        continue
+                    text = str(decision.get("say") or "")
+                    emit("say", agent=agent, text=text)
+                    return AgentTurn(content=text, decision=decision, tool_calls=used,
+                                     history=messages, evidence_ids=evidence_ids)
                 prior = ctx.operations.get(str(call["id"]))
                 fresh = False
                 if (
@@ -358,30 +440,7 @@ async def run_turn(
         content = resp.get("content") or ""
         messages.append({"role": "assistant", "content": content})
         try:
-            decision = _parse_decision(content)
-            if agent == "critic_agent":
-                decision["agent"] = "critic_agent"
-            _validate_decision(decision)
-            if agent == "critic_agent" and decision.get("kind") == "objection":
-                changes = decision.get("changes")
-                if not isinstance(changes, list) or not changes or any(
-                    not isinstance(item, dict)
-                    or not isinstance(item.get("code"), str)
-                    or not isinstance(item.get("acceptance"), str)
-                    for item in changes
-                ):
-                    raise ValueError("Critic objection 的 changes 必须包含 code 和 acceptance")
-            evidence = decision.get("evidence") or []
-            if evidence and (
-                not isinstance(evidence, list)
-                or any(
-                    not isinstance(item, dict)
-                    or not isinstance(item.get("id"), str)
-                    or item["id"] not in ctx.evidence
-                    for item in evidence
-                )
-            ):
-                raise ValueError("evidence 必须引用本会话工具成功结果中的 evidence_id")
+            decision = _finalize_decision(agent, _parse_decision(content), ctx)
         except ValueError as e:
             messages.append({
                 "role": "user",
