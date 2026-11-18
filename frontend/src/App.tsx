@@ -82,6 +82,32 @@ type TeamTask = {
   owner?: string
   status?: string
   rework?: string[]
+  changes?: DeliveryChange[]
+}
+
+type DeliveryFieldChange = {
+  kind: string
+  date?: string
+  before?: unknown
+  after?: unknown
+}
+
+type DeliveryChange = {
+  base_version?: number
+  plan_version?: number
+  fields?: DeliveryFieldChange[]
+  rationale?: string
+}
+
+type IssueLedgerItem = {
+  code: string
+  severity?: string
+  owner?: string
+  status?: string
+  acceptance?: string
+  first_seen_version?: number
+  fixed_in_version?: number | null
+  evidence?: string
 }
 
 type LlmStats = {
@@ -95,6 +121,34 @@ type LlmStats = {
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
+}
+
+const FIELD_LABEL: Record<string, string> = {
+  days: '每日景点',
+  outbound_flight_no: '去程航班',
+  inbound_flight_no: '返程航班',
+  hotel_id: '酒店',
+}
+
+const OWNER_LABEL: Record<string, string> = {
+  logistics: '交通住宿',
+  local_expert: '本地体验',
+}
+
+function changeText(change: DeliveryChange): string {
+  const fields = Array.isArray(change?.fields) ? change.fields : []
+  if (fields.length === 0) return '无实际变化'
+  return fields
+    .map((field) => {
+      if (field.kind === 'days') {
+        const before = Array.isArray(field.before) ? field.before.length : 0
+        const after = Array.isArray(field.after) ? field.after.length : 0
+        return `${field.date ?? ''} 景点 ${before}→${after} 个`
+      }
+      const label = FIELD_LABEL[field.kind] ?? field.kind
+      return `${label} ${String(field.before ?? '—')} → ${String(field.after ?? '—')}`
+    })
+    .join('；')
 }
 
 type Result = {
@@ -117,6 +171,7 @@ type Result = {
   summary?: Summary
   document?: TeamDocument | null
   team_tasks?: Record<string, TeamTask>
+  issue_ledger?: IssueLedgerItem[]
   approved_version?: number | null
   llm_stats?: LlmStats
   share?: string
@@ -1524,18 +1579,48 @@ export default function App() {
                 <section className="team-tasks">
                   <h2>团队任务</h2>
                   <table>
-                    <thead><tr><th scope="col">任务</th><th scope="col">负责人</th><th scope="col">状态</th><th scope="col">返工次数</th></tr></thead>
+                    <thead><tr><th scope="col">任务</th><th scope="col">负责人</th><th scope="col">状态</th><th scope="col">返工次数</th><th scope="col">最近变更</th></tr></thead>
                     <tbody>
-                      {Object.entries(result.team_tasks).map(([id, task]) => (
-                        <tr key={id}>
-                          <th scope="row">{id}</th>
-                          <td>{typeof task?.owner === 'string' ? ACTOR_LABEL[task.owner] ?? task.owner : '—'}</td>
-                          <td>{typeof task?.status === 'string' ? ({ pending: '待处理', running: '处理中', delivered: '已交付' } as Record<string, string>)[task.status] ?? task.status : '—'}</td>
-                          <td>{Array.isArray(task?.rework) ? task.rework.length : 0}</td>
-                        </tr>
-                      ))}
+                      {Object.entries(result.team_tasks).map(([id, task]) => {
+                        const latest = Array.isArray(task?.changes) ? task.changes[task.changes.length - 1] : undefined
+                        return (
+                          <tr key={id}>
+                            <th scope="row">{id}</th>
+                            <td>{typeof task?.owner === 'string' ? ACTOR_LABEL[task.owner] ?? task.owner : '—'}</td>
+                            <td>{typeof task?.status === 'string' ? ({ pending: '待处理', running: '处理中', delivered: '已交付' } as Record<string, string>)[task.status] ?? task.status : '—'}</td>
+                            <td>{Array.isArray(task?.rework) ? task.rework.length : 0}</td>
+                            <td>{latest ? changeText(latest) : '—'}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
+                </section>
+              )}
+              {Array.isArray(result.issue_ledger) && result.issue_ledger.length > 0 && (
+                <section className="issue-ledger">
+                  <h2>问题清单</h2>
+                  <p className="muted">
+                    每条问题都有固定代码与验收条件；只有硬校验中不再出现才算关闭。
+                  </p>
+                  <ul>
+                    {result.issue_ledger.map((issue) => (
+                      <li key={issue.code + (issue.first_seen_version ?? '')} className={issue.status === 'closed' ? 'closed' : 'open'}>
+                        <div className="ledger-head">
+                          <span className={issue.status === 'closed' ? 'tag ok' : 'tag blocker'}>
+                            {issue.status === 'closed' ? '已关闭' : '待处理'}
+                          </span>
+                          <code>{issue.code}</code>
+                          <span className="muted">{OWNER_LABEL[issue.owner ?? ''] ?? issue.owner ?? '责任方未定'}</span>
+                        </div>
+                        {issue.acceptance && <div className="ledger-acceptance">验收：{issue.acceptance}</div>}
+                        <div className="ledger-meta muted">
+                          首次出现 v{issue.first_seen_version ?? '—'}
+                          {issue.status === 'closed' ? ` · 关闭于 v${issue.fixed_in_version ?? '—'}` : ''}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 </section>
               )}
                       <RunUsage stats={result.llm_stats} />

@@ -997,6 +997,74 @@ button:disabled {
   white-space: nowrap;
 }
 
+.issue-ledger {
+  margin-top: 24px;
+}
+
+.issue-ledger h2 {
+  margin-bottom: 6px;
+}
+
+.issue-ledger .muted {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.issue-ledger ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue-ledger li {
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.issue-ledger li + li {
+  margin-top: 6px;
+}
+
+.issue-ledger li.open {
+  border-left: 2px solid var(--err);
+}
+
+.issue-ledger li.closed {
+  border-left: 2px solid var(--ok);
+}
+
+.ledger-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.ledger-head code {
+  font-size: 12px;
+}
+
+.ledger-acceptance {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ledger-meta {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.tag.blocker {
+  color: var(--err);
+}
+
+.tag.ok {
+  color: var(--ok);
+}
+
 .alert {
   margin-bottom: 16px;
   padding: 10px 14px;

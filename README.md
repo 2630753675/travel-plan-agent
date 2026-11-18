@@ -152,6 +152,8 @@ $env:PYTHONPATH=(Get-Location).Path
 
 工件保留：`backend/scripts/collect_artifacts.py` 默认**只预览**可清理的工件，加 `--apply` 才删除；规则是“未被任何检查点引用且超过保护期（默认 24 小时）”，不做启动时自动清理，避免误删仍在恢复中的会话。
 
+界面上的「问题清单」来自后端 `issue_ledger`：每条问题有固定代码、责任方、验收条件、首次出现与关闭版本；任务表的「最近变更」来自返工时的差异交付摘要（只记录真正变化的日期或酒店/航班字段，首轮交付显示“—”）。
+
 ### 4.2 循环、成本与交付边界
 
 `plan_version` 记录专业选择变更；`itinerary_version` 表示当前时间表由哪个版本生成；`approved_version` 表示 Critic 批准的版本。版本不一致不能交付。

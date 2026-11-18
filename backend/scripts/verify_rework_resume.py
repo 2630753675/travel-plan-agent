@@ -162,6 +162,10 @@ async def main():
     assert resumed.session["tasks"]["T1"]["status"] == "delivered"
     assert resumed.session["tasks"]["T2"]["status"] == "delivered"
     assert "delivery_base" not in resumed.session["tasks"]["T2"]
+    changes = resumed.session["tasks"]["T2"].get("changes")
+    assert isinstance(changes, list) and changes, "返工交付应留下变更摘要"
+    assert changes[-1]["plan_version"] == resumed.ctx.plan_version
+    assert isinstance(changes[-1]["fields"], list)
     assert resumed.ctx.document
     assert resumed_client.saw_patch
     assert resumed_client.roles.get("logistics", 0) == 0

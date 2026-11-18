@@ -295,6 +295,27 @@ def _merge_delivery(task: dict, decision: dict) -> dict:
     return merged
 
 
+def _delivery_change_summary(base: dict, patch: dict, plan_version: int) -> dict:
+    """差异交付的人类可读摘要：只记录真正变化的日期/字段，用于界面展示。"""
+    fields = []
+    if "days" in patch:
+        before = {row["date"]: row["poi_ids"] for row in base.get("days") or []}
+        for row in patch["days"]:
+            day, after = row["date"], row["poi_ids"]
+            previous = before.get(day)
+            if previous != after:
+                fields.append({"kind": "days", "date": day, "before": previous, "after": after})
+    for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id"):
+        if key in patch and patch[key] != base.get(key):
+            fields.append({"kind": key, "before": base.get(key), "after": patch[key]})
+    return {
+        "base_version": base.get("version"),
+        "plan_version": plan_version,
+        "fields": fields,
+        "rationale": patch.get("rationale", ""),
+    }
+
+
 def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripBrief) -> bool:
     if not isinstance(delivery, dict) or not delivery.get("rationale"):
         return False
@@ -668,6 +689,12 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     "evidence_ids": delivered_evidence,
                     **delivery,
                 }
+                base = tasks[active_task].get("delivery_base")
+                if isinstance(base, dict) and isinstance(decision.get("delivery_patch"), dict):
+                    summary = _delivery_change_summary(base, decision["delivery_patch"], ctx.plan_version)
+                    history = list(tasks[active_task].get("changes") or [])
+                    history.append(summary)
+                    tasks[active_task]["changes"] = history[-5:]
                 tasks[active_task].pop("delivery_base", None)
                 post(agent, ["orchestrator"], "proposal", f"任务 {active_task} 已交付",
                      {"task": tasks[active_task], "evidence_ids": delivered_evidence})

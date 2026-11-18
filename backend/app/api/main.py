@@ -134,6 +134,20 @@ def _prior_run_stats(plan_id: str) -> dict:
     return (record.get("payload") or {}).get("llm_stats") or {}
 
 
+def _issue_ledger_view(team_session: dict) -> list[dict]:
+    """把 Issue Ledger 裁剪成界面需要的字段，不暴露模型私有上下文。"""
+    fields = ("code", "severity", "owner", "status", "acceptance",
+              "first_seen_version", "fixed_in_version", "evidence")
+    ledger = team_session.get("pending_issue_codes") if isinstance(team_session, dict) else None
+    if not isinstance(ledger, list):
+        return []
+    return [
+        {key: item.get(key) for key in fields if key in item}
+        for item in ledger
+        if isinstance(item, dict) and item.get("code")
+    ]
+
+
 async def _run_graph(
     graph,
     config: dict,
@@ -363,6 +377,7 @@ async def _run_graph(
         "activity": activity,
         "document": final.get("document"),
         "team_tasks": final.get("team_tasks") or {},
+        "issue_ledger": _issue_ledger_view(team_session),
         "approved_version": final.get("approved_version"),
         "llm_stats": final.get("llm_stats") or {},
         "errors": final.get("errors") or [],
@@ -384,6 +399,7 @@ async def _run_graph(
             "itinerary": itinerary.model_dump(mode="json"),
             "document": result["document"],
             "team_tasks": result["team_tasks"],
+            "issue_ledger": result["issue_ledger"],
             "approved_version": result["approved_version"],
         })
     version = store.save(
@@ -474,7 +490,10 @@ async def get_plan(plan_id: str):
                         if row.get("phase") == "team_deliverable"
                         and row.get("itinerary") == record["itinerary"]), None)
     if deliverable:
-        record.update({key: deliverable.get(key) for key in ("document", "team_tasks", "approved_version")})
+        record.update({
+            key: deliverable.get(key)
+            for key in ("document", "team_tasks", "issue_ledger", "approved_version")
+        })
     record["events"] = store.list_events(plan_id)
     record["version"] = store.current_version(plan_id)
     record["summary"] = summary.build_summary(
