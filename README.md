@@ -95,7 +95,7 @@ backend/
     api/                 FastAPI 路由与 SQLite 持久化
     cli.py               命令行入口
   data/mock/             航班 / 酒店 / 景点 / 天气
-  scripts/               五个验收脚本
+  scripts/               验收脚本（深度团队协议）
 frontend/
   src/App.tsx            表单、编排时间线、行程单、单日重排
 ```
@@ -148,7 +148,7 @@ $env:PYTHONPATH=(Get-Location).Path
 
 ### 4.1 任务与交付状态
 
-专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式；`critic_agent` 是评审角色，不能被声明为交付任务负责人。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文、服务端 evidence 目录和方案版本。`wake` 是 Agent 的协作意图/事件元数据，实际出场顺序由代码集中式调度器按 DAG 和消息决定，并不表示自主并行抢占。
+专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式；`critic_agent` 是评审角色，不能被声明为交付任务负责人。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文、方案版本，以及指向会话工件的引用——历史消息、消息总线、证据与工具账本按内容哈希存放在 `backend/data/artifacts/`，避免同一份数据在每份快照里重复；工件缺失时恢复会明确报错，不会退化成空会话。`wake` 是 Agent 的协作意图/事件元数据，实际出场顺序由代码集中式调度器按 DAG 和消息决定，并不表示自主并行抢占。
 
 ### 4.2 循环、成本与交付边界
 
@@ -422,7 +422,11 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 
 ## 7. 验收交接（由用户执行）
 
-本次没有调用真实模型做验收，也没有重启服务后的浏览器验收；已运行确定性自检：后端 `compileall`、前端 `npm run build`、`verify_peer_success.py`、`verify_peer_deep_team.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、`verify_budget_cancel.py`，以及单模式/无模型 400 的 smoke 测试。
+本次没有调用真实模型做验收，也没有重启服务后的浏览器验收；已运行确定性自检：后端 `compileall`、前端 `npm run build`、`verify_peer_success.py`、`verify_peer_deep_team.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、`verify_budget_cancel.py`、`verify_delivery_patch.py`、`verify_rework_resume.py`，以及单模式/无模型 400 的 smoke 测试。
+
+脚本化成功路径当前为 **20 次供应商请求 / 6 个 Agent 回合**（引入结构化评审包后由 24 次下降）；这是成本基线，不代表真实模型的实际用量。
+
+进度与剩余项以 [深度团队架构评审](<docs/deep-team-architecture-review.md>) 第 19 节为准；该节要求**每个阶段完成后同步更新**。
 
 > 单模式改造后，基于已删除规则图的旧夹具（`verify_graph.py`、`verify_negotiation*`、`eval_quality.py` 等）不再适用，不应作为回归依据；需要按深度团队协议重写或删除。
 
@@ -432,9 +436,9 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 2. 主控输出带负责人、目标和依赖的任务，自己不查航班/酒店/景点。
 3. 交通住宿 Agent 调用查询和选择工具，交付实际航班与酒店。
 4. 本地体验 Agent 在交通确定后查询天气、开放时间与距离，并显式分配全部日期。
-5. Critic 独立读取方案并检查预算、时间与体验；有问题时点名责任方。
-6. 主控将 Critic 意见转换为原任务返工；交通变更同时重开依赖的本地任务。
-7. 新版本重新评审，旧版本批准失效；Writer 只读取批准版本。
+5. Critic 基于服务端 `ReviewPacket` 评审，不再自行重复查询四份重叠数据；有问题时只提交带 `code`/`acceptance` 的确定性 issue。
+6. 主控将 Critic 意见转换为原任务返工；按 issue code 决定是否波及下游任务，日期级问题只重开被点名任务。
+7. 新版本重新评审，旧版本批准失效；返工可用 `delivery_patch` 只提交变更，未关闭的 issue 不允许接受。
 8. 最终页面展示计划书、任务状态、真实费用与行程，刷新后仍可回读。
 9. 未通过硬约束的方案只返回失败事件，不保存、不展示为完成行程。
 10. 模型失败返回失败事件，不偷偷切换假模型或伪造专业交付。

@@ -256,12 +256,14 @@ async def run_turn(
                 if result.get("ok") and not result.get("evidence_id"):
                     from uuid import uuid4
                     evidence_id = uuid4().hex
+                    # 证据目录只用于校验引用归属；完整工具结果已经在 operations 与工具消息里
+                    # 各存一份，这里再深拷贝一份只会放大 checkpoint。
                     evidence = {
                         "evidence_id": evidence_id,
                         "agent": agent,
                         "tool": call["name"],
                         "arguments": call["arguments"],
-                        "result": deepcopy(result),
+                        "summary": _summarize_result(result),
                     }
                     ctx.evidence[evidence_id] = evidence
                     evidence_ids.append(evidence_id)

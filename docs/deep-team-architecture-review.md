@@ -1294,23 +1294,65 @@ Agent 之间不传自然语言全文，只传：
 
 ---
 
-## 19. 本轮实施进度（2026-11-17）
+## 19. 实施进度（更新于 2026-11-18）
 
-已完成（单模式 + 低风险正确性修复）：
+> 维护约定：**每完成一个阶段，必须同步更新本节与 `.harness/STATE.md`**，否则下一轮会误判进度。
+> 状态口径：**完成** = 已实现且有脚本回归；**部分** = 方向已落地但仍有明确缺口；**未开始** = 尚未改动。
 
-- 删除 `fast` / `expert` 模式入口：`TripBrief.planning_mode`、`OrchestrationSettings.agent_mode`、前端模式选择器/模式徽标、`build()` 的 fast/expert/legacy 图分支。
-- 未配置模型直接报错：`POST /api/plan`、`/resume`、`/refine` 返回 400；`build()` 也做硬校验。
-- 修复 `chat_tools` 的输入字符统计（不再只算前 4000 字符）。
-- 无变化写操作不再递增 `plan_version`（`assign_pois` / `set_hotel` / `set_flights` / `submit_day_plans`）。
-- 去掉 `set_flights` / `materialize_plan` 的重复数据源查询。
-- `say` 增加 1200 字硬上限，提示词要求 500 字以内。
-- 额度耗尽且已达 80 次上限时不再建议“提高到 80”的死循环。
-- 前端证据按 Agent 挂载，修复“4 次工具调用显示 1 次”。
-- README 同步单模式与无模型报错说明。
+### 19.1 逐项状态
 
-已验证：后端 `compileall`、前端 `npm run build`、`verify_peer_success`（24 次调用）、`verify_peer_deep_team`、`verify_peer_remediation`、`verify_peer_runtime`、`verify_event_contract`、`verify_budget_cancel`、单模式/无模型 400 smoke 测试。
+| ID | 问题 | 状态 | 说明 / 提交 |
+|---|---|---|---|
+| A1 | 伪多 Agent：并行专业 Agent + 代码合并 | 未开始 | 需先完成 B9 工件存储 |
+| A2 | 评审无 issue 身份/验收标准/能力映射 | 完成 | Issue Ledger + `acceptance` + `repair_tools`（`0c81cc7`、`b8253b1`） |
+| A3 | 每回合全量注入 brief/bus/任务/收件 | 部分 | 收件与任务表已压缩：回合提示 −30.6%、全流程输入字符 −10.5%（`1419cbd`）；brief/bus 仍逐轮全量，上下文编译器未做 |
+| A4 | 返工整任务重置，不能提交 diff | 完成 | 差异交付 `delivery_patch` + 按 issue 控制依赖传播（`0e7370e`、`31ba0ab`） |
+| A5 | `plan_version` 无变化也递增 | 完成 | 同值写入不递增版本 |
+| A6 | 预算/模式名不副实 | 完成 | 仅保留深度团队；未配置模型返回 400 |
+| A7 | 证据是随机 UUID，不绑定结论内容 | 部分 | 服务端登记并校验归属；仍是随机 ID，未做内容哈希/字段路径 |
+| A8 | UI 原样渲染长文；4 次工具显示 1 次 | 部分 | 证据按 Agent 挂载已修；结构化卡片与 diff 面板未做 |
+| B1 | Critic 强制四工具、数据重叠 | 完成 | `ReviewPacket` 预计算，脚本请求 24 → 20 |
+| B2 | `get_plan` 返回全量 itinerary | 未开始 | 仍返回完整逐日行程 |
+| B3 | 历史按 12 条消息裁剪而非 token | 未开始 | `_complete_history(limit=12)` 未改 |
+| B4 | 静态契约放在动态 user prompt | 未开始 | `CONTRACT` 仍拼在每轮 user prompt |
+| B5 | 自由文本 JSON + 严格解析 | 未开始 | 仍靠 `_parse_decision` + 协议重试 |
+| B6 | `say` 无长度/结构约束 | 完成 | 1200 字硬上限 + 提示词 500 字要求 |
+| B7 | 工具串行执行却提示"并行" | 未开始 | 一次多个 tool_calls 仍是 for 循环串行 |
+| B8 | `set_flights`/`materialize` 重复查数据源 | 完成 | 复用已查结果 |
+| B9 | checkpoint 全量 pickle + 重复 payload | 完成 | 会话工件化：`histories`/`bus`/`trace`/`evidence`/`operations` 移出图状态，状态只留内容哈希引用（`app/artifacts.py`）。单份会话 **77.4 → 12.2 KB**（每快照省 65.2 KB）；工件缺失时明确报错。快照版本裁剪已证伪撤回，工件保留/清理策略仍缺 |
+| B10 | `input_chars` 未累加 | 完成 | 按完整请求体统计 |
+| B11 | 测试把 24 次调用当 PASS | 完成 | 改为成本断言 + 返工/中断专属脚本 |
+| C1 | 角色无颜色、无任务板、无 diff | 未开始 | 界面仍以文字为主 |
+| C2 | Writer 自由生成 + 子串校验 | 部分 | 敏感断言（含"步行可达"）拦截；受控模板生成未做 |
+| C3 | 单进程、无保留策略、密钥明文 | 未开始 | 产品化阶段处理 |
 
-未完成（下一阶段）：`ReviewPacket` + Issue Ledger、确定性修复映射、并行专业 Agent + 代码合并、工件存储/checkpoint 瘦身、UI 卡片化与 diff/issue 面板。旧的规则图夹具（`verify_graph.py`、`verify_negotiation*`、`eval_quality.py` 等）已不适用，需要重写或删除。
+### 19.2 汇总
+
+- 完全完成 **10** 项：A2、A4、A5、A6、B1、B6、B8、B9、B10、B11。
+- 部分完成 **4** 项：A3、A7、A8、C2。
+- 未开始 **8** 项：A1、B2、B3、B4、B5、B7、C1、C3。
+
+### 19.3 计划外新增（原表未列）
+
+- **返工传播策略**：按 issue code 决定是否波及下游任务，日期级问题只重开被点名任务。
+- **Critic 证据规则修正**：Critic 无工具，`accept`/`objection` 以服务端 `ReviewPacket` 为证据，问题代码仍须存在于包内。
+- **返工工具可执行性**：本地返工范围补入只读 `get_plan`，使模型能读到 `fixed_events[].event_id`。
+- **返工闭环回归**：`verify_rework_resume.py` 覆盖「反对 → 派工 → 中断 → 恢复 → 受限修复 → 差异交付 → 关闭 → Writer」。
+- **上下文瘦身**：收件消息与任务表改为精简投影，回合提示 −30.6%，Critic 提示 −44%。
+- **检查点版本裁剪（已撤回）**：实测真实线程 14 份快照 6.64 MB，保留 3 份可降到 4.08 MB；但 LangGraph 的 pending writes 挂在被裁掉的快照上，`verify_peer_remediation` 的「中断→恢复」直接失败，因此**不采用**。要安全压缩体积，必须改为“会话引用外部工件存储”，而不是删快照。
+- **会话工件化（B9 落地方式）**：新增 `app/artifacts.py` 内容寻址工件库；`hub._pack_session` 把 `histories`/`bus`/`trace` 与 `context.evidence`/`context.operations` 换成 `{artifact_id, bytes}` 引用，`_unpack_session` 在恢复时还原。实测单份会话 77.4 → 12.2 KB；工件缺失抛 `ArtifactMissing`，不会静默当成空会话；旧内联会话无需迁移。
+
+### 19.4 下一步
+
+1. **工件保留策略**：工件库目前只增不删（测试跑完 106 个约 1.86 MB）。需要按 run 关联与容量/天数清理，否则长期运行会积累；这是 B9 的收尾项，不是新问题。
+2. **C1 界面卡片化**：Issue Ledger 与交付 diff 渲染成结构化卡片。
+3. **A1 并行专业 Agent**：会话已可外部化，具备隔离提议的存储基础。
+
+### 19.5 验收边界
+
+已运行的确定性自检见 README 第 7 节；**真实模型、浏览器、真实 token 账单均未验收**，脚本化 20 次请求只是基线，不代表真实成本。
+
+旧的规则图夹具（`verify_graph.py`、`verify_negotiation*`、`eval_quality.py` 等）已不适用，需要重写或删除。
 
 ## 20. 一句话总结
 

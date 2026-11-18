@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 import json
 
+from ..artifacts import default_store
 from ..llm import LLMClient
 from ..models import Itinerary, TripBrief
 from ..tools.base import TravelSource
@@ -89,6 +90,53 @@ def _compact_message(env: Envelope, content_limit: int = 300) -> dict:
     if payload:
         view["payload"] = payload
     return view
+
+
+def _compact_histories(histories: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """会话里只保留恢复时真正会回填的窗口，避免整段历史进入每次 checkpoint。
+
+    裁剪复用 runtime 的完整工具事务规则：assistant.tool_calls 与 tool 结果不会被拆开。
+    """
+    from .runtime import _complete_history
+
+    return {agent: _complete_history(messages, limit=12) for agent, messages in histories.items()}
+
+
+def _pack_session(session: dict, store) -> dict:
+    """把大对象移出图状态：状态里只留工件引用，内容按哈希存到工件库。"""
+    refs = {}
+    for key in ("histories", "bus", "trace"):
+        value = session.get(key)
+        if value:
+            session[key] = store.put(value)
+            refs[key] = session[key]
+    context = session.get("context")
+    if isinstance(context, dict):
+        for key in ("evidence", "operations"):
+            value = context.get(key)
+            if value:
+                context[key] = store.put(value)
+                refs[key] = context[key]
+    if refs:
+        session["artifact_format"] = 1
+    return session
+
+
+def _unpack_session(session: dict, store) -> dict:
+    """恢复前把工件引用换回真实对象；取不到就抛错，不能静默当成空会话。"""
+    if session.get("artifact_format") != 1:
+        return session
+    for key in ("histories", "bus", "trace"):
+        value = session.get(key)
+        if isinstance(value, dict) and value.get("artifact_id"):
+            session[key] = store.get(value)
+    context = session.get("context")
+    if isinstance(context, dict):
+        for key in ("evidence", "operations"):
+            value = context.get(key)
+            if isinstance(value, dict) and value.get("artifact_id"):
+                context[key] = store.get(value)
+    return session
 
 
 def dump_context(ctx: ToolContext) -> dict:
@@ -297,10 +345,13 @@ def _writer_valid(document: object, ctx: ToolContext) -> bool:
 
 async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClient, emit,
                       max_turns: int = DEFAULT_MAX_TURNS, max_rounds: int = DEFAULT_MAX_ROUNDS,
-                      resume: dict | None = None, user_answer: str = "", finalize_feedback: str = "") -> PeerResult:
+                      resume: dict | None = None, user_answer: str = "", finalize_feedback: str = "",
+                      artifact_store=None) -> PeerResult:
+    store = artifact_store or default_store()
     if resume:
         if resume.get("architecture") != "professional_team":
             raise ValueError("旧版对等会话无法作为专业团队会话恢复，请重新提交需求")
+        resume = _unpack_session(resume, store)
         bus = Bus.from_dict(resume.get("bus"))
         ctx = _restore_context(brief, source, resume.get("context") or {})
         tasks = dict(resume.get("tasks") or {})
@@ -375,14 +426,15 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
     if user_answer and decision in {"stop", "restart"}:
         session = {
             "architecture": "professional_team", "bus": bus.to_dict(), "context": dump_context(ctx),
-            "tasks": tasks, "histories": histories, "trace": trace, "turns": turns,
+            "tasks": tasks, "histories": _compact_histories(histories), "trace": trace, "turns": turns,
             "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
             "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes, "warnings": warnings,
         }
         return PeerResult(bus=bus, ctx=ctx, itinerary=None, escalation=None,
                           converged=False, rounds=reviews, turns=turns, warnings=warnings,
                           trace=trace, blocked=True, stopped=True,
-                          stop_reason=stopped_reason, session=session)
+                          stop_reason=stopped_reason,
+                          session=_pack_session(session, store))
     if pending_agent and not user_answer:
         next_agent = pending_agent
         active_task = pending_task
@@ -714,11 +766,12 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         emit("escalated", agent="orchestrator", question=escalation["question"])
     session = {
         "architecture": "professional_team", "bus": bus.to_dict(), "context": dump_context(ctx),
-        "tasks": tasks, "histories": histories, "trace": trace, "turns": turns,
+        "tasks": tasks, "histories": _compact_histories(histories), "trace": trace, "turns": turns,
         "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
         "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes,
         "pending_agent": pending_agent, "pending_task": pending_task, "warnings": warnings,
     }
     return PeerResult(bus=bus, ctx=ctx, itinerary=ctx.itinerary if converged else None,
                       escalation=escalation, converged=converged, rounds=reviews, turns=turns,
-                      warnings=warnings, trace=trace, blocked=blocked, session=session)
+                      warnings=warnings, trace=trace, blocked=blocked,
+                      session=_pack_session(session, store))

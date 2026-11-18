@@ -15,7 +15,8 @@
 - 后端：`backend`
 - 前端：`frontend`
 - 服务已于 2026-11-17 18:05 用整改后代码重启：`http://127.0.0.1:8848`（监听 PID 2152），健康检查 `{"ok":true}`；`max_model_calls=40`、`max_output_tokens=null`，前端资源 `index-DOQ5OSvE.js`
-- 已提交：`1ad5e36 整改：取消输出 token 硬上限并支持运行中取消`；本轮深度团队整改尚未提交
+- 已提交：`1419cbd 整改：补齐未提交的深度团队整改与上下文瘦身`（此前 `0c81cc7` 评审包、`b8253b1` 工具映射、`0e7370e` 返工传播、`31ba0ab` 差异交付+中断续跑）
+- 工作区仅剩 12 张 `docs/shot-*.png` 截图与 `backend/data` 运行数据、无关媒体未提交
 - 单模式配置：`agent_mode` / `planning_mode` 已移除；只保留深度团队。未配置模型时 `/api/plan`、`/resume`、`/refine` 返回 400。`max_runtime_s=180`、`max_model_calls=40`、`max_agent_turns=20`；`max_output_tokens` 已废弃，旧值 1400 在加载时迁移为 None
 - 前端入口：`Cache-Control: no-store`
 - 最新前端资源：`/assets/index-BCHEiKlU.js`
@@ -68,14 +69,15 @@
 
 ## 下一步（新窗口优先）
 1. 重启 :8848 服务（当前进程仍是旧代码），在浏览器确认：无模型时 400 提示、单模式表单、4 个工具证据显示为 4 次。
-2. 2026-11-18 已提交评审包/账本、工具映射、返工传播（最新 0e7370e）。差异交付 + Critic 发起返工的中断续跑闭环已实现并通过 verify_delivery_patch/verify_rework_resume 等回归，待 commit；每阶段完成提醒提交。后续：真实模型与浏览器验收、上下文/工件存储瘦身、并行 Agent。
+2. 按 [架构评审第 19 节](docs/deep-team-architecture-review.md) 的 19.4 顺序推进：**工件保留策略**（工件库只增不删）→ C1 界面卡片化 → A1 并行专业 Agent。**删快照不可行已被证伪**，不要再试。
 3. 需要长行程时继续扩充同城市景点：成都老人可用候选约 22 条，10 天以上仍会耗尽；扩到 40+ 才能排满 14 天。
 4. 真实模型下验证取消时延（请求返回后才生效）与供应商是否返回 usage；跨中断累计调用账本仍未实现。
+5. **每完成一个阶段必须同步更新**架构评审第 19 节与 `.harness/STATE.md`、追加 `WORK.md`，再提醒提交。
 
 ## 未完成/风险
 - peer 架构整改正在进行：计划文档 `docs/peer-agent-remediation-plan.md`；本轮已完成 P0 API 中断、异常诊断/有限重试、停止终态、任务协议、证据引用、Writer 敏感断言、checkpoint 异步写入与集中调度文档等部分。
-- 五角色成功路径已用脚本化模型验证（24 次调用、6 回合、总价 5700/8000）；评审上限升级为用户 restart/stop 已验证。恢复段仍会重新获得调用/时间预算，尚无跨恢复累计账本。
-- checkpoint 已改为按 thread_id 分片（旧文件只读兼容、删除 tombstone、异步线程事务），真实 `aput_writes` 并发通过；尚无分片保留/清理策略与体积观测。
+- 五角色成功路径已用脚本化模型验证（20 次调用、6 回合、总价 5880/8000；引入 ReviewPacket 后由 24 次下降）；评审上限升级为用户 restart/stop 已验证。
+- checkpoint 已改为按 thread_id 分片（旧文件只读兼容、删除 tombstone、异步线程事务），真实 `aput_writes` 并发通过；实测旧主文件 70.2 MB、分片 7 个共 7.9 MB、单片最大 6.64 MB；尚无保留/清理策略，B9 将处理单会话体积。
 - Writer 的敏感断言扫描不是通用事实校验，不能替代结构化事实生成。
 - 未真实验证供应商 usage 字段和真实 token 账单。
 - 未配置模型时直接返回 400；`fast` / `expert` 规则降级已删除，不再存在三种模式。

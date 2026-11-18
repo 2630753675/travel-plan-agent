@@ -19,3 +19,5 @@ frontend/dist/
 # 工具残留
 .probe
 *.log
+backend/data/artifacts/
+backend/data/checkpoints.pkl.d/

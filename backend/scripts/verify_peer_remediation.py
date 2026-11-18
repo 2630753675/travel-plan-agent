@@ -20,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.agents import hub, runtime  # noqa: E402
+from app.artifacts import ArtifactMissing, ArtifactStore  # noqa: E402
 from app.checkpoint import PersistentSaver  # noqa: E402
 from app.models import DayPlan, Itinerary, TripBrief  # noqa: E402
 from app.tools.mock import MockSource  # noqa: E402
@@ -285,7 +286,37 @@ def main() -> int:
     check("LangGraph 异步写入并发安全", all(f"async-{i}" in async_keys for i in range(8)), str(list(async_reloaded.writes)))
     check("异步写入后无临时文件", not list(tmp.parent.glob("*.tmp")), str(list(tmp.parent.glob("*.tmp"))))
 
-    print("\n[H] API 中断与停止终态（经真实流式路径）")
+    print("\n[H] 会话工件化")
+    art_root = pathlib.Path(tempfile.mkdtemp())
+    art_store = ArtifactStore(art_root)
+    packed = hub._pack_session({
+        "histories": {"local_expert": [{"role": "user", "content": "查询"}]},
+        "bus": {"messages": [{"sender": "user"}]},
+        "trace": [{"agent": "local_expert"}],
+        "context": {"evidence": {"e1": {"tool": "list_pois"}}, "operations": {"c1": {"result": 1}}},
+    }, art_store)
+    check("大对象被替换为引用",
+          packed["artifact_format"] == 1
+          and packed["histories"].get("artifact_id")
+          and packed["context"]["operations"].get("artifact_id"))
+    restored = hub._unpack_session(json.loads(json.dumps(packed)), art_store)
+    check("引用可还原为原对象",
+          restored["histories"]["local_expert"][0]["content"] == "查询"
+          and restored["context"]["operations"]["c1"]["result"] == 1
+          and restored["trace"][0]["agent"] == "local_expert")
+    lost = json.loads(json.dumps(packed))
+    ref = lost["context"]["evidence"]["artifact_id"]
+    (art_root / ref[:2] / f"{ref}.json").unlink()
+    try:
+        hub._unpack_session(lost, art_store)
+    except ArtifactMissing:
+        check("工件缺失时明确报错", True)
+    else:
+        check("工件缺失时明确报错", False)
+    legacy = {"histories": {"x": []}, "bus": {}, "context": {}}
+    check("旧内联会话不需要工件库", hub._unpack_session(dict(legacy), art_store) == legacy)
+
+    print("\n[I] API 中断与停止终态（经真实流式路径）")
     api_events, api_runs = _run_api_flow()
     kinds = [event_type for event_type, _ in api_events]
     check("请求返回中断而不是失败", "run_interrupted" in kinds and "run_failed" not in kinds, str(kinds))
