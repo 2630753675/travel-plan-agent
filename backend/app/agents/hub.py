@@ -14,6 +14,7 @@ from ..tools.base import TravelSource
 from . import roles
 from .bus import Bus, Envelope
 from .runtime import run_turn
+from .review import build_review_packet, make_issue_ledger
 from .tools_spec import ToolContext, execute
 
 DEFAULT_MAX_TURNS = 10
@@ -53,6 +54,7 @@ def dump_context(ctx: ToolContext) -> dict:
         "approved_version": ctx.approved_version,
         "document": ctx.document,
         "evidence": ctx.evidence,
+        "operations": ctx.operations,
     }
 
 
@@ -81,6 +83,7 @@ def _restore_context(brief: TripBrief, source: TravelSource, raw: dict) -> ToolC
     ctx.approved_version = raw.get("approved_version")
     ctx.document = raw.get("document")
     ctx.evidence = dict(raw.get("evidence") or {})
+    ctx.operations = dict(raw.get("operations") or {})
     return ctx
 
 
@@ -183,7 +186,11 @@ def _writer_valid(document: object, ctx: ToolContext) -> bool:
     else:
         return False
     text = " ".join(text_parts)
-    unsupported_claims = ("已预订", "已确认", "确认号", "含早餐", "免费取消", "有电梯", "无障碍", "双床房已安排")
+    unsupported_claims = (
+        "已预订", "已确认", "确认号", "含早餐", "免费取消", "有电梯", "无障碍", "双床房已安排",
+        # 没有道路数据时，步行可达属于不可验证的断言。
+        "步行可达", "步行即到",
+    )
     if any(claim in text and "未核实" not in text and "待确认" not in text for claim in unsupported_claims):
         return False
     return True
@@ -310,6 +317,11 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             }, ensure_ascii=False)
         if inbox:
             prompt += "\n本回合收件：" + json.dumps([m.to_dict() for m in inbox], ensure_ascii=False)
+        if agent == "critic_agent":
+            latest_proposal = next((m for m in reversed(inbox) if m.kind == "proposal"), None)
+            review_packet = (latest_proposal.payload.get("review_packet") if latest_proposal else None)
+            prompt += "\n结构化 ReviewPacket（唯一事实来源）：" + json.dumps(review_packet or {}, ensure_ascii=False)
+            prompt += "\n当前 Issue Ledger：" + json.dumps(pending_issue_codes, ensure_ascii=False)
         turn = await run_turn(agent=agent, system=role.system, prompt=prompt, tools=role.tools,
                               ctx=ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
                               history=histories.get(agent))
@@ -321,24 +333,43 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         if not turn.ok:
             error_text = turn.error or "未提供异常消息"
             budget_exhausted = turn.error_type == "ModelCallBudgetExceeded"
+            current_limit = getattr(client, "max_calls", None)
+            at_hard_limit = bool(budget_exhausted and current_limit is not None and current_limit >= 80)
+            # 额度耗尽时给出可执行建议值；已经到硬上限 80 时不再建议“提高到 80”，否则就是死循环。
+            suggested_limit = (
+                None if at_hard_limit else min(80, max(40, (current_limit or 8) * 3))
+                if budget_exhausted else None
+            )
             reason = (
-                f"供应商模型请求预算已耗尽（当前上限 {client.max_calls} 次）；"
-                "请先提高设置中的模型请求上限，再选择继续。"
+                f"供应商模型请求预算已耗尽且已达上限 {current_limit} 次。"
+                "继续提高上限不可行；请缩小题量/日期范围后重新发起，或停止并保留未完成状态。"
+                if at_hard_limit
+                else f"供应商模型请求预算已耗尽（当前上限 {current_limit} 次，本次流程通常需要约 24 次）；"
+                "可直接提高上限后继续，或停止本次规划。"
                 if budget_exhausted
                 else f"{role.title} 回合失败：{error_text}"
             )
             warnings.append(reason)
             pending_agent, pending_task = agent, active_task
+            options = (
+                [{"value": "stop", "label": "停止并保留未完成状态"}]
+                if at_hard_limit
+                else [
+                    {"value": "continue", "label": "提高上限后继续" if budget_exhausted else "重试该 Agent 回合"},
+                    {"value": "stop", "label": "停止并保留未完成状态"},
+                ]
+            )
             escalation = {
                 "from": agent,
                 "type": "model_call_budget_exhausted" if budget_exhausted else "agent_turn_failed",
-                "question": f"{reason} 事实与方案保持不变；可继续协作，或停止本次规划。",
-                "options": [
-                    {"value": "continue", "label": "提高上限后继续" if budget_exhausted else "重试该 Agent 回合"},
-                    {"value": "stop", "label": "停止并保留未完成状态"},
-                ],
+                "question": f"{reason} 事实与方案保持不变。",
+                "options": options,
                 "say": reason,
             }
+            if budget_exhausted:
+                escalation["max_calls"] = current_limit
+                if suggested_limit is not None:
+                    escalation["suggested_max_calls"] = suggested_limit
             emit("turn_failed", agent=agent, error=turn.error)
             emit("escalated", agent=agent, question=escalation["question"])
             blocked = True
@@ -407,11 +438,19 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     # 由真实主控明确提交，而非专业 Agent 一交付就假定通过。
                     if kind != "proposal" or "critic_agent" not in (decision.get("to") or []):
                         raise ValueError("所有任务已交付，请主控以 proposal 通知 critic_agent 评审")
-                    check = execute(ctx, "check_plan", {})
+                    review_packet = build_review_packet(ctx)
+                    if not review_packet.get("ok"):
+                        raise ValueError(f"无法生成 ReviewPacket：{review_packet.get('error')}")
+                    pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
                     reviews += 1
                     bus.round = reviews
                     review_version = ctx.plan_version
-                    proposal = post("orchestrator", ["critic_agent"], "proposal", "提交专业团队合并方案供独立评审", {"version": review_version, "hard_check": check, "tasks": tasks})
+                    proposal = post("orchestrator", ["critic_agent"], "proposal", "提交结构化 ReviewPacket 供独立评审", {
+                        "version": review_version,
+                        "review_packet": review_packet,
+                        "tasks": tasks,
+                        "issue_ledger": pending_issue_codes,
+                    })
                     proposal_id = proposal.mid
                     next_agent, active_task = "critic_agent", None
             elif agent in {"logistics", "local_expert"}:
@@ -448,23 +487,43 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             elif agent == "critic_agent":
                 if ctx.plan_version != review_version:
                     raise ValueError("评审期间方案版本发生变化，必须重新提交")
-                required_tools = {"get_plan", "check_plan", "day_costs", "experience_check"}
-                if not required_tools <= set(turn.tool_calls):
-                    raise ValueError("独立评审必须自行读取方案并核对费用、硬约束、体验证据")
-                check = execute(ctx, "check_plan", {})
+                latest_proposal = next((m for m in reversed(inbox) if m.kind == "proposal"), None)
+                review_packet = latest_proposal.payload.get("review_packet") if latest_proposal else None
+                if not isinstance(review_packet, dict) or review_packet.get("packet_id") is None:
+                    raise ValueError("评审缺少有效 ReviewPacket，必须重新提交评审")
+                check = review_packet.get("hard_check") or {}
                 if kind == "accept":
                     if decision.get("changes") or decision.get("approved_version") != review_version or not check.get("passed"):
                         raise ValueError("评审接受必须版本一致、没有待办修改且硬约束通过")
+                    open_issues = [item for item in pending_issue_codes if item.get("status") != "closed"]
+                    if open_issues:
+                        raise ValueError("Issue Ledger 仍有未关闭问题，不能接受")
                     ctx.approved_version = review_version
-                    post(agent, ["writer"], "accept", "当前版本通过独立评审及硬校验", {"approved_version": review_version}, proposal_id)
+                    post(agent, ["writer"], "accept", "当前版本通过结构化评审及硬校验", {"approved_version": review_version}, proposal_id)
                     next_agent, active_task = "writer", None
                 elif kind == "objection":
                     changes = decision.get("changes")
-                    if not isinstance(changes, list) or not changes or any(not isinstance(c, dict) or c.get("owner") not in {"logistics", "local_expert"} or not c.get("problem") or not c.get("required_change") for c in changes):
-                        raise ValueError("拒绝必须给出责任方、证据问题和明确返工要求")
-                    pending_rejections = changes
+                    if not isinstance(changes, list) or not changes:
+                        raise ValueError("拒绝必须给出非空结构化 changes")
+                    pending_issue_codes = make_issue_ledger(review_packet, changes, pending_issue_codes)
+                    pending_rejections = [
+                        {
+                            "issue_id": item["issue_id"],
+                            "code": item["code"],
+                            "owner": item["owner"],
+                            "problem": item["evidence"],
+                            "required_change": item["acceptance"],
+                            "acceptance": item["acceptance"],
+                            "repair_tools": item["repair_tools"],
+                        }
+                        for item in pending_issue_codes if item.get("status") == "open"
+                    ]
                     ctx.approved_version = None
-                    post(agent, ["orchestrator"], "objection", "请主控将这些问题打回对应责任任务", {"changes": changes, "version": review_version}, proposal_id)
+                    post(agent, ["orchestrator"], "objection", "请按 Issue Ledger 将问题打回对应责任任务", {
+                        "changes": pending_rejections,
+                        "issue_ledger": pending_issue_codes,
+                        "version": review_version,
+                    }, proposal_id)
                     next_agent, active_task = "orchestrator", None
                 else:
                     raise ValueError("Critic 必须明确 accept、objection 或 escalate")

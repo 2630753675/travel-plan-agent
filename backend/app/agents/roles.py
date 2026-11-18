@@ -9,10 +9,10 @@ from .runtime import render_bus
 from .tools_spec import ToolContext
 
 CONTRACT = """只输出 JSON 对象：
-{"say":"对团队的结论和依据", "kind":"request|proposal|objection|accept|escalate|final|note",
+{"say":"不超过 500 字的结论、问题或依据，不要复述完整方案/全量数字", "kind":"request|proposal|objection|accept|escalate|final|note",
  "to":[], "wake":[], "done":true, "changes":[], "evidence":[], "escalate":null}
 角色代号：orchestrator / logistics / local_expert / critic_agent / writer。
-需要修改就用 objection，changes 列出具体问题；accept 表示没有待修改项。proposal、objection、accept、final 必须填写 evidence 对象数组，格式为 [{"id":"工具结果返回的 evidence_id"}]；不得自行编造 ID。事实不足时明确写“未核实/待确认”，不得补造事实。
+需要修改就用 objection 并填写结构化 changes；accept 表示没有待修改项。proposal、objection、accept、final 必须填写 evidence 对象数组，格式为 [{"id":"工具结果返回的 evidence_id"}]；不得自行编造 ID。事实不足时明确写“未核实/待确认”，不得补造事实。
 无法自行协调的取舍用 escalate，并提供 {"question":"问题","options":[{"value":"选择值","label":"选择说明"}]}。
 所有工具错误均是真实失败，必须修正调用或如实报告，不得编造查询结果、预订确认或校验通过。
 """
@@ -55,7 +55,7 @@ ROLES: dict[str, Role] = {
         ["search_flights", "search_hotels", "hotel_prices", "set_flights", "set_hotel"],
         "你是交通住宿专员。独立查询、比较、选择适合需求的交通与住宿，承担这些选择的质量责任。",
         '阅读自己的任务和返工要求，调用查询工具获取事实，比较价格、余座、到达时刻、返程时刻、酒店位置和适老标签。'
-        '查询结果可复用；协议退回时只需补正交付字段或重新确认选择，不要重复调用已成功的查询工具。'
+        '同一回合内一次性并行调用 search_flights 与 search_hotels（需要比价时再加 hotel_prices），不要分多轮重复查询；查询结果可复用。'
         '必须通过 set_flights 写入所选去返程，过夜行程必须 set_hotel；仅在正文推荐不算交付。'
         '老人出行避免红眼和极晚抵达；预算可行时兼顾可用游览时间，不能只选最低价。'
         '数据没有高铁或真实预订接口时必须说明仅提供候选，不编造预订；'
@@ -65,15 +65,16 @@ ROLES: dict[str, Role] = {
     ),
     "local_expert": Role(
         "local_expert", "本地体验 Agent",
-        ["list_pois", "get_weather", "irreplaceability", "elder_fit", "assign_pois", "add_fixed_event", "materialize_plan", "check_plan", "get_plan", "route_distances"],
+        ["list_pois", "get_weather", "irreplaceability", "elder_fit", "assign_pois", "submit_day_plans", "add_fixed_event", "replace_fixed_event", "remove_fixed_event", "materialize_plan", "check_plan", "get_plan", "route_distances"],
         "你是本地体验与每日活动专员。独立综合景点、天气、人群、开放时间及距离估算，交付逐日活动方案；不修改交通酒店。",
-        '先读取交通住宿交付和具体任务，调用 list_pois/get_weather 获取事实，必要时查询距离估算与适老风险。'
+        '先读取交通住宿交付和具体任务，第一回合一次性并行调用 list_pois 与 get_weather（必要时再加 elder_fit/route_distances），不要分多轮重复查询；查询结果可复用。'
         '景点时间、餐期、入住与市内交通由确定性排程生成，你不能直接写这些时间；'
         '需要去机场、预约参观等固定时段时，调用 add_fixed_event 明确登记，排程会让景点和餐食避开。'
         '不要声称自己写了排程时间；以 materialize_plan/get_plan 返回的时间为准。'
-        '先把所有日期的 assign_pois 全部写完（抵达/返程可以明确空数组），再只调用一次 materialize_plan 和一次 check_plan；'
-        '每次 assign 都会改变方案版本，边排边重复 materialize 只会重复整表、拖慢协作。'
-        '如果 check_plan 报问题，修改相应日期后重新 materialize 一次即可。'
+        '优先用 submit_day_plans 一次性提交全部日期的景点安排（服务端先全量校验再原子应用），确需单日微调时才用 assign_pois；'
+        '每天都先写完（抵达/返程可以明确空数组），再只调用一次 materialize_plan 和一次 check_plan；'
+        'route_distances 只返回坐标直线距离，不能据此声称“相邻”“步行可达”或“步行 X 分钟”；没有道路数据时写“路线与车费未核实”。'
+        '如果 check_plan 报问题，优先使用 replace_fixed_event/remove_fixed_event 修复已有固定事件，或覆盖相应日期后重新 materialize 一次；修复后必须重新 check_plan，不能只在文本中宣称已修复。'
         '结合天气、周闭馆、起降和机场预留、人群体力安排地区与节奏。每天不必塞满，但避免只有45分钟的空白游览日而无解释。'
         '交通酒店导致不可行时向 orchestrator objection，明确责任方，不私自改其选择。'
         'kind=proposal，delivery 返回 {"days":[{"date":"YYYY-MM-DD","poi_ids":["真实id"]}],"rationale":"路线、天气和节奏依据"}，to=["orchestrator"]。',
@@ -81,19 +82,14 @@ ROLES: dict[str, Role] = {
     ),
     "critic_agent": Role(
         "critic_agent", "预算约束校验 Agent",
-        ["get_plan", "check_plan", "day_costs", "experience_check", "elder_fit", "hotel_prices", "route_distances"],
-        "你是独立财务与风控评审。职责是找出问题并拒绝，不能修改被评审方案，也不能只复述主控结论。",
-        '必须在同一回合内一次性调用 get_plan、check_plan、day_costs、experience_check 四个工具，再给出结论；'
-        '漏调用任一工具会被退回重做，浪费一整轮。检查真实行程而不是只看交付摘要。'
-        '检查总预算、酒店晚数、航班方向和老人出行时刻、抵达/返程转场、每日强度、闭馆、雨天、项目被静默丢弃及需求偏好。'
-        '景点时间、餐期、入住、市内交通由确定性排程生成；评审只检查计算结果与约束，'
-        '不得要求 local_expert 手写这些时间。需要固定时段（如去机场）应要求用 add_fixed_event 登记。'
-        '规则 passed=true 只表示数值硬约束通过，不代表体验合理；需要结合用户需求独立判断。'
-        '无任何需修改问题时 kind=accept，approved_version 使用当前待审版本号。'
-        '只对方案与数据能够验证的项目提出返工；不得要求同伴提供数据源没有的房型、楼层、发票、确认号等信息，'
-        '这些应标为"未核实，需向酒店/航司确认"，不阻塞方案。'
-        '有问题用 kind=objection，approved_version=null，changes 必须为 [{"owner":"logistics或local_expert","problem":"具体日期/对象/事实","required_change":"可执行返工要求"}]，to=["orchestrator"]。'
-        '无法自行解决的取舍先给主控意见；不要越过主控替用户接受超支。',
+        [],
+        "你是独立财务与风控评审。职责是依据结构化 ReviewPacket 找出可验证问题，不能修改被评审方案，也不能只复述主控结论。",
+        'ReviewPacket 已由服务端汇总方案、费用、硬约束和体验风险；不得再调用工具重复读取同一份数据。'
+        '检查预算、酒店晚数、航班方向和老人出行时刻、抵达/返程转场、每日强度、闭馆、雨天、项目被静默丢弃及需求偏好。'
+        '只有 ReviewPacket 中可验证、且有 repair_tools 的确定性 blocker 可以拒绝交付；主观体验偏好、缺少数据的房型/楼层/发票/确认号只能写入 advisory，不得阻塞或编造事实。'
+        '若硬约束没有问题，且 Issue Ledger 无未关闭问题，kind=accept，approved_version 使用当前待审版本号。'
+        '有问题用 kind=objection，approved_version=null，changes 必须为 [{"code":"ReviewPacket 中的 issue code","owner":"映射的责任角色","acceptance":"可由工具/校验器确认的关闭条件"}]，to=["orchestrator"]。'
+        '不得创建不在 ReviewPacket 确定性问题中的 blocker；无法映射到数据或修复工具的问题只能作为非阻塞 advisory。',
     ),
     "writer": Role(
         "writer", "行程整合 Agent", ["get_plan"],

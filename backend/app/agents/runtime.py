@@ -54,6 +54,60 @@ def _assistant_msg(content: str, calls: list[dict]) -> dict:
     }
 
 
+def _complete_history(history: list[dict] | None, limit: int = 12) -> list[dict]:
+    """按完整的 assistant tool_calls + tool 结果事务裁剪历史。
+
+    不能直接对消息做 ``history[-limit:]``：那会把 role=tool 留在列表里，
+    却丢掉它前面的 assistant.tool_calls，供应商会拒绝整个请求。每个工具事务
+    必须作为一个不可分割的 group 保存；即使一个事务超过 limit，也完整保留。
+    """
+    prior = [deepcopy(m) for m in (history or []) if m.get("role") != "system"]
+    groups: list[list[dict]] = []
+    i = 0
+    while i < len(prior):
+        msg = prior[i]
+        group = [msg]
+        i += 1
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            call_ids = {str(c.get("id")) for c in msg.get("tool_calls") or []}
+            while i < len(prior) and prior[i].get("role") == "tool":
+                tool_id = str(prior[i].get("tool_call_id"))
+                if tool_id not in call_ids:
+                    # 历史本身已损坏：不要把孤立 tool 消息发给供应商。
+                    break
+                group.append(prior[i])
+                i += 1
+        groups.append(group)
+    selected: list[list[dict]] = []
+    count = 0
+    for group in reversed(groups):
+        if selected and count + len(group) > limit:
+            break
+        selected.append(group)
+        count += len(group)
+    selected.reverse()
+    return [message for group in selected for message in group]
+
+
+def _validate_history_messages(messages: list[dict]) -> None:
+    """在请求前拒绝孤立 tool 结果，避免把本地状态错误传给供应商。"""
+    pending: set[str] = set()
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            pending = {str(c.get("id")) for c in message.get("tool_calls") or []}
+        elif role == "tool":
+            tool_id = str(message.get("tool_call_id"))
+            if tool_id not in pending:
+                raise ValueError("恢复历史损坏：tool 结果没有对应的 assistant tool_calls")
+            pending.discard(tool_id)
+        elif pending:
+            # assistant 工具调用后必须先接收全部工具结果，才能进入下一条消息。
+            raise ValueError("恢复历史损坏：assistant tool_calls 未闭合")
+    if pending:
+        raise ValueError("恢复历史损坏：assistant tool_calls 未闭合")
+
+
 def _parse_decision(text: str) -> dict:
     """严格解析顶层对象；不从非法回复中拼凑或猜测消息。"""
     try:
@@ -78,6 +132,8 @@ def _validate_decision(decision: dict) -> None:
         raise ValueError("kind 必须是以下字符串之一：" + ", ".join(sorted(KINDS)))
     if not isinstance(decision["say"], str):
         raise ValueError("say 必须是字符串")
+    if len(decision["say"]) > 1200:
+        raise ValueError("say 超过 1200 字；只保留结论、问题和必要依据，不要复述完整方案")
     peers = set(roles.peers())
     for key in ("to", "wake"):
         targets = decision[key]
@@ -107,7 +163,7 @@ def _validate_decision(decision: dict) -> None:
             raise ValueError("提供 escalate 对象时 kind 必须为 escalate")
     if kind == "accept" and any(decision.get(key) for key in ("changes", "requested_changes")):
         raise ValueError("changes 或 requested_changes 非空时不能 accept，请修改 kind 后重新回复")
-    if kind in {"proposal", "objection", "accept", "final"}:
+    if kind in {"proposal", "objection", "accept", "final"} and not (kind == "accept" and decision.get("agent") == "critic_agent"):
         evidence = decision.get("evidence")
         if evidence is not None and (not isinstance(evidence, list) or any(not isinstance(item, dict) for item in evidence)):
             raise ValueError("关键结论的 evidence 必须是对象数组")
@@ -134,9 +190,12 @@ async def run_turn(
     不读取其他角色的私有历史，不修改传入列表；工具消息也完整保留。
     """
     messages: list[dict] = [{"role": "system", "content": system}]
-    # 只保留最近两轮，避免工具 JSON 和协议纠错无限堆积到上下文。
-    prior = [m for m in (history or []) if m.get("role") != "system"]
-    messages.extend(deepcopy(prior[-12:]))
+    # 只在完整工具事务之间裁剪；绝不能截断 assistant.tool_calls 与 tool 结果的配对。
+    messages.extend(_complete_history(history, limit=12))
+    try:
+        _validate_history_messages(messages[1:])
+    except ValueError as exc:
+        return AgentTurn(error=str(exc), error_type="HistoryCorrupt", history=messages)
     messages.append({"role": "user", "content": prompt})
     schemas = tools_spec.schemas_for(tools)
     allowed_tools = set(tools) & {schema["function"]["name"] for schema in schemas}
@@ -167,13 +226,25 @@ async def run_turn(
             for call in calls:
                 used.append(call["name"])
                 emit("tool_call", agent=agent, tool=call["name"], arguments=call["arguments"])
-                if call["name"] not in allowed_tools:
+                prior = ctx.operations.get(str(call["id"]))
+                fresh = False
+                if (
+                    prior
+                    and prior.get("status") == "succeeded"
+                    and prior.get("agent") == agent
+                    and prior.get("tool") == call["name"]
+                ):
+                    # 恢复后同一调用已成功过：复用结果，避免重复写副作用。
+                    result = {**deepcopy(prior.get("result") or {}), "replayed": True}
+                elif call["name"] not in allowed_tools:
                     result = {"ok": False, "error": f"角色 {agent} 无权调用工具：{call['name']}"}
                 elif not isinstance(call["arguments"], dict):
                     result = {"ok": False, "error": "工具参数必须是 JSON 对象"}
                 else:
+                    fresh = True
+                    before_version = ctx.plan_version
                     result = tools_spec.execute(ctx, call["name"], call["arguments"])
-                if result.get("ok"):
+                if result.get("ok") and not result.get("evidence_id"):
                     from uuid import uuid4
                     evidence_id = uuid4().hex
                     evidence = {
@@ -186,6 +257,16 @@ async def run_turn(
                     ctx.evidence[evidence_id] = evidence
                     evidence_ids.append(evidence_id)
                     result = {**result, "evidence_id": evidence_id}
+                if fresh:
+                    ctx.operations[str(call["id"])] = {
+                        "agent": agent,
+                        "tool": call["name"],
+                        "arguments": call["arguments"],
+                        "status": "succeeded" if result.get("ok") else "failed",
+                        "result": deepcopy(result),
+                        "before_version": before_version,
+                        "after_version": ctx.plan_version,
+                    }
                 emit(
                     "tool_result",
                     agent=agent,
@@ -207,7 +288,18 @@ async def run_turn(
         messages.append({"role": "assistant", "content": content})
         try:
             decision = _parse_decision(content)
+            if agent == "critic_agent":
+                decision["agent"] = "critic_agent"
             _validate_decision(decision)
+            if agent == "critic_agent" and decision.get("kind") == "objection":
+                changes = decision.get("changes")
+                if not isinstance(changes, list) or not changes or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("code"), str)
+                    or not isinstance(item.get("acceptance"), str)
+                    for item in changes
+                ):
+                    raise ValueError("Critic objection 的 changes 必须包含 code 和 acceptance")
             evidence = decision.get("evidence") or []
             if evidence and (
                 not isinstance(evidence, list)

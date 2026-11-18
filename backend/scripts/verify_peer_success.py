@@ -19,7 +19,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.agents import hub  # noqa: E402
+from app.agents import hub, review  # noqa: E402
 from app.models import TripBrief  # noqa: E402
 from app.tools.mock import MockSource  # noqa: E402
 
@@ -114,9 +114,12 @@ def role_of(system: str) -> str:
 class ScriptedTeam:
     """按已发生的工具调用决定下一步；重试时保持同一逻辑位置。"""
 
-    def __init__(self):
+    def __init__(self, *, inject_budget_issue: bool = False):
         self.calls = 0
         self.roles: dict[str, int] = {}
+        self.inject_budget_issue = inject_budget_issue
+        self.injected_issue = False
+        self.evidence: dict[str, dict] = {}
 
     async def chat_tools(self, messages, tools):
         self.calls += 1
@@ -124,6 +127,15 @@ class ScriptedTeam:
         self.roles[role] = self.roles.get(role, 0) + 1
         used = called(messages)
         evidence = last_evidence(messages)
+        for message in messages:
+            if message.get("role") == "tool":
+                try:
+                    result = json.loads(message.get("content") or "{}")
+                except json.JSONDecodeError:
+                    continue
+                evidence_id = result.get("evidence_id") if isinstance(result, dict) else None
+                if evidence_id:
+                    self.evidence[evidence_id] = {"agent": role}
 
         if role == "orchestrator":
             tasks_block = re.search(r"任务状态：(\{.*\})", prompt_text(messages))
@@ -134,7 +146,7 @@ class ScriptedTeam:
                     delivered = bool(tasks) and all(t.get("status") == "delivered" for t in tasks.values())
                 except json.JSONDecodeError:
                     delivered = False
-            if "请主控将这些问题打回" in prompt_text(messages) or "待返工问题" in prompt_text(messages):
+            if "请按 Issue Ledger 将问题打回" in prompt_text(messages) or "待返工问题" in prompt_text(messages):
                 return say("request", evidence, to=["logistics"], wake=["logistics"], rework=[
                     {"task_id": "T1", "reason": "换更便宜的酒店与航班，把总价压回预算内"},
                 ])
@@ -183,12 +195,21 @@ class ScriptedTeam:
             })
 
         if role == "critic_agent":
-            for name in ("get_plan", "check_plan", "day_costs", "experience_check"):
-                if name not in used:
-                    return tool(name)
             match = re.search(r"待审版本：(\d+)", prompt_text(messages))
             version = int(match.group(1)) if match else 1
-            return say("accept", evidence, to=["writer"], wake=["writer"], approved_version=version)
+            packet = {}
+            packet_match = re.search(r"结构化 ReviewPacket（唯一事实来源）：(\{.*\})", prompt_text(messages))
+            packet = json.loads(packet_match.group(1)) if packet_match else {}
+            if self.inject_budget_issue and not self.injected_issue:
+                self.injected_issue = True
+                return say("objection", evidence, to=["orchestrator"], changes=[{
+                    "code": "DAY_EMPTY", "owner": "local_expert",
+                    "acceptance": "当天安排至少一个合适景点",
+                }])
+            if "BUDGET_EXCEEDED" in str(packet.get("hard_check", {})):
+                raise AssertionError("返工后的方案仍存在预算 blocker")
+            return say("accept", evidence, to=["writer"], wake=["writer"], approved_version=version,
+                       say="基于 ReviewPacket 与工具事实完成核验")
 
         if role == "writer":
             if "get_plan" not in used:
@@ -213,8 +234,21 @@ async def unresolved_conflict_reaches_user(session: dict) -> tuple[bool, dict | 
     """评审已到上限且仍有未解决问题时，必须升级给用户而不是静默失败。"""
     resumed = json.loads(json.dumps(session, ensure_ascii=False))
     resumed["reviews"] = 1
+    resumed["tasks"]["T1"]["status"] = "pending"
+    resumed["tasks"]["T1"]["delivery"] = None
+    resumed["tasks"]["T2"]["status"] = "pending"
+    resumed["tasks"]["T2"]["delivery"] = None
+    resumed["pending_agent"] = "orchestrator"
+    resumed["pending_task"] = None
     resumed["pending_rejections"] = [{
         "owner": "logistics", "problem": "总价超出预算", "required_change": "换更便宜酒店",
+        "code": "BUDGET_EXCEEDED", "acceptance": "总费用不超过预算", "repair_tools": ["set_hotel"],
+    }]
+    resumed["pending_issue_codes"] = [{
+        "issue_id": "test:BUDGET_EXCEEDED:trip", "code": "BUDGET_EXCEEDED", "severity": "blocker",
+        "owner": "logistics", "evidence": "总价超出预算", "acceptance": "总费用不超过预算",
+        "repair_tools": ["set_hotel"], "status": "open", "first_seen_version": 10,
+        "fixed_in_version": None,
     }]
     team = ScriptedTeam()
     result = await hub.run_session(
@@ -253,13 +287,49 @@ async def main() -> int:
           f"{result.ctx.approved_version} vs {result.ctx.plan_version}")
     check("文档覆盖全部日期", [d["date"] for d in (result.ctx.document or {}).get("days", [])] == DAYS)
     check("调用数在默认预算内", team.calls <= 40, str(team.calls))
+    check("评审包减少重复请求", team.calls <= 20, str(team.calls))
     check("五个角色都参与了", set(team.roles) == {"orchestrator", "logistics", "local_expert", "critic_agent", "writer"},
           str(team.roles))
+    review_packets = [m for m in result.bus.messages if m.sender == "orchestrator" and m.kind == "proposal"]
+    check("主控投递结构化 ReviewPacket", bool(review_packets) and "review_packet" in review_packets[-1].payload)
+    critic_trace = next((t for t in result.trace if t["agent"] == "critic_agent"), {})
+    check("Critic 不再重复调用四份评审工具",
+          not ({"get_plan", "check_plan", "day_costs", "experience_check"} & set(critic_trace.get("tools", []))))
     converged = [p for k, p in events if k == "converged"]
     check("发出收敛事件", bool(converged))
     print(f"调用次数 {team.calls}，各角色回合 {team.roles}，总花费 {result.itinerary.total_cost if result.itinerary else '-'}")
 
-    print("\n[2] 预算类冲突到达用户升级")
+    print("\n[2] Issue Ledger 校验与关闭")
+    packet = {
+        "packet_id": "packet-test", "plan_version": 8,
+        "hard_check": {"issues": [{
+            "severity": "blocker", "code": "DAY_EMPTY", "day": "2026-11-21",
+            "message": "当天没有景点", "repair_tools": ["assign_pois"],
+        }]},
+    }
+    ledger = review.make_issue_ledger(packet, [{
+        "code": "DAY_EMPTY", "owner": "local_expert", "acceptance": "当天有合适景点",
+    }], [])
+    check("确定性问题进入 open 账本", len(ledger) == 1 and ledger[0]["status"] == "open")
+    try:
+        review.make_issue_ledger(packet, [{"code": "NIGHT_ACTIVITY_MISSING", "owner": "local_expert", "acceptance": "有夜景"}], [])
+    except ValueError:
+        check("无校验依据的问题被拒绝", True)
+    else:
+        check("无校验依据的问题被拒绝", False)
+    repeated = review.make_issue_ledger({
+        "packet_id": "packet-renewed", "plan_version": 9,
+        "hard_check": {"issues": [{
+            "severity": "blocker", "code": "DAY_EMPTY", "day": "2026-11-21",
+            "message": "当天仍没有景点", "repair_tools": ["assign_pois"],
+        }]},
+    }, [{"code": "DAY_EMPTY", "owner": "local_expert", "acceptance": "当天有合适景点"}], ledger)
+    check("同一问题跨版本保持 issue_id 和首见版本",
+          repeated[0]["issue_id"] == ledger[0]["issue_id"] and repeated[0]["first_seen_version"] == 8)
+    closed = review.make_issue_ledger({"packet_id": "packet-next", "plan_version": 10, "hard_check": {"issues": []}}, [], repeated)
+    check("问题消失后记录关闭版本", closed[0]["status"] == "closed" and closed[0]["fixed_in_version"] == 10)
+
+    print("\n[3] 评审上限后升级")
     ok, escalation = await unresolved_conflict_reaches_user(result.session)
     check("评审上限后升级给用户", ok, str(escalation)[:240])
     check("升级说明评审已到上限", "评审" in str(escalation.get("question", "")), str(escalation)[:160])
