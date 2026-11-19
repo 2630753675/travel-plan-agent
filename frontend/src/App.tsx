@@ -173,6 +173,7 @@ type Result = {
   team_tasks?: Record<string, TeamTask>
   issue_ledger?: IssueLedgerItem[]
   approved_version?: number | null
+  team_state?: 'approved' | 'detached' | null
   llm_stats?: LlmStats
   share?: string
 }
@@ -1177,15 +1178,24 @@ export default function App() {
         critique: data.critique,
         revision: data.revision ?? result.revision,
         version: data.version ?? result.version,
+        // 团队返工会重新评审并重写计划书：把服务端返回的交付视图一并更新。
+        document: data.document ?? null,
+        team_tasks: data.team_tasks ?? {},
+        issue_ledger: data.issue_ledger ?? [],
+        approved_version: data.approved_version ?? null,
+        team_state: data.team_state ?? null,
+        llm_stats: data.llm_stats ?? result.llm_stats,
       })
       await loadVersions(result.plan_id)
       setFeedback((f) => ({ ...f, [day]: '' }))
       setRefineNote((n) => ({
         ...n,
         [day]: changed
-          ? data.refine_source === 'model'
-            ? '已由模型理解意见后重排'
-            : '已按规则重排'
+          ? data.refine_source === 'team'
+            ? `已由团队返工复核（第 ${data.version ?? '—'} 版，重写了计划书）`
+            : data.refine_source === 'model'
+              ? '已由模型理解意见后重排'
+              : '已按规则重排'
           : '没有改动：当前安排已符合你的意见',
       }))
     } catch (e) {
@@ -1221,6 +1231,12 @@ export default function App() {
         itinerary: data.itinerary,
         critique: data.critique,
         version: data.version,
+        // 回滚到某版本时，该版本的团队交付视图也要一起回退，不能留着旧计划书。
+        document: data.document ?? null,
+        team_tasks: data.team_tasks ?? {},
+        issue_ledger: data.issue_ledger ?? [],
+        approved_version: data.approved_version ?? null,
+        team_state: data.team_state ?? null,
       })
       await loadVersions(result.plan_id)
     } catch (e) {
@@ -1633,6 +1649,11 @@ export default function App() {
                     <ul>{result.document.practical_notes.filter((note) => typeof note === 'string').map((note, index) => <li key={index}>{note}</li>)}</ul>
                   ) : typeof result.document.practical_notes === 'string' && <p>{result.document.practical_notes}</p>}
                 </section>
+              )}
+              {result.team_state === 'detached' && (
+                <p className="team-detached-notice">
+                  该版本未关联团队评审（旧版单日重排或直接编辑产生）：计划书与问题清单不可用，建议整轮重新规划或对单日发起团队返工。
+                </p>
               )}
               {result.team_tasks && Object.keys(result.team_tasks).length > 0 && (
                 <section className="team-tasks">

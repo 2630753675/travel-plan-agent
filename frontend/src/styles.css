@@ -1129,6 +1129,17 @@ button:disabled {
 .conversation-message.critic_agent .message-avatar { background: #9670c9; }
 .conversation-message.writer .message-avatar { background: #b8563f; }
 
+.team-detached-notice {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #6b4a12;
+  border-radius: 8px;
+  background: #2a2113;
+  color: #f0c674;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .bubble-toggle {
   margin-top: 4px;
   padding: 0;

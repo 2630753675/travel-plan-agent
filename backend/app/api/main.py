@@ -24,8 +24,10 @@ from pydantic import BaseModel, Field, ValidationError
 from .. import access
 from .. import cancellation
 from .. import settings as config_store
+from ..artifacts import default_store
 from ..cancellation import RunCancelled
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
+from ..agents import hub as peer_hub
 from ..checkpoint import PersistentSaver
 from ..graph.build import build
 from ..llm import LLMClient, LLMError
@@ -145,6 +147,29 @@ def _record_completed_run(plan_id: str, *, version: int, revision: int,
         "total_cost": total_cost,
         "llm_stats": stats or {},
     })
+
+
+def _team_payload(result: dict, team_session: dict, peer_state) -> dict | None:
+    """团队交付视图：与行程分开存，按版本绑定。
+
+    以前这些字段只能从 trace 里按"行程完全相等"认领，重排/回滚后行程一变就全丢；
+    会话快照另存工件，供后续"局部团队返工"精确续跑。
+    """
+    if not isinstance(team_session, dict) or team_session.get("architecture") != "professional_team":
+        return None
+    payload = {
+        "state": "approved",
+        "document": result.get("document"),
+        "tasks": result.get("team_tasks") or {},
+        "issue_ledger": result.get("issue_ledger") or [],
+        "approved_version": result.get("approved_version"),
+    }
+    if isinstance(peer_state, dict) and peer_state:
+        try:
+            payload["session"] = default_store().put(peer_state)
+        except Exception:  # noqa: BLE001
+            logger.exception("保存团队会话工件失败：plan_id=%s", result.get("plan_id"))
+    return payload
 
 
 def _issue_ledger_view(team_session: dict) -> list[dict]:
@@ -419,6 +444,7 @@ async def _run_graph(
             "issue_ledger": result["issue_ledger"],
             "approved_version": result["approved_version"],
         })
+    team = _team_payload(result, team_session, final.get("peer_state"))
     version = store.save(
         plan_id,
         brief.model_dump(mode="json"),
@@ -430,6 +456,7 @@ async def _run_graph(
         activity,
         source=source,
         note=note,
+        team=team,
     )
     result["version"] = version
     # 成功运行也落一条 runs 记录：否则真实用量只存在于事件流里，无法按运行对比。
@@ -508,14 +535,26 @@ async def get_plan(plan_id: str):
     record = store.load(plan_id)
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
-    deliverable = next((row for row in reversed(record.get("trace") or [])
-                        if row.get("phase") == "team_deliverable"
-                        and row.get("itinerary") == record["itinerary"]), None)
-    if deliverable:
+    team = record.get("team")
+    if isinstance(team, dict) and team.get("state") == "approved":
+        # 交付视图按版本存，直接读；不再依赖"行程完全相等"的隐式认领。
         record.update({
-            key: deliverable.get(key)
-            for key in ("document", "team_tasks", "issue_ledger", "approved_version")
+            "document": team.get("document"),
+            "team_tasks": team.get("tasks"),
+            "issue_ledger": team.get("issue_ledger"),
+            "approved_version": team.get("approved_version"),
+            "team_state": team.get("state"),
         })
+    else:
+        deliverable = next((row for row in reversed(record.get("trace") or [])
+                            if row.get("phase") == "team_deliverable"
+                            and row.get("itinerary") == record["itinerary"]), None)
+        if deliverable:
+            record.update({
+                key: deliverable.get(key)
+                for key in ("document", "team_tasks", "issue_ledger", "approved_version")
+            })
+        record["team_state"] = (team or {}).get("state") if isinstance(team, dict) else None
     record["events"] = store.list_events(plan_id)
     record["version"] = store.current_version(plan_id)
     record["summary"] = summary.build_summary(
@@ -615,6 +654,10 @@ async def cancel_plan(plan_id: str):
 
 @app.post("/api/plan/{plan_id}/refine")
 async def refine_plan(plan_id: str, body: RefineRequest):
+    """单日修改走"局部团队返工"：专业 Agent 改 → Critic 复核 → Writer 重写计划书。
+
+    不再用旧的单 Agent 流水线直接改行程：那样会绕过评审，产出一份没人复核过的方案。
+    """
     record = store.load(plan_id)
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
@@ -625,80 +668,95 @@ async def refine_plan(plan_id: str, body: RefineRequest):
     if not any(d.date == target for d in itinerary.days):
         raise HTTPException(status_code=400, detail=f"{target} 不在该行程日期范围内")
 
-    cfg = config_store.load()
-    _require_configured_model(cfg)
-    src = make_source(cfg.datasource)
-    t_plan = transport.run(brief, src)
-    l_plan = lodging.run(brief, src)
-    p_plan = poi.run(brief, src)
-    w_plan = weather.run(brief, src)
-
-    # 单日重排沿用原行程的酒店，避免同一次行程里两种住宿
-    existing_hotel = next(
-        (i.ref_id for d in itinerary.days for i in d.items if i.type == "hotel"),
-        None,
-    )
-    if existing_hotel:
-        match = next((h for h in l_plan.candidates if h.name == existing_hotel), None)
-        if match:
-            l_plan.chosen = match
-
-    target_day = next(d for d in itinerary.days if d.date == target)
-
-    # 模型启用时由模型理解反馈；失败或未启用则回落关键词规则
-    llm_selection = None
-    refine_source = "rule"
-    if cfg.llm.configured:
-        used_elsewhere = {
-            i.ref_id
-            for d in itinerary.days
-            if d.date != target
-            for i in d.items
-            if i.type == "sight" and i.ref_id
-        }
-        is_rainy = any(w.date == target and w.is_rainy for w in w_plan.days)
-        client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s, budget=None)
-        picked = await llm_refiner.refine_day(
-            brief, target_day, body.feedback, p_plan.candidates, used_elsewhere, is_rainy, client
-        )
-        if picked is not None:
-            llm_selection = {target: picked}
-            refine_source = "model"
-
-    frozen = {d.date: d for d in itinerary.days}
-    new_itinerary = planner.run(
-        brief=brief,
-        transport=t_plan,
-        lodging=l_plan,
-        poi_plan=p_plan,
-        weather=w_plan,
-        frozen=frozen,
-        target_date=target,
-        feedback=body.feedback,
-        llm_selection=llm_selection,
-    )
-    new_critique = critic.run(brief, new_itinerary, p_plan, t_plan, w_plan)
-    if not new_critique.passed:
-        blockers = [i.message for i in new_critique.issues if i.severity == "blocker"]
+    team = record.get("team") if isinstance(record.get("team"), dict) else {}
+    session_ref = team.get("session")
+    if team.get("state") != "approved" or not session_ref:
         raise HTTPException(
             status_code=409,
-            detail="重排后的方案未通过硬校验，未保存：" + "；".join(blockers),
+            detail="该版本没有可续跑的团队会话（旧版本或手工重排过），无法只改一天；请整轮重新规划",
         )
+    try:
+        session = default_store().get(session_ref)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=409, detail=f"团队会话不可用，无法局部返工：{exc}") from exc
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=409, detail="团队会话快照损坏，无法局部返工")
+
+    cfg = config_store.load()
+    _require_configured_model(cfg)
+
+    # 只派一个"改这一天"的任务；其余已交付任务保持原样，由依赖调度决定是否需要连带返工。
+    task_id = f"R{len(session.get('tasks') or {}) + 1}"
+    tasks = dict(session.get("tasks") or {})
+    tasks[task_id] = {
+        "id": task_id,
+        "owner": "local_expert",
+        "goal": (
+            f"按用户意见修改 {target} 的行程：{body.feedback or '无具体意见'}。"
+            "只改这一天，其他日期保持不动；改完 materialize_plan 并 check_plan。"
+        ),
+        "depends_on": [],
+        "status": "pending",
+        "delivery": None,
+        "changes": [],
+        "writes": ["assignment_version"],
+        "notes": "",
+    }
+    session = {
+        **session,
+        "tasks": tasks,
+        "pending_agent": None,
+        "pending_task": None,
+        "pending_rejections": [],
+    }
+
+    client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s, budget=None)
+    result = await peer_hub.run_session(
+        brief=brief,
+        source=make_source(cfg.datasource),
+        client=client,
+        emit=lambda *a, **k: None,
+        max_turns=max(6, cfg.orchestration.max_agent_turns),
+        # 局部返工给一次额外评审额度：否则会话里的 reviews 已到上限，一开始就升级。
+        max_rounds=max(cfg.orchestration.max_revisions, int(session.get("reviews") or 0) + 1),
+        resume=session,
+    )
+    if not result.converged or result.itinerary is None:
+        detail = (result.escalation or {}).get("question") or "；".join(result.warnings) or "团队返工未收敛"
+        raise HTTPException(status_code=409, detail=detail)
+
+    new_itinerary = result.itinerary
+    new_critique = critic.run(brief, new_itinerary, result.ctx.poi, result.ctx.transport, result.ctx.weather)
+    if not new_critique.passed:
+        raise HTTPException(status_code=409, detail="返工后的方案未通过硬校验，未保存")
+
+    new_team = {
+        "state": "approved",
+        "document": result.ctx.document,
+        "tasks": result.session.get("tasks") or {},
+        "issue_ledger": _issue_ledger_view(result.session),
+        "approved_version": result.ctx.approved_version,
+    }
+    try:
+        new_team["session"] = default_store().put(result.session)
+    except Exception:  # noqa: BLE001
+        logger.exception("保存返工会话工件失败：plan_id=%s", plan_id)
 
     store.save(
         plan_id,
         brief.model_dump(mode="json"),
         new_itinerary.model_dump(mode="json"),
         new_critique.model_dump(mode="json"),
-        record["trace"]
-        + [{"phase": "refine", "node": "planner", "target": str(target),
-            "feedback": body.feedback, "source": refine_source}],
+        record["trace"] + [{
+            "phase": "team_rework", "target": str(target), "feedback": body.feedback,
+            "rounds": result.rounds, "turns": result.turns,
+        }],
         record.get("revision", 0),
-        # 单日重排不该抹掉协商轨迹与既有事件投影
         record.get("negotiation"),
         record.get("activity"),
-        source="refine",
-        note=f"重排 {target}：{body.feedback or '无具体意见'}",
+        source="team_rework",
+        note=f"团队返工 {target}：{body.feedback or '无具体意见'}",
+        team=new_team,
     )
     return {
         "plan_id": plan_id,
@@ -706,7 +764,13 @@ async def refine_plan(plan_id: str, body: RefineRequest):
         "critique": new_critique.model_dump(mode="json"),
         "revision": record.get("revision", 0),
         "version": store.current_version(plan_id),
-        "refine_source": refine_source,
+        "refine_source": "team",
+        "document": new_team["document"],
+        "team_tasks": new_team["tasks"],
+        "issue_ledger": new_team["issue_ledger"],
+        "approved_version": new_team["approved_version"],
+        "team_state": "approved",
+        "llm_stats": client.stats(),
         "summary": summary.build_summary(new_itinerary, cfg.datasource.kind),
     }
 
@@ -752,13 +816,21 @@ async def rollback_plan(plan_id: str, body: RollbackRequest):
         record.get("activity"),
         source="rollback",
         note=f"回滚到 v{body.version}",
+        # 回滚到哪个版本，就把那个版本的团队交付视图一并恢复。
+        team=target.get("team"),
     )
+    team = target.get("team") or {}
     return {
         "plan_id": plan_id,
         "version": new_version,
         "rolled_back_to": body.version,
         "itinerary": target["itinerary"],
         "critique": target["critique"],
+        "document": team.get("document"),
+        "team_tasks": team.get("tasks"),
+        "issue_ledger": team.get("issue_ledger"),
+        "approved_version": team.get("approved_version"),
+        "team_state": team.get("state"),
         "summary": summary.build_summary(
             Itinerary(**target["itinerary"]), config_store.load().datasource.kind
         ),

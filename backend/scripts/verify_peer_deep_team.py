@@ -11,6 +11,7 @@ import asyncio
 import json
 import pathlib
 import sys
+import tempfile
 from datetime import date
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -287,6 +288,55 @@ def test_resume_passes_cumulative_stats() -> None:
     check("恢复图收到累计 token", stats.get("total_tokens") == 255305, str(stats))
 
 
+def test_team_payload() -> None:
+    print("\n[G] 团队交付视图独立存储")
+    import app.api.main as api
+
+    class FakeStore:
+        def __init__(self):
+            self.saved = []
+
+        def put(self, payload):
+            self.saved.append(payload)
+            return {"artifact_id": "a" * 64, "bytes": 12}
+
+    fake = FakeStore()
+    original = api.default_store
+    api.default_store = lambda: fake
+    try:
+        payload = api._team_payload(
+            {"plan_id": "p1", "document": {"title": "计划"}, "team_tasks": {"T1": {}},
+             "issue_ledger": [{"code": "X"}], "approved_version": 7},
+            {"architecture": "professional_team"},
+            {"context": {"plan_version": 7}},
+        )
+    finally:
+        api.default_store = original
+    check("团队交付视图包含批准版本", payload and payload.get("approved_version") == 7, str(payload))
+    check("会话快照存成工件引用",
+          isinstance((payload or {}).get("session"), dict)
+          and payload["session"]["artifact_id"] == "a" * 64, str((payload or {}).get("session")))
+    check("非团队会话不生成交付视图",
+          api._team_payload({"plan_id": "p2"}, {}, None) is None)
+
+    from app.api import store as plan_store
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    original_db = plan_store.DB_PATH
+    plan_store.DB_PATH = tmp / "team.db"
+    try:
+        team = {"state": "approved", "document": {"title": "团队计划书"},
+                "tasks": {}, "issue_ledger": [], "approved_version": 3}
+        plan_store.save("p-team", {"origin": "a"}, {"days": []}, {"passed": True}, [],
+                        team=team)
+        loaded = plan_store.load("p-team")
+        check("plan 记录带团队视图", (loaded or {}).get("team", {}).get("approved_version") == 3)
+        version = plan_store.load_version("p-team", 1)
+        check("版本快照带团队视图", (version or {}).get("team", {}).get("approved_version") == 3)
+    finally:
+        plan_store.DB_PATH = original_db
+
+
 def main() -> int:
     test_stats_continue_across_resume()
     test_read_cache()
@@ -295,6 +345,7 @@ def main() -> int:
     test_declarative_submit()
     test_prior_stats_loader()
     test_resume_passes_cumulative_stats()
+    test_team_payload()
     print()
     if failures:
         print(f"FAIL  {len(failures)} 项未通过")

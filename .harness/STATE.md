@@ -19,7 +19,9 @@
 - 工作区仅剩 12 张 `docs/shot-*.png` 截图与 `backend/data` 运行数据、无关媒体未提交
 - 单模式配置：`agent_mode` / `planning_mode` 已移除；只保留深度团队。未配置模型时 `/api/plan`、`/resume`、`/refine` 返回 400。`max_runtime_s=180`、`max_model_calls=40`、`max_agent_turns=20`；`max_output_tokens` 已废弃，旧值 1400 在加载时迁移为 None
 - 前端入口：`Cache-Control: no-store`
-- 最新前端资源：`/assets/index-BCHEiKlU.js`
+- 最新前端资源：`/assets/index-44KUYj-Q.js`
+- 2026-11-19 审计修复（已提交 `5e96078`，C/B 待提交）：H1/H2/H4 + M1/M2/M3/M4/M5/M7/M9 已修并加断言；H3 用「交付视图独立存 + 局部团队返工」解决：`plans.team`/`plan_versions.team` 存 `document/tasks/issue_ledger/approved_version/session`，`POST /refine` 改为注入单日任务走 local_expert→critic→writer，旧版本无会话时 409。回归 12 个脚本 + compileall + 前端构建通过。
+- HEAD `4575601`；2026-11-19 完成全面缺陷审计，结论见 [docs/bug-audit-2026-11-19.md](../docs/bug-audit-2026-11-19.md)：高危 4（H1 决策与工具同批导致历史损坏、H2 重放忽略参数、H3 refine/rollback 丢团队交付视图、H4 返工工具限制不清），中危 11，低危 6；探针在 `.harness/audit_probe*.py`。**审计期间未改产品代码。**
 
 ## 已完成
 > 2026-11-17 单模式改造：下列历史条目中涉及 fast/expert/legacy 的内容已失效，仅保留追溯；当前只保留深度团队。
@@ -68,13 +70,14 @@
 - 服务重启、健康接口、配置接口、最新静态资源 `index-Dvt-jbjM.js`：通过。
 
 ## 下一步（新窗口优先）
-1. 重启 :8848 服务（当前进程仍是旧代码），在浏览器确认：无模型时 400 提示、单模式表单、4 个工具证据显示为 4 次。
-2. **真实运行已跑通（19/22 项完成）**：run `6f0d0d4cf107` 完成，23 请求 / 205,955 tokens / 120 秒。已修复三处真实缺陷（schema 与校验不一致、Critic 自造 evidence、成功运行不落库），待下次真实运行确认重试归零；之后再决定 UI/交互优化。
-3. 需要长行程时继续扩充同城市景点：成都老人可用候选约 22 条，10 天以上仍会耗尽；扩到 40+ 才能排满 14 天。
-4. 真实模型下验证取消时延（请求返回后才生效）与供应商是否返回 usage；跨中断累计调用账本仍未实现。
-5. **每完成一个阶段必须同步更新**架构评审第 19 节与 `.harness/STATE.md`、追加 `WORK.md`，再提醒提交。
+1. 按审计建议修高危：H1（决策工具同批返回补 tool 结果）、H2（重放比较参数）、H4（返工工具生命周期），每项加回归断言。
+2. H3 需产品决策：团队方案禁止 refine/rollback，或改为“重新发起团队返工”；决定后再动 `api/main.py`。
+3. 中危按序：M1 工件 id 校验、M2 emit 带 call_id、M3 事件版本、M4 旧会话评审包重建；其余按需。
+4. **每完成一个阶段必须同步更新**架构评审第 19 节与 `.harness/STATE.md`、追加 `WORK.md`，再提醒提交。
 
 ## 未完成/风险
+- 审计发现的高危 4 项与中危 11 项均**未修复**，清单与证据见 `docs/bug-audit-2026-11-19.md`；其中 H1/H2/H3/M1 已用探针复现。
+- 团队方案与单日重排/回滚的边界尚未定义：目前 refine/rollback 会让计划书、问题清单、批准版本失效。
 - peer 架构整改正在进行：计划文档 `docs/peer-agent-remediation-plan.md`；本轮已完成 P0 API 中断、异常诊断/有限重试、停止终态、任务协议、证据引用、Writer 敏感断言、checkpoint 异步写入与集中调度文档等部分。
 - 五角色成功路径已用脚本化模型验证（20 次调用、6 回合、总价 5880/8000；引入 ReviewPacket 后由 24 次下降）；评审上限升级为用户 restart/stop 已验证。
 - checkpoint 已改为按 thread_id 分片（旧文件只读兼容、删除 tombstone、异步线程事务），真实 `aput_writes` 并发通过；实测旧主文件 70.2 MB、分片 7 个共 7.9 MB、单片最大 6.64 MB；尚无保留/清理策略，B9 将处理单会话体积。

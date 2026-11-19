@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS plans (
     trace       TEXT NOT NULL,
     revision    INTEGER NOT NULL DEFAULT 0,
     negotiation TEXT,
-    activity    TEXT
+    activity    TEXT,
+    team        TEXT
 );
 CREATE TABLE IF NOT EXISTS run_events (
     run_id      TEXT NOT NULL,
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS plan_versions (
     itinerary   TEXT NOT NULL,
     critique    TEXT NOT NULL,
     negotiation TEXT,
+    team        TEXT,
     PRIMARY KEY (plan_id, version)
 );
 CREATE TABLE IF NOT EXISTS runs (
@@ -71,6 +73,13 @@ def _connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE plans ADD COLUMN negotiation TEXT")
     if "activity" not in cols:
         conn.execute("ALTER TABLE plans ADD COLUMN activity TEXT")
+    if "team" not in cols:
+        # 团队交付视图（计划书/任务/问题清单/批准版本）独立存放：
+        # 之前靠"行程完全相等"从 trace 里认领，行程一改就丢。
+        conn.execute("ALTER TABLE plans ADD COLUMN team TEXT")
+    version_cols = {row[1] for row in conn.execute("PRAGMA table_info(plan_versions)")}
+    if "team" not in version_cols:
+        conn.execute("ALTER TABLE plan_versions ADD COLUMN team TEXT")
     return conn
 
 
@@ -115,16 +124,19 @@ def save(
     *,
     source: str = "initial",
     note: str = "",
+    team: dict | None = None,
 ) -> int:
     """写入当前结果，并追加一个版本快照；返回新版本号。
 
     版本是只追加的：重排、降配、回滚各自留一份，允许回看和回退。
+    team 是该版本的团队交付视图（计划书/任务/问题清单/批准版本）；与行程分开存，
+    避免"行程变一点就认不回来"。
     """
     with closing(_connect()) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO plans "
-            "(id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity, team) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 plan_id,
                 datetime.now(timezone.utc).isoformat(),
@@ -135,6 +147,7 @@ def save(
                 revision,
                 json.dumps(negotiation, ensure_ascii=False) if negotiation else None,
                 json.dumps(activity, ensure_ascii=False) if activity else None,
+                json.dumps(team, ensure_ascii=False) if team else None,
             ),
         )
         row = conn.execute(
@@ -144,8 +157,8 @@ def save(
         version = int(row[0])
         conn.execute(
             "INSERT INTO plan_versions "
-            "(plan_id, version, created_at, source, note, itinerary, critique, negotiation) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(plan_id, version, created_at, source, note, itinerary, critique, negotiation, team) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 plan_id,
                 version,
@@ -155,6 +168,7 @@ def save(
                 json.dumps(itinerary, ensure_ascii=False),
                 json.dumps(critique, ensure_ascii=False),
                 json.dumps(negotiation, ensure_ascii=False) if negotiation else None,
+                json.dumps(team, ensure_ascii=False) if team else None,
             ),
         )
         conn.commit()
@@ -193,7 +207,7 @@ def list_versions(plan_id: str) -> list[dict]:
 def load_version(plan_id: str, version: int) -> dict | None:
     with closing(_connect()) as conn:
         row = conn.execute(
-            "SELECT version, created_at, source, note, itinerary, critique, negotiation "
+            "SELECT version, created_at, source, note, itinerary, critique, negotiation, team "
             "FROM plan_versions WHERE plan_id = ? AND version = ?",
             (plan_id, version),
         ).fetchone()
@@ -207,6 +221,7 @@ def load_version(plan_id: str, version: int) -> dict | None:
         "itinerary": json.loads(row[4]),
         "critique": json.loads(row[5]),
         "negotiation": json.loads(row[6]) if row[6] else None,
+        "team": json.loads(row[7]) if row[7] else None,
     }
 
 
@@ -248,7 +263,7 @@ def current_version(plan_id: str) -> int:
 def load(plan_id: str) -> dict | None:
     with closing(_connect()) as conn:
         row = conn.execute(
-            "SELECT id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity "
+            "SELECT id, created_at, brief, itinerary, critique, trace, revision, negotiation, activity, team "
             "FROM plans WHERE id = ?",
             (plan_id,),
         ).fetchone()
@@ -264,4 +279,5 @@ def load(plan_id: str) -> dict | None:
         "revision": row[6],
         "negotiation": json.loads(row[7]) if row[7] else None,
         "activity": json.loads(row[8]) if row[8] else [],
+        "team": json.loads(row[9]) if row[9] else None,
     }

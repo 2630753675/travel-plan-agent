@@ -1430,6 +1430,20 @@ Agent 之间不传自然语言全文，只传：
 
 结论：协议层的循环问题已消除（此前 20 回合耗尽），两次运行都在 5–6 回合内收敛。两次之间的请求与字符差异来自**模型自身的工具迭代次数**：本次本地体验 Agent 调了 3 次 `submit_day_plans`、5 次 `materialize_plan`，还调了一次 `get_plan(view="full")`（返回体最大）。这是模型行为差异，不是协议缺陷；若要压，只能改提示约束或限制 `full` 视图的使用者。
 
+### 19.10 团队交付视图独立存储与局部返工（2026-11-19）
+
+**问题**：计划书、问题清单、批准版本原先挂在 trace.team_deliverable 上，接口靠“行程完全相等”认领；单日重排或回滚一改行程就全部失效。旧
+efine 还走单 Agent 流水线，绕过 Critic，产出未评审方案。
+
+**改法**：
+1. plans / plan_versions 新增 	eam 列（JSON），存 document / tasks / issue_ledger / approved_version / session(工件引用)；GET /api/plan 与回滚直接读该列，老数据回退到 trace 匹配。
+2. 完成时把团队会话（含 ctx 与各角色历史）按内容寻址存成工件，供后续精确续跑。
+3. 单日重排改为**局部团队返工**：注入一个只改当天的任务（writes=assignment_version）→ local_expert 改 → Critic 复核 → Writer 重写计划书，存成新版本；评审额度按 reviews+1 保证至少一次
+eviews+1 保证至少一次。
+4. 没有会话引用的旧/手工版本，重排直接 409，不再静默降级到旧流水线。
+
+**验证**：erify_peer_deep_team 覆盖团队视图存取；erify_team_refine 覆盖注入任务、409 守卫，以及**完成态会话续跑**（local_expert → critic → writer 收敛、版本推进、重新批准、计划书重写、原会话快照不被改写）。
+
 ## 20. 一句话总结
 
 **当前系统把“多 Agent”实现成了“5 个角色轮流读同一份全量状态、用自然语言互相说服”，而评审又没有可验收的 issue 契约；所以它必然又慢、又贵、又反复。** 改成“并行专业 Agent + 工件契约 + 增量评审包 + 确定性修复 + 结构化 issue 账本”，才能同时得到效率、准确性和可读性。
