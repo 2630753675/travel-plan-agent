@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI 方案对比 · 旅行规划多 Agent 编排</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --line:#262b35; --ink:#e9ecf1; --muted:#9aa2b1; --dim:#6b7382;
+    --a:#58a6ff; --b:#a8462a; --c:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:56px 28px 80px}
+  .kick{font-size:12px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase}
+  h1{font-size:34px;line-height:1.3;margin:10px 0 12px;font-weight:650;letter-spacing:-.01em}
+  .lede{color:var(--muted);max-width:44em;font-size:15px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;
+    display:flex;flex-direction:column;gap:10px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s;
+  }
+  .card:hover{border-color:#3a4152;transform:translateY(-2px)}
+  .tag{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .card h2{font-size:19px;margin:0;font-weight:600}
+  .card p{margin:0;color:var(--muted);font-size:13.5px}
+  .swatch{display:flex;gap:6px;margin-top:4px}
+  .swatch i{width:22px;height:22px;border-radius:6px;display:block;border:1px solid rgba(255,255,255,.08)}
+  .best{
+    margin-top:12px;font-size:12px;padding:3px 9px;border-radius:99px;align-self:flex-start;
+    background:#10231a;color:#3fb950;border:1px solid #1f3d29;
+  }
+  .compare{margin-top:42px;border-top:1px solid var(--line);padding-top:26px}
+  .compare h3{font-size:16px;margin:0 0 12px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1f242e;vertical-align:top}
+  th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  td:first-child{color:var(--muted);white-space:nowrap}
+  .note{margin-top:30px;padding:14px 18px;border-radius:12px;background:#141820;border:1px solid var(--line);color:var(--muted);font-size:13.5px}
+  .note b{color:var(--ink)}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kick">设计方向 · 3 版</div>
+  <h1>同一份真实行程，三种信息架构</h1>
+  <p class="lede">
+    内容全部来自 2026-11-19 的真实运行（成都 5 天、2 人含老人、7,960 / 8,000、已评审 v8）。
+    三版的差别不是配色，而是“打开页面第一眼该看到什么”。
+  </p>
+
+  <div class="grid">
+    <a class="card" href="01-control-room.html">
+      <span class="tag">方向 A · 深色</span>
+      <h2>指挥台</h2>
+      <p>左需求、中结果、右过程。适合“我要看这五个 Agent 到底干了什么”，信息密度最高。</p>
+      <div class="swatch">
+        <i style="background:#0d1117"></i><i style="background:#161b22"></i><i style="background:#58a6ff"></i><i style="background:#d29922"></i>
+      </div>
+      <span class="best">过程最透明</span>
+    </a>
+
+    <a class="card" href="02-itinerary-first.html">
+      <span class="tag">方向 B · 浅色</span>
+      <h2>行程手册</h2>
+      <p>单列阅读流，像一本给同行家人看的册子。团队过程收进“这份方案怎么来的”。</p>
+      <div class="swatch">
+        <i style="background:#f6f3ec"></i><i style="background:#fffdf8"></i><i style="background:#a8462a"></i><i style="background:#2f6b4f"></i>
+      </div>
+      <span class="best">最好读 · 推荐主形态</span>
+    </a>
+
+    <a class="card" href="03-review-board.html">
+      <span class="tag">方向 C · 深色</span>
+      <h2>决策台</h2>
+      <p>先列出“需要你判断的事”，行程退居第二。适合反复改方案、盯预算的人。</p>
+      <div class="swatch">
+        <i style="background:#0b0b10"></i><i style="background:#14141c"></i><i style="background:#a78bfa"></i><i style="background:#fbbf24"></i>
+      </div>
+      <span class="best">决策最快</span>
+    </a>
+  </div>
+
+  <section class="compare">
+    <h3>三版的关键取舍</h3>
+    <table>
+      <thead>
+        <tr><th scope="col">维度</th><th scope="col">A 指挥台</th><th scope="col">B 行程手册</th><th scope="col">C 决策台</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>首屏主角</td><td>结果 + 过程并列</td><td>计划书结论</td><td>待决策事项</td></tr>
+        <tr><td>团队过程</td><td>常驻右栏</td><td>底部“怎么来的”</td><td>独立标签页</td></tr>
+        <tr><td>适合场景</td><td>调试 / 信任验证</td><td>出行前阅读、给家人看</td><td>反复改方案</td></tr>
+        <tr><td>预算表达</td><td>进度条 + 分项</td><td>大数字 + 一句话提醒</td><td>仪表 + 决策卡</td></tr>
+        <tr><td>打印 / 分享</td><td>一般</td><td>好</td><td>一般</td></tr>
+        <tr><td>风险</td><td>信息密度高，首次使用压力大</td><td>过程需要多点一次</td><td>行程被弱化，可能找不到细节</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="note">
+    <b>我的建议：</b>
+    以 <b>B 行程手册</b> 作为主形态（结果可读、可打印、适合和同行人分享），把 <b>C 的“待你判断”</b> 收成顶部一条提醒，把 <b>A 的三栏过程</b> 保留为“协作轨迹”抽屉。
+    这样三种信息各有归宿，而不是挤在一屏里互相争夺注意力。
+  </div>
+</div>
+</body>
+</html>
