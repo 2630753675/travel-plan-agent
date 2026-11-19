@@ -661,6 +661,8 @@ function ActivityLog({ entries, events }: { entries: LogEntry[]; events: RunEven
   )
 }
 
+const TEAM_ROLES = ['orchestrator', 'logistics', 'local_expert', 'critic_agent', 'writer']
+
 const ACTOR_LABEL: Record<string, string> = {
   system: '系统',
   clarify: '需求澄清',
@@ -1216,6 +1218,26 @@ export default function App() {
     liveEvents.filter((e) => e.event_type === 'agent_completed').map((e) => e.actor),
   ).size
 
+  // 角色进度取自 agent_message.actor：图节点级 agent_started 用的是 peer_run 这类节点名，
+  // 不能代表具体角色出场。
+  const roleStates = useMemo(() => {
+    const appeared = new Set(
+      liveEvents
+        .filter((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor))
+        .map((e) => e.actor),
+    )
+    const last = [...liveEvents]
+      .reverse()
+      .find((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor))
+    const states: Record<string, 'idle' | 'running' | 'done'> = {}
+    for (const role of TEAM_ROLES) {
+      states[role] = role === last?.actor && phase === 'running'
+        ? 'running'
+        : appeared.has(role) ? 'done' : 'idle'
+    }
+    return states
+  }, [liveEvents, phase])
+
   return (
     <div className="shell">
       {needToken && (
@@ -1287,6 +1309,20 @@ export default function App() {
             </button>
           </div>
           <div className="drawer-body" ref={drawerRef}>
+            {liveEvents.length > 0 && (
+              <div className="role-board" aria-label="团队进度">
+                {TEAM_ROLES.map((role) => {
+                  const state = roleStates[role] ?? 'idle'
+                  return (
+                    <span key={role} className={`role-chip ${role} ${state}`}>
+                      <i className="role-dot" />
+                      {ACTOR_LABEL[role] ?? role}
+                      <em>{state === 'done' ? '已出场' : state === 'running' ? '进行中' : '待命'}</em>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
             {liveLogs.length === 0 ? (
               <p className="muted">提交需求后，各 agent 的讨论与工具调用会实时出现在这里。</p>
             ) : (

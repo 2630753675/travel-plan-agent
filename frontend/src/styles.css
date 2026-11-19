@@ -1065,6 +1065,70 @@ button:disabled {
   color: var(--ok);
 }
 
+.role-board {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.role-chip em {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.role-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.role-chip.running {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.role-chip.running .role-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.06);
+}
+
+.role-chip.done .role-dot {
+  background: var(--ok);
+}
+
+.role-chip.done {
+  color: var(--text);
+}
+
+/* 角色配色：与对话头像保持一致，便于在轨迹与任务表之间对齐 */
+.role-chip.orchestrator .role-dot { background: #5574b8; }
+.role-chip.logistics .role-dot { background: #d18a25; }
+.role-chip.local_expert .role-dot { background: #3b9a78; }
+.role-chip.critic_agent .role-dot { background: #9670c9; }
+.role-chip.writer .role-dot { background: #b8563f; }
+
+.conversation-message.orchestrator .message-avatar { background: #5574b8; }
+.conversation-message.logistics .message-avatar { background: #d18a25; }
+.conversation-message.local_expert .message-avatar { background: #3b9a78; }
+.conversation-message.critic_agent .message-avatar { background: #9670c9; }
+.conversation-message.writer .message-avatar { background: #b8563f; }
+
 .alert {
   margin-bottom: 16px;
   padding: 10px 14px;

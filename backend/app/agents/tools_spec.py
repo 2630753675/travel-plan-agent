@@ -66,6 +66,12 @@ class ToolContext:
     itinerary: Itinerary | None = None
     hard_check: dict | None = None
     plan_version: int = 0
+    # 按域版本：并行专业任务只关心自己领域的版本是否被别人改过。
+    # plan_version 仍是聚合版本，供硬校验/缓存/批准使用。
+    transport_version: int = 0
+    lodging_version: int = 0
+    assignment_version: int = 0
+    fixed_events_version: int = 0
     approved_version: int | None = None
     document: dict | None = None
     itinerary_version: int | None = None
@@ -196,6 +202,7 @@ def _assign_pois(ctx: ToolContext, args: dict) -> dict:
     if ctx.assignment.get(d) == ids:
         return _ok(date=str(d), assigned=[valid[i].name for i in ids], plan_version=ctx.plan_version, unchanged=True)
     ctx.assignment[d] = ids
+    ctx.assignment_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -243,6 +250,7 @@ def _add_fixed_event(ctx: ToolContext, args: dict) -> dict:
     )
     ctx.fixed_events.setdefault(d, []).append(event)
     ctx.fixed_events[d].sort(key=lambda e: (e.start_time.hour * 60 + e.start_time.minute))
+    ctx.fixed_events_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -297,6 +305,7 @@ def _replace_fixed_event(ctx: ToolContext, args: dict) -> dict:
         ctx.fixed_events.pop(old_date, None)
     ctx.fixed_events.setdefault(d, []).append(replacement)
     ctx.fixed_events[d].sort(key=lambda e: (e.start_time.hour * 60 + e.start_time.minute))
+    ctx.fixed_events_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -314,6 +323,7 @@ def _remove_fixed_event(ctx: ToolContext, args: dict) -> dict:
     ctx.fixed_events[d] = [e for e in ctx.fixed_events[d] if e.event_id != event_id]
     if not ctx.fixed_events[d]:
         ctx.fixed_events.pop(d, None)
+    ctx.fixed_events_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -359,6 +369,7 @@ def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
         )
     before = {str(d): list(ctx.assignment.get(d, [])) for d in staged}
     ctx.assignment.update(staged)
+    ctx.assignment_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -381,6 +392,7 @@ def _set_hotel(ctx: ToolContext, args: dict) -> dict:
     if ctx.hotel_id == name:
         return _ok(hotel=name, unchanged=True)
     ctx.hotel_id = name
+    ctx.lodging_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None
@@ -420,6 +432,7 @@ def _set_flights(ctx: ToolContext, args: dict) -> dict:
         )
     ctx.transport.chosen_outbound = outbound
     ctx.transport.chosen_inbound = inbound
+    ctx.transport_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
     ctx.approved_version = None

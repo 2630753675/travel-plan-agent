@@ -205,6 +205,12 @@ def dump_context(ctx: ToolContext) -> dict:
         "itinerary": ctx.itinerary.model_dump(mode="json") if ctx.itinerary else None,
         "hard_check": ctx.hard_check,
         "plan_version": ctx.plan_version,
+        "domain_versions": {
+            "transport_version": ctx.transport_version,
+            "lodging_version": ctx.lodging_version,
+            "assignment_version": ctx.assignment_version,
+            "fixed_events_version": ctx.fixed_events_version,
+        },
         "itinerary_version": ctx.itinerary_version,
         "approved_version": ctx.approved_version,
         "document": ctx.document,
@@ -234,6 +240,12 @@ def _restore_context(brief: TripBrief, source: TravelSource, raw: dict) -> ToolC
     ctx.itinerary = Itinerary.model_validate(raw["itinerary"]) if raw.get("itinerary") else None
     ctx.hard_check = raw.get("hard_check")
     ctx.plan_version = int(raw.get("plan_version", 0))
+    versions = raw.get("domain_versions") or {}
+    # 旧会话没有按域版本：缺省为 0，恢复后仍按领域字段是否变化判定冲突。
+    ctx.transport_version = int(versions.get("transport_version", 0))
+    ctx.lodging_version = int(versions.get("lodging_version", 0))
+    ctx.assignment_version = int(versions.get("assignment_version", 0))
+    ctx.fixed_events_version = int(versions.get("fixed_events_version", 0))
     ctx.itinerary_version = raw.get("itinerary_version")
     ctx.approved_version = raw.get("approved_version")
     ctx.document = raw.get("document")
@@ -355,11 +367,18 @@ class SandboxConflict(RuntimeError):
 
 # 专业 Agent 的写入域：只有这些字段会从它自己的工作副本合并回共享上下文。
 # 目的是让“交通住宿”改不了日程、“本地体验”改不了航班酒店，而不是靠提示词自觉。
+DOMAIN_VERSIONS: dict[str, tuple[str, ...]] = {
+    "logistics": ("transport_version", "lodging_version"),
+    "local_expert": ("assignment_version", "fixed_events_version"),
+}
+
 SANDBOX_FIELDS: dict[str, tuple[str, ...]] = {
-    "logistics": ("transport", "lodging", "hotel_id", "plan_version"),
+    "logistics": ("transport", "lodging", "hotel_id", "plan_version",
+                  "transport_version", "lodging_version"),
     "local_expert": (
         "poi", "weather", "assignment", "fixed_events", "itinerary", "hard_check",
         "itinerary_version", "approved_version", "document", "plan_version",
+        "assignment_version", "fixed_events_version",
     ),
 }
 
@@ -381,6 +400,10 @@ def _sandbox_context(ctx: ToolContext) -> ToolContext:
     sandbox.itinerary = ctx.itinerary.model_copy(deep=True) if ctx.itinerary else None
     sandbox.hard_check = deepcopy(ctx.hard_check)
     sandbox.plan_version = ctx.plan_version
+    sandbox.transport_version = ctx.transport_version
+    sandbox.lodging_version = ctx.lodging_version
+    sandbox.assignment_version = ctx.assignment_version
+    sandbox.fixed_events_version = ctx.fixed_events_version
     sandbox.itinerary_version = ctx.itinerary_version
     sandbox.approved_version = ctx.approved_version
     sandbox.document = deepcopy(ctx.document)
@@ -393,21 +416,57 @@ def _sandbox_context(ctx: ToolContext) -> ToolContext:
 _SANDBOX_MUTABLE = (
     "transport", "lodging", "poi", "weather", "assignment", "fixed_events", "hotel_id",
     "itinerary", "hard_check", "plan_version", "itinerary_version", "approved_version", "document",
+    "transport_version", "lodging_version", "assignment_version", "fixed_events_version",
 )
 
 
-def _merge_sandbox(ctx: ToolContext, sandbox: ToolContext, owner: str, *, base_version: int) -> list[str]:
+_DOMAIN_FIELDS = ("transport_version", "lodging_version", "assignment_version", "fixed_events_version")
+
+
+def _task_domains(agent: str, task: dict | None) -> tuple[str, ...]:
+    """该任务实际会写哪些领域。
+
+    协议允许任务显式声明 `writes`（例如"固定时段"只写 fixed_events，日程任务只写 assignment），
+    这样两个任务可以真正并行；没有声明时退回角色默认域。
+    """
+    if isinstance(task, dict) and isinstance(task.get("writes"), list):
+        declared = tuple(field for field in task["writes"] if field in _DOMAIN_FIELDS)
+        if declared:
+            return declared
+    return DOMAIN_VERSIONS.get(agent, ())
+
+
+DOMAIN_MODEL_FIELDS = {
+    "transport_version": "transport",
+    "lodging_version": "lodging",
+    "assignment_version": "assignment",
+    "fixed_events_version": "fixed_events",
+}
+
+
+def _merge_sandbox(ctx: ToolContext, sandbox: ToolContext, owner: str, *, base_versions: dict[str, int],
+                   domains: tuple[str, ...] | None = None) -> list[str]:
     """按角色白名单把工作副本里允许的字段写回共享上下文，返回被忽略的越域字段。
 
-    base_version 是副本开始执行时的版本。如果共享上下文在副本执行期间已经变化
-    （并行兄弟提议抢先用掉了版本号），这里不覆盖、不静默推进，而是抛冲突让调用方
-    把任务退回重做——避免后写覆盖前写，也避免版本号重复使用。
+    base_versions 是副本开始时所辖领域的版本。只要其中之一被别的写入改过，就判冲突：
+    不覆盖、不部分生效，让调用方把任务退回重做。
+
+    比较与写入都按**任务声明的领域**收敛：只写固定时段的任务不会因为别人改了日程而冲突，
+    也不会顺手把日程覆盖掉——这是多任务真并行的前提。
     """
-    if ctx.plan_version != base_version:
-        raise SandboxConflict(
-            f"{owner} 的工作副本基于 v{base_version}，但共享上下文已是 v{ctx.plan_version}"
-        )
+    checked = domains if domains is not None else tuple(base_versions)
+    changed = [
+        f"{field}=v{getattr(ctx, field)}（副本基于 v{base_versions[field]}）"
+        for field in checked
+        if field in base_versions and getattr(ctx, field) != base_versions[field]
+    ]
+    if changed:
+        raise SandboxConflict(f"{owner} 的领域版本已变化：" + "、".join(changed))
     allowed = set(SANDBOX_FIELDS.get(owner, ()))
+    if domains is not None:
+        write_models = {DOMAIN_MODEL_FIELDS[d] for d in domains if d in DOMAIN_MODEL_FIELDS}
+        other_models = {m for d, m in DOMAIN_MODEL_FIELDS.items() if d not in domains}
+        allowed = {field for field in allowed if field not in (other_models - write_models)}
     ignored: list[str] = []
     for field in _SANDBOX_MUTABLE:
         value = getattr(sandbox, field)
@@ -417,6 +476,8 @@ def _merge_sandbox(ctx: ToolContext, sandbox: ToolContext, owner: str, *, base_v
             setattr(ctx, field, value)
         else:
             ignored.append(field)
+    if sandbox.plan_version > ctx.plan_version:
+        ctx.plan_version = sandbox.plan_version
     return ignored
 
 
@@ -681,7 +742,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             else None
         )
         # 专业 Agent 只在自己那份上下文里改；主控/评审/文案没有领域写入，直接用共享上下文。
-        sandbox_base = ctx.plan_version
+        task_domains = _task_domains(agent, active_task_state)
+        sandbox_base = {field: getattr(ctx, field) for field in task_domains}
         turn_ctx = _sandbox_context(ctx) if agent in SANDBOX_FIELDS else ctx
         turn = await run_turn(agent=agent, system=role.system_text(), prompt=prompt, tools=role.tools,
                               ctx=turn_ctx, bus=bus, client=client, emit=emit, max_steps=role.max_steps,
@@ -692,14 +754,15 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             # 无论本回合是否成功，工具已经产生的真实写入都按域白名单合并回共享上下文；
             # 越域字段直接丢弃，不进入方案。若期间上下文版本已被推进，则不覆盖。
             try:
-                ignored_fields = _merge_sandbox(ctx, turn_ctx, agent, base_version=sandbox_base)
+                ignored_fields = _merge_sandbox(ctx, turn_ctx, agent, base_versions=sandbox_base,
+                                                domains=task_domains)
             except SandboxConflict as exc:
                 ignored_fields = []
                 warnings.append(f"{exc}；本回合结果作废")
                 if active_task:
                     tasks[active_task]["status"] = "pending"
                 emit("sandbox_conflict", agent=agent, reason=str(exc),
-                     base_version=sandbox_base, current_version=ctx.plan_version)
+                     base_versions=sandbox_base, current_version=ctx.plan_version)
                 trace.append({"agent": agent, "task_id": active_task, "ok": False,
                               "error": str(exc), "error_type": "SandboxConflict",
                               "tools": turn.tool_calls, "decision": {}, "plan_version": ctx.plan_version})
