@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 K · 体力曲线</title>
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --ink:#141a21; --sub:#4d5865; --muted:#8b95a3;
+    --line:#e3e8ee; --blue:#2f6fed; --blue-soft:#e7effd; --green:#199a6b; --green-soft:#e3f5ee;
+    --amber:#b4761a; --amber-soft:#fdf2dd; --red:#c0392b; --red-soft:#fbe9e7;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+    --sans:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:13.5px/1.6 var(--sans)}
+  .shell{max-width:1180px;margin:0 auto;padding:30px 26px 70px}
+
+  .head{display:flex;align-items:flex-end;gap:24px;border-bottom:1px solid var(--line);padding-bottom:14px}
+  .head .k{font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+  .head h1{font-size:26px;margin:5px 0 0;letter-spacing:-.01em;font-weight:650}
+  .head .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .head .right{margin-left:auto;display:flex;gap:22px;text-align:right}
+  .st .k2{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .st .v{font-family:var(--mono);font-size:18px}
+  .st .v.warn{color:var(--amber)} .st .v.ok{color:var(--green)}
+
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:22px;margin-top:22px;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .card h2{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+
+  .chart-wrap{position:relative}
+  svg.chart{display:block;width:100%;height:300px}
+  .gridline{stroke:#eef1f5;stroke-width:1}
+  .axis-label{font-size:9.5px;fill:#9aa4b2;font-family:var(--mono)}
+  .fatigue{fill:none;stroke:var(--blue);stroke-width:2.2}
+  .fatigue-area{fill:url(#fadeBlue);opacity:.35}
+  .cost{fill:none;stroke:var(--amber);stroke-width:1.8;stroke-dasharray:5 4}
+  .dot{fill:#fff;stroke:var(--blue);stroke-width:2}
+  .dot.warn{stroke:var(--amber)}
+  .rest{fill:var(--green);opacity:.85}
+  .zone{fill:#fdecea;opacity:.55}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .legend i{width:16px;height:2px;display:block}
+  .legend i.blue{background:var(--blue)}
+  .legend i.amber{background:var(--amber)}
+  .legend i.green{background:var(--green);height:7px;width:7px;border-radius:50%}
+
+  .days{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:18px}
+  .day{border:1px solid var(--line);border-radius:12px;padding:12px;position:relative;transition:border-color .15s,transform .15s}
+  .day:hover{border-color:#c9d4e3;transform:translateY(-2px)}
+  .day .d{font-family:var(--mono);font-size:12px;color:var(--blue)}
+  .day .t{font-size:12.5px;margin-top:2px;color:var(--sub)}
+  .meter{margin-top:10px}
+  .meter .lbl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted)}
+  .meter .bar{height:6px;background:#eef1f5;border-radius:99px;overflow:hidden;margin-top:3px}
+  .meter .bar i{display:block;height:100%;background:var(--blue);border-radius:99px}
+  .meter .bar i.high{background:var(--amber)}
+  .day .cost{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:8px}
+  .tag2{position:absolute;right:10px;top:10px;font-size:9.5px;letter-spacing:.08em;color:var(--green);
+    border:1px solid #cfe6db;background:var(--green-soft);border-radius:4px;padding:1px 5px}
+  .tag2.warn{color:var(--amber);border-color:#ecd9ac;background:var(--amber-soft)}
+
+  aside{display:flex;flex-direction:column;gap:14px}
+  .finding{display:flex;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line);font-size:12.5px;color:var(--sub)}
+  .finding:last-child{border-bottom:none}
+  .finding .n{font-family:var(--mono);font-size:11px;color:var(--muted);min-width:16px}
+  .finding b{color:var(--ink);display:block;font-size:13px;margin-bottom:1px}
+
+  .rule{font-size:12px;color:var(--sub);line-height:1.9}
+  .rule b{color:var(--ink)}
+  .pill{display:inline-block;font-size:10.5px;letter-spacing:.06em;padding:2px 7px;border-radius:99px;
+    background:var(--blue-soft);color:var(--blue);margin-right:5px}
+
+  .foot{margin-top:24px;border-top:1px solid var(--line);padding-top:12px;display:flex;gap:16px;color:var(--muted);font-size:11.5px}
+  .foot .spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="head">
+    <div>
+      <div class="k">Trip Telemetry · 体力与花费</div>
+      <h1>这五天，哪一天最累</h1>
+      <div class="sub">按“老人友好”重算的体力消耗：单日景点数、步行与爬升、午休、返程压力</div>
+    </div>
+    <div class="right">
+      <div class="st"><div class="k2">峰值体力</div><div class="v warn">76 / 100</div></div>
+      <div class="st"><div class="k2">最轻松</div><div class="v ok">38 / 100</div></div>
+      <div class="st"><div class="k2">预算余量</div><div class="v warn">¥40</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <main>
+      <section class="card">
+        <h2>体力曲线 × 累计花费</h2>
+        <div class="chart-wrap">
+          <svg class="chart" viewBox="0 0 980 300" preserveAspectRatio="none" role="img" aria-label="五日体力与累计花费曲线">
+            <defs>
+              <linearGradient id="fadeBlue" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#2f6fed" stop-opacity=".55"/>
+                <stop offset="100%" stop-color="#2f6fed" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <rect class="zone" x="0" y="54" width="980" height="65" rx="6"/>
+            <text class="axis-label" x="10" y="50">疲劳预警 70</text>
+            <g>
+              <line class="gridline" x1="70" y1="108" x2="960" y2="108"/>
+              <line class="gridline" x1="70" y1="162" x2="960" y2="162"/>
+              <line class="gridline" x1="70" y1="216" x2="960" y2="216"/>
+              <line class="gridline" x1="70" y1="270" x2="960" y2="270"/>
+            </g>
+            <text class="axis-label" x="30" y="112">75</text>
+            <text class="axis-label" x="30" y="166">50</text>
+            <text class="axis-label" x="30" y="220">25</text>
+            <text class="axis-label" x="36" y="274">0</text>
+            <text class="axis-label" x="10" y="288" style="font-size:9px">体力</text>
+
+            <text class="axis-label" x="944" y="220">2k</text>
+            <text class="axis-label" x="944" y="166">4k</text>
+            <text class="axis-label" x="944" y="112">6k</text>
+            <text class="axis-label" x="944" y="60">8k</text>
+            <text class="axis-label" x="912" y="288" style="font-size:9px">花费</text>
+
+            <text class="axis-label" x="120" y="290">11-20</text>
+            <text class="axis-label" x="290" y="290">11-21</text>
+            <text class="axis-label" x="460" y="290">11-22</text>
+            <text class="axis-label" x="630" y="290">11-23</text>
+            <text class="axis-label" x="800" y="290">11-24</text>
+
+            <path class="fatigue-area" d="M120 158 L290 184 L460 201 L630 173 L800 106 L800 270 L120 270 Z"/>
+            <path class="fatigue" d="M120 158 L290 184 L460 201 L630 173 L800 106"/>
+            <circle class="dot" cx="120" cy="158" r="4.5"/>
+            <circle class="dot" cx="290" cy="184" r="4.5"/>
+            <circle class="dot" cx="460" cy="201" r="4.5"/>
+            <circle class="dot" cx="630" cy="173" r="4.5"/>
+            <circle class="dot warn" cx="800" cy="106" r="5"/>
+            <text class="axis-label" x="96" y="148">52</text>
+            <text class="axis-label" x="266" y="174">40</text>
+            <text class="axis-label" x="436" y="191">32</text>
+            <text class="axis-label" x="606" y="163">45</text>
+            <text class="axis-label" x="778" y="96" style="fill:#b4761a">76</text>
+
+            <path class="cost" d="M120 193 L290 166 L460 141 L630 114 L800 55"/>
+            <text class="axis-label" x="806" y="50" style="fill:#b4761a">7,960</text>
+
+            <circle class="rest" cx="205" cy="171" r="3"/>
+            <circle class="rest" cx="375" cy="192" r="3"/>
+            <circle class="rest" cx="545" cy="187" r="3"/>
+            <circle class="rest" cx="715" cy="139" r="3"/>
+            <text class="axis-label" x="176" y="164" style="fill:#199a6b">午休</text>
+            <text class="axis-label" x="516" y="180" style="fill:#199a6b">午休</text>
+          </svg>
+        </div>
+        <div class="legend">
+          <span><i class="blue"></i>体力消耗（越高越累）</span>
+          <span><i class="amber"></i>累计花费</span>
+          <span><i class="green"></i>休息节点</span>
+          <span style="margin-left:auto">红色区间为“疲劳预警”，仅 11-24 进入</span>
+        </div>
+      </section>
+
+      <div class="days">
+        <div class="day">
+          <span class="tag2">抵达日</span>
+          <div class="d">11-20</div><div class="t">飞行 + 太古里</div>
+          <div class="meter"><div class="lbl"><span>体力消耗</span><span>52</span></div><div class="bar"><i style="width:52%"></i></div></div>
+          <div class="meter"><div class="lbl"><span>步行</span><span>2.4 km</span></div><div class="bar"><i style="width:24%"></i></div></div>
+          <div class="cost">¥2,860</div>
+        </div>
+        <div class="day">
+          <span class="tag2">两处相距 5km</span>
+          <div class="d">11-21</div><div class="t">草堂 + 宽窄巷子</div>
+          <div class="meter"><div class="lbl"><span>体力消耗</span><span>40</span></div><div class="bar"><i style="width:40%"></i></div></div>
+          <div class="meter"><div class="lbl"><span>步行</span><span>3.1 km</span></div><div class="bar"><i style="width:31%"></i></div></div>
+          <div class="cost">¥1,000</div>
+        </div>
+        <div class="day">
+          <span class="tag2">雨天 · 最省体力</span>
+          <div class="d">11-22</div><div class="t">两座博物馆</div>
+          <div class="meter"><div class="lbl"><span>体力消耗</span><span>32</span></div><div class="bar"><i style="width:32%"></i></div></div>
+          <div class="meter"><div class="lbl"><span>步行</span><span>4.2 km（室内）</span></div><div class="bar"><i style="width:42%"></i></div></div>
+          <div class="cost">¥900</div>
+        </div>
+        <div class="day">
+          <span class="tag2">两处相邻</span>
+          <div class="d">11-23</div><div class="t">武侯祠 + 锦里</div>
+          <div class="meter"><div class="lbl"><span>体力消耗</span><span>45</span></div><div class="bar"><i style="width:45%"></i></div></div>
+          <div class="meter"><div class="lbl"><span>步行</span><span>2.8 km</span></div><div class="bar"><i style="width:28%"></i></div></div>
+          <div class="cost">¥1,000</div>
+        </div>
+        <div class="day">
+          <span class="tag2 warn">全程最紧</span>
+          <div class="d">11-24</div><div class="t">09:20 赶机</div>
+          <div class="meter"><div class="lbl"><span>体力消耗</span><span>76</span></div><div class="bar"><i class="high" style="width:76%"></i></div></div>
+          <div class="meter"><div class="lbl"><span>步行</span><span>1.2 km</span></div><div class="bar"><i style="width:12%"></i></div></div>
+          <div class="cost">¥2,200</div>
+        </div>
+      </div>
+    </main>
+
+    <aside>
+      <div class="card">
+        <h2>三个结论</h2>
+        <div class="finding"><span class="n">01</span><div><b>最累的不是景点最多的一天</b>是返程日：中雨、09:20 出发、提前 150 分钟到机场，体力与心理压力都最高。</div></div>
+        <div class="finding"><span class="n">02</span><div><b>11-22 最省体力</b>两馆都在室内、都有座位，步行虽多但不晒不淋，适合雨天。</div></div>
+        <div class="finding"><span class="n">03</span><div><b>午休是硬安排，不是建议</b>三个下午都留了 1 小时回房，这是老人能走完五天的主因。</div></div>
+      </div>
+
+      <div class="card">
+        <h2>怎么算的</h2>
+        <div class="rule">
+          <b>体力消耗</b> = 景点数 × 12 + 步行 km × 4 + 爬升 × 3 − 午休 8 − 室内系数 5，再按返程赶机 +15。<br>
+          <span class="pill">不是医疗建议</span><span class="pill">用于比较相对强度</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>如果只能改一处</h2>
+        <div class="rule">
+          把 11-24 的出发时间从 <b>09:20 提前到 08:50</b>，体力峰值可从 76 降到约 68，代价是多 20 分钟等待。<br><br>
+          或：前一晚换机场附近酒店（+约 300 元，会超预算 260 元）。
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="foot">
+    <span>体力指数为启发式估算，仅用于比较每日相对强度</span>
+    <span class="spacer"></span>
+    <span>花费与时间来自已批准 v8</span>
+  </div>
+</div>
+</body>
+</html>

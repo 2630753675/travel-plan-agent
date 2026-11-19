@@ -23,6 +23,10 @@ TARGETS = [
     ("07-radio-briefing.html", "g-radio", 1440, 1000),
     ("08-tradeoff-sandbox.html", "h-sandbox", 1440, 1100),
     ("09-change-log.html", "i-changelog", 1440, 1200),
+    ("10-handscroll.html", "j-handscroll", 1440, 1000),
+    ("10-handscroll.html", "j-handscroll-full", 2600, 900),
+    ("11-fatigue-curve.html", "k-fatigue", 1440, 1100),
+    ("12-departure-board.html", "l-board", 1440, 1000),
 ]
 
 with sync_playwright() as p:

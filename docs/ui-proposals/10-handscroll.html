@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 J · 山水长卷</title>
+<style>
+  :root{
+    --silk:#efe7d6; --silk-2:#e7ddc8; --ink:#2b2a26; --ink-2:#4a463d; --muted:#7d7565;
+    --qing:#4f7a6a; --qing-2:#7fa090; --zhe:#a4593a; --zhu:#9c3527; --gold:#b08a4a;
+    --serif:"Songti SC","Noto Serif SC",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#d9cfba;color:var(--ink);font:14px/1.7 var(--serif)}
+  .page{max-width:2520px;margin:0 auto;padding:26px 20px 60px}
+  .rule,.caption,.colophon{max-width:1240px;margin-left:auto;margin-right:auto}
+  .colophon{margin-top:26px}
+
+  .rule{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:11px;letter-spacing:.24em}
+  .rule::before,.rule::after{content:"";height:1px;background:rgba(43,42,38,.22);flex:1}
+  .rule span{text-transform:uppercase}
+
+  .viewer{position:relative;margin-top:16px;background:var(--silk);border:1px solid #cdbfa4;
+    box-shadow:0 22px 45px -34px rgba(43,42,38,.75),inset 0 0 60px rgba(176,138,74,.14);overflow-x:auto;overflow-y:hidden}
+  .viewer::-webkit-scrollbar{height:9px}
+  .viewer::-webkit-scrollbar-thumb{background:#c2b195;border-radius:9px}
+
+  .scroll{position:relative;width:2480px;height:660px;
+    background:
+      radial-gradient(1200px 400px at 30% 20%,rgba(255,252,244,.8),transparent 70%),
+      linear-gradient(180deg,var(--silk) 0%,var(--silk-2) 100%);}
+  .scroll svg{position:absolute;inset:0;width:100%;height:100%}
+
+  .title{position:absolute;right:64px;top:58px;writing-mode:vertical-rl;letter-spacing:.32em;
+    font-size:30px;color:var(--ink)}
+  .subtitle{position:absolute;right:40px;top:64px;writing-mode:vertical-rl;font-size:11px;
+    letter-spacing:.28em;color:var(--muted)}
+  .seal{position:absolute;right:56px;top:300px;width:54px;height:54px;border:2px solid var(--zhu);color:var(--zhu);
+    display:grid;place-items:center;font-size:10px;letter-spacing:.16em;line-height:1.35;text-align:center;
+    transform:rotate(-4deg);opacity:.9;border-radius:3px;background:rgba(156,53,39,.04)}
+
+  .day{position:absolute;bottom:118px;transform:translateX(-50%);text-align:center}
+  .day .pin{width:15px;height:15px;border-radius:50%;background:var(--silk);border:2px solid var(--ink);
+    margin:0 auto 8px;position:relative;z-index:3}
+  .day .pin::after{content:"";position:absolute;inset:-7px;border:1px solid rgba(43,42,38,.25);border-radius:50%}
+  .day .d{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);letter-spacing:.05em}
+  .day .n{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+  .day .c{font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+
+  .lm{position:absolute;writing-mode:vertical-rl;font-size:12.5px;letter-spacing:.16em;color:var(--ink-2);
+    padding:6px 3px;border-left:1px solid rgba(43,42,38,.18)}
+  .lm small{display:block;font-size:10px;color:var(--muted);letter-spacing:.1em;margin-top:6px;writing-mode:vertical-rl}
+  .lm.hot{color:var(--zhe)}
+
+  .caption{display:flex;gap:18px;align-items:center;margin-top:10px;color:var(--muted);font-size:11.5px}
+  .caption .spacer{flex:1}
+  .caption .hint{display:inline-flex;align-items:center;gap:8px}
+  .caption .hint i{display:inline-block;width:26px;height:1px;background:var(--muted);position:relative}
+  .caption .hint i::after{content:"";position:absolute;right:-1px;top:-3px;border:3px solid transparent;border-left-color:var(--muted)}
+
+  .colophon{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:18px;margin-top:26px}
+  .panel{background:var(--silk);border:1px solid #cdbfa4;padding:16px 18px;
+    box-shadow:0 14px 30px -28px rgba(43,42,38,.7)}
+  .panel h3{font-size:11px;letter-spacing:.24em;color:var(--muted);margin:0 0 10px;font-weight:400}
+  .panel .row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px dashed rgba(43,42,38,.14)}
+  .panel .row:last-child{border-bottom:none}
+  .panel .row b{font-family:var(--mono);font-weight:500}
+  .verse{font-size:15px;line-height:2;color:var(--ink-2)}
+  .verse em{font-style:normal;color:var(--zhe)}
+  .budgetbar{height:7px;background:rgba(43,42,38,.1);margin:10px 0 8px;position:relative}
+  .budgetbar i{display:block;height:100%;width:99.5%;background:linear-gradient(90deg,var(--gold),var(--zhu))}
+  .note{font-size:12px;color:var(--muted);line-height:1.9}
+  .stamp{float:right;margin-top:6px;border:1.5px solid var(--zhu);color:var(--zhu);padding:4px 9px;
+    font-size:10px;letter-spacing:.18em;transform:rotate(-3deg)}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="rule"><span>蜀道五日记 · 己巳冬 · 上海往返</span></div>
+
+  <div class="viewer">
+    <div class="scroll">
+      <svg viewBox="0 0 2480 660" preserveAspectRatio="none" aria-hidden="true">
+        <!-- 远山 -->
+        <path d="M0 300 C 180 250, 300 290, 430 250 S 700 210, 860 260 S 1150 300, 1320 250 S 1600 200, 1780 255 S 2080 300, 2260 250 S 2420 230, 2480 260 L2480 660 L0 660Z"
+              fill="#cfd8cc" opacity=".55"/>
+        <!-- 近山 -->
+        <path d="M0 380 C 150 340, 270 380, 400 340 S 660 300, 820 350 S 1100 390, 1280 340 S 1560 300, 1740 350 S 2040 390, 2220 345 S 2420 320, 2480 350 L2480 660 L0 660Z"
+              fill="#b9c8bb" opacity=".55"/>
+        <path d="M0 470 C 200 440, 340 480, 520 450 S 820 410, 1000 455 S 1300 490, 1480 450 S 1780 410, 1960 455 S 2260 490, 2480 455 L2480 660 L0 660Z"
+              fill="#a8bbac" opacity=".5"/>
+        <!-- 江 -->
+        <path d="M0 545 C 260 520, 420 570, 680 548 S 1080 500, 1340 545 S 1760 590, 2020 548 S 2340 520, 2480 540 L2480 660 L0 660Z"
+              fill="#9fb8b2" opacity=".55"/>
+        <path d="M0 560 C 260 536, 420 586, 680 564 S 1080 516, 1340 561 S 1760 606, 2020 564 S 2340 536, 2480 556"
+              fill="none" stroke="#7fa090" stroke-width="1.4" opacity=".8"/>
+        <!-- 云气 -->
+        <ellipse cx="520" cy="330" rx="260" ry="26" fill="#f6f0e2" opacity=".75"/>
+        <ellipse cx="1320" cy="300" rx="320" ry="24" fill="#f6f0e2" opacity=".7"/>
+        <ellipse cx="2060" cy="330" rx="280" ry="22" fill="#f6f0e2" opacity=".65"/>
+        <!-- 行迹 -->
+        <path d="M300 556 C 470 540, 560 548, 700 552 S 900 545, 1020 552 S 1180 545, 1320 552 S 1520 545, 1660 552 S 1840 545, 1980 552 S 2140 545, 2240 552"
+              fill="none" stroke="#9c3527" stroke-width="1.2" stroke-dasharray="5 6" opacity=".85"/>
+        <!-- 小亭 -->
+        <g stroke="#4a463d" fill="none" stroke-width="1.2">
+          <path d="M694 552 l0 -16 m-14 0 l28 0 m-22 -6 l16 -10 l16 10" />
+          <path d="M1314 552 l0 -16 m-14 0 l28 0 m-22 -6 l16 -10 l16 10" />
+          <path d="M1974 552 l0 -16 m-14 0 l28 0 m-22 -6 l16 -10 l16 10" />
+        </g>
+      </svg>
+
+      <div class="title">蜀道五日记</div>
+      <div class="subtitle">上海往返 · 二人同行 · 一老</div>
+      <div class="seal">已評審<br>v8</div>
+
+      <div class="day" style="left:12%"><div class="pin"></div><div class="d">11-20</div><div class="n">抵蓉</div><div class="c">¥2,860</div></div>
+      <div class="day" style="left:31%"><div class="pin"></div><div class="d">11-21</div><div class="n">草堂 · 宽窄</div><div class="c">¥1,000</div></div>
+      <div class="day" style="left:50%"><div class="pin"></div><div class="d">11-22</div><div class="n">雨中二馆</div><div class="c">¥900</div></div>
+      <div class="day" style="left:69%"><div class="pin"></div><div class="d">11-23</div><div class="n">武侯 · 锦里</div><div class="c">¥1,000</div></div>
+      <div class="day" style="left:88%"><div class="pin"></div><div class="d">11-24</div><div class="n">归</div><div class="c">¥2,200</div></div>
+
+      <div class="lm" style="left:9%;top:236px">太古里<small>12:50 · 免费 · 距店半里</small></div>
+      <div class="lm" style="left:26%;top:196px">杜甫草堂<small>09:00 · 五十文 · 地缓可憩</small></div>
+      <div class="lm" style="left:34%;top:288px">宽窄巷子<small>13:00 · 免费 · 与草堂五里</small></div>
+      <div class="lm" style="left:47%;top:210px">成都博物馆<small>09:00 · 免费 · 雨日室内</small></div>
+      <div class="lm" style="left:54%;top:292px">四川博物院<small>13:00 · 免费 · 车行一刻</small></div>
+      <div class="lm" style="left:66%;top:200px">武侯祠<small>08:30 · 五十文 · 早至避人</small></div>
+      <div class="lm hot" style="left:73%;top:286px">锦里古街<small>10:30 · 免费 · 与祠相邻</small></div>
+      <div class="lm" style="left:86%;top:236px">天府机场<small>09:20 出发 · 预留一时辰半</small></div>
+    </div>
+  </div>
+
+  <div class="caption">
+    <span class="hint"><i></i> 向右展卷，五日尽收</span>
+    <span>朱线为每日行迹；小亭为落脚点；印章为评审通过</span>
+    <span class="spacer"></span>
+    <span>意象山水，非实际地理比例</span>
+  </div>
+
+  <div class="colophon">
+    <section class="panel">
+      <h3>题跋</h3>
+      <div class="verse">
+        五日成都，行不逾两处。晨起而游，午归而憩，暮食于近，夜九时必返。
+        <em>雨则入馆，晴则入园</em>，不为行程所驱，而以老者之体力为度。
+        所费七千九百六十，余四十。
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>行囊</h3>
+      <div class="row"><span>去程</span><b>MU5401 08:05</b></div>
+      <div class="row"><span>返程</span><b>MU5402 13:00</b></div>
+      <div class="row"><span>宿处</span><b>春熙路亚朵 × 四夜</b></div>
+      <div class="row"><span>日费</span><b>2,860 / 1,000 / 900 / 1,000 / 2,200</b></div>
+      <div class="budgetbar"><i></i></div>
+      <div class="row"><span>合计 / 预算</span><b>7,960 / 8,000</b></div>
+    </section>
+
+    <section class="panel">
+      <h3>未核实</h3>
+      <div class="note">
+        房型与早餐、两馆预约名额、机场车资，皆未核实，行前需一一问明。<br><br>
+        价皆询价估算，未预订。
+      </div>
+      <span class="stamp">reviewed · v8</span>
+    </section>
+  </div>
+</div>
+</body>
+</html>
