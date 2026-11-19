@@ -1129,6 +1129,20 @@ button:disabled {
 .conversation-message.critic_agent .message-avatar { background: #9670c9; }
 .conversation-message.writer .message-avatar { background: #b8563f; }
 
+.bubble-toggle {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.bubble-toggle:hover {
+  text-decoration: underline;
+}
+
 .alert {
   margin-bottom: 16px;
   padding: 10px 14px;

@@ -610,7 +610,27 @@ function Conversation({ events }: { events: RunEvent[] }) {
                           })()}
                           {ev.event_type === 'route_decision' && <em>做了决定</em>}
                         </div>
-                        <div className="message-bubble">{messageText(ev) || '已完成这一项处理。'}</div>
+                        {(() => {
+                          const text = messageText(ev) || '已完成这一项处理。'
+                          const bubbleKey = `${ev.event_id}-bubble`
+                          const long = text.length > BUBBLE_PREVIEW
+                          const open = collapsed[bubbleKey]
+                          return (
+                            <>
+                              <div className="message-bubble">
+                                {long && !open ? `${text.slice(0, BUBBLE_PREVIEW)}…` : text}
+                              </div>
+                              {long && (
+                                <button
+                                  className="bubble-toggle"
+                                  onClick={() => setCollapsed((current) => ({ ...current, [bubbleKey]: !current[bubbleKey] }))}
+                                >
+                                  {open ? '收起' : `展开全文 · ${text.length} 字`}
+                                </button>
+                              )}
+                            </>
+                          )
+                        })()}
                         {ev.payload?.reason && <div className="message-reason">依据：{String(ev.payload.reason)}</div>}
                         {evidence.length > 0 && (
                           <div className="evidence">
@@ -662,6 +682,9 @@ function ActivityLog({ entries, events }: { entries: LogEntry[]; events: RunEven
 }
 
 const TEAM_ROLES = ['orchestrator', 'logistics', 'local_expert', 'critic_agent', 'writer']
+
+// 消息气泡预览长度：超过就折叠，避免一条长结论撑满整个轨迹抽屉。
+const BUBBLE_PREVIEW = 160
 
 const ACTOR_LABEL: Record<string, string> = {
   system: '系统',
