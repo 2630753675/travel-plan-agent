@@ -13,7 +13,7 @@ import pathlib
 import sys
 import tempfile
 import threading
-from datetime import date
+from datetime import date, time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from app.agents import hub, runtime  # noqa: E402
 from app.artifacts import ArtifactMissing, ArtifactStore  # noqa: E402
 from app.checkpoint import PersistentSaver  # noqa: E402
-from app.models import DayPlan, Itinerary, TripBrief  # noqa: E402
+from app.models import DayPlan, Item, Itinerary, TripBrief  # noqa: E402
 from app.tools.mock import MockSource  # noqa: E402
 
 failures: list[str] = []
@@ -195,6 +195,14 @@ def main() -> int:
     check("真实 evidence_id 通过", good.ok, str(good.error))
     check("工具成功结果登记证据", len(ctx2.evidence) == 1, str(len(ctx2.evidence)))
 
+    same = runtime._evidence_id("logistics", "search_flights", {}, {"ok": True, "count": 3})
+    same_again = runtime._evidence_id("logistics", "search_flights", {}, {"ok": True, "count": 3})
+    other = runtime._evidence_id("logistics", "search_flights", {}, {"ok": True, "count": 4})
+    check("同一事实得到同一证据 ID", same == same_again == next(iter(ctx2.evidence)) or same == same_again)
+    check("不同事实得到不同证据 ID", same != other, f"{same[:8]}/{other[:8]}")
+    check("证据 ID 为 32 位十六进制", len(same) == 32 and all(c in "0123456789abcdef" for c in same), same)
+    check("证据记录登记可核对的字段清单", bool(ctx2.evidence[next(iter(ctx2.evidence))].get("fields")))
+
     print("\n[C] 回合失败升级为可恢复确认，而不是运行上限")
     failing = StubClient([decision(kind="request", to=["logistics"], tasks=[
         {"id": "T1", "owner": "logistics", "goal": "订票"},
@@ -257,6 +265,37 @@ def main() -> int:
     check("正常文档通过", hub._writer_valid(good_doc, ctx3))
     bad_doc = {**good_doc, "practical_notes": ["已预订双床房"]}
     check("编造预订被拒绝", not hub._writer_valid(bad_doc, ctx3))
+
+    print("\n[F2] Writer 受控模板")
+    facts_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    facts_ctx.itinerary = Itinerary(
+        days=[
+            DayPlan(date=date(2026, 11, 20), items=[Item(
+                slot="上午", start_time=time(9, 0), end_time=time(10, 30),
+                type="sight", title="武侯祠", ref_id="p02", cost=50, duration_min=90,
+            )]),
+            DayPlan(date=date(2026, 11, 21), items=[]),
+        ],
+        budget_total=8000,
+    )
+    itinerary = facts_ctx.itinerary
+    template = hub._assemble_document({
+        "title": "示例行程",
+        "overview": "总览",
+        "days": [
+            {"date": "2026-11-20", "summary": "凌晨 03:15 去看日出"},
+            {"date": "2026-11-21", "summary": "上午逛展馆"},
+        ],
+        "practical_notes": ["自定义提醒"],
+    }, facts_ctx)
+    first = template["days"][0]["summary"]
+    check("编造时间被丢弃", "03:15" not in first, first)
+    check("事实项目仍被写入", any(i.title in first for i in itinerary.days[0].items if i.type != "rest")
+          or "当天没有固定安排" in first, first)
+    check("未提到的日期也被补齐", len(template["days"]) == len(itinerary.days), str(len(template["days"])))
+    check("固定追加未核实提示", any("未核实" in note for note in template["practical_notes"]))
+    check("保留模型自定义提醒", "自定义提醒" in template["practical_notes"])
+    check("模板结果仍通过校验", hub._writer_valid(template, facts_ctx))
 
     print("\n[G] checkpoint 并发写入")
     tmp = pathlib.Path(tempfile.mkdtemp()) / "cp.pkl"

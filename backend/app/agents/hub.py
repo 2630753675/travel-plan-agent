@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date
 import asyncio
 import json
+import re
 
 from ..artifacts import default_store
 from ..llm import LLMClient
@@ -521,6 +522,51 @@ def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripB
     return len(days) == brief.days and assignments == ctx.assignment and len(assignments) == brief.days
 
 
+def _assemble_document(document: object, ctx: ToolContext) -> dict:
+    """按获批行程重建文档：模型只提供叙述，事实（项目与时间）由代码填入。
+
+    Writer 的自由文本无法被通用校验，所以逐日摘要采用"叙述 + 事实"的受控模板：
+    日期与项目来自行程本身，模型编不出不存在的时间或项目；未核实事项固定追加。
+    """
+    raw = document if isinstance(document, dict) else {}
+    itinerary = ctx.itinerary
+    assert itinerary is not None  # 调用方已确认 approved_version == plan_version
+    narratives = {
+        str(row.get("date")): str(row.get("summary") or "").strip()
+        for row in (raw.get("days") or [])
+        if isinstance(row, dict)
+    }
+    days = []
+    for day in itinerary.days:
+        date = str(day.date)
+        items = [item for item in day.items if item.type != "rest"]
+        facts = "；".join(f"{item.start_time.strftime('%H:%M')} {item.title}" for item in items) or "当天没有固定安排"
+        narrative = narratives.get(date, "")
+        if narrative:
+            # 叙述里提到的时间必须真的出现在当天行程里，否则视为编造，直接丢弃叙述。
+            allowed = {item.start_time.strftime("%H:%M") for item in items} | {
+                item.end_time.strftime("%H:%M") for item in items
+            }
+            mentioned = set(re.findall(r"\b(?:[01]\d|2[0-3]):[0-5]\d\b", narrative))
+            if mentioned - allowed:
+                narrative = ""
+        summary = f"{narrative}（实际安排：{facts}）" if narrative and narrative not in facts else facts
+        days.append({"date": date, "summary": summary})
+    notes = [str(note) for note in (raw.get("practical_notes") or []) if isinstance(note, str)]
+    for note in (
+        "酒店房型、早餐与发票政策未核实，需向酒店确认",
+        "景点预约与实时开放时间未核实，请出行前确认",
+    ):
+        if note not in notes:
+            notes.append(note)
+    return {
+        "title": str(raw.get("title") or "").strip() or f"{ctx.brief.destination}行程计划",
+        "overview": str(raw.get("overview") or "").strip() or f"{ctx.brief.days} 天行程，含交通住宿与每日安排。",
+        "days": days,
+        "practical_notes": notes,
+    }
+
+
 def _writer_valid(document: object, ctx: ToolContext) -> bool:
     if not isinstance(document, dict) or not document.get("title") or not document.get("overview"):
         return False
@@ -988,7 +1034,11 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     raise ValueError("Writer 只能整合已获批的相同版本，且需覆盖全部日期")
                 if "get_plan" not in turn.tool_calls:
                     raise ValueError("Writer 必须读取获批方案后整合")
-                ctx.document = {**decision["document"], "approved_version": ctx.approved_version}
+                # 先按事实重建文档，再复核一次：模型叙述不能覆盖行程事实。
+                document = _assemble_document(decision.get("document"), ctx)
+                if not _writer_valid(document, ctx):
+                    raise ValueError("文档与获批行程不一致，请按给定日期与项目重写")
+                ctx.document = {**document, "approved_version": ctx.approved_version}
                 # Writer 无写工具；最终数值方案始终保持原样，再执行硬校验。
                 if not execute(ctx, "check_plan", {}).get("passed"):
                     raise ValueError("最终硬校验失败，不交付")

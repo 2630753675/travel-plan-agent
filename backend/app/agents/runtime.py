@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -245,6 +246,15 @@ def _validate_decision(decision: dict) -> None:
             raise ValueError("关键结论必须提供 evidence 引用，或明确标记事实未核实/待确认")
 
 
+def _evidence_id(agent: str, tool: str, arguments: object, result: dict) -> str:
+    """内容寻址的证据 ID：同一事实得同一 ID，不同事实不会共用 ID。"""
+    payload = json.dumps(
+        {"agent": agent, "tool": tool, "arguments": arguments, "result": result},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
 def _finalize_decision(agent: str, decision: dict, ctx: ToolContext) -> dict:
     """把"模型给出的决策"变成可执行决策：统一做协议、角色与证据校验。"""
     if not isinstance(decision, dict):
@@ -396,19 +406,20 @@ async def run_turn(
                     else:
                         result = tools_spec.execute(ctx, call["name"], call["arguments"])
                 if result.get("ok") and not result.get("evidence_id"):
-                    from uuid import uuid4
-                    evidence_id = uuid4().hex
-                    # 证据目录只用于校验引用归属；完整工具结果已经在 operations 与工具消息里
-                    # 各存一份，这里再深拷贝一份只会放大 checkpoint。
+                    # 证据 ID 由"谁、用什么参数、得到什么结果"算出来，而不是随机数：
+                    # 同一事实重复出现会得到同一个 ID，不同事实不会共用 ID，引用也因此可复核。
+                    evidence_id = _evidence_id(agent, call["name"], call["arguments"], result)
                     evidence = {
                         "evidence_id": evidence_id,
                         "agent": agent,
                         "tool": call["name"],
                         "arguments": call["arguments"],
                         "summary": _summarize_result(result),
+                        "fields": sorted(key for key in result if key != "ok")[:20],
                     }
                     ctx.evidence[evidence_id] = evidence
-                    evidence_ids.append(evidence_id)
+                    if evidence_id not in evidence_ids:
+                        evidence_ids.append(evidence_id)
                     result = {**result, "evidence_id": evidence_id}
                 if fresh:
                     ctx.operations[str(call["id"])] = {
