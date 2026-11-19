@@ -934,8 +934,12 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
         """
         agent = str(payload.get("agent") or "system")
         if kind == "tool_call":
-            cid = uuid4().hex
-            _peer_tool_ids[agent] = cid
+            # 以运行时给出的调用 id 为准：同一个 Agent 一次返回多个工具调用时，
+            # 用"每 Agent 一个槽位"会把后面的结果配到错误的调用上。
+            cid = str(payload.get("call_id") or "")
+            if not cid:
+                cid = uuid4().hex
+                _peer_tool_ids[agent] = cid
             _emit(
                 {
                     "phase": "tool_call",
@@ -958,7 +962,7 @@ def build(source: TravelSource, settings: AppSettings | None = None, checkpointe
                     "status": "success" if payload.get("ok") else "error",
                     "summary": payload.get("summary", ""),
                     "evidence_id": payload.get("evidence_id"),
-                    "tool_call_id": _peer_tool_ids.get(agent) or uuid4().hex,
+                    "tool_call_id": str(payload.get("call_id") or _peer_tool_ids.get(agent) or uuid4().hex),
                 }
             )
         elif kind == "decide":

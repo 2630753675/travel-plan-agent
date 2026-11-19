@@ -169,7 +169,9 @@ async def main():
     assert resumed.ctx.document
     assert resumed_client.saw_patch
     assert resumed_client.roles.get("logistics", 0) == 0
-    allowed = set(resumed.session["tasks"]["T2"].get("allowed_repair_tools") or [])
+    # 工具范围属于"这一次返工"：交付后必须清掉，避免下一次返工继承旧限制。
+    allowed = set(interrupted.session["tasks"]["T2"].get("allowed_repair_tools") or [])
+    assert "allowed_repair_tools" not in resumed.session["tasks"]["T2"]
     assert resumed_client.rework_tool_schemas, "返工回合应当有工具 schema"
     for names in resumed_client.rework_tool_schemas:
         # 决策工具在任何返工范围内都必须可用，否则模型无法提交结论。

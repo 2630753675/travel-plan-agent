@@ -70,6 +70,18 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         check("仍在引用集中的工件可读取", False, str(exc))
 
+    # 引用里的 id 会被直接拼进路径，必须只接受 64 位 sha256。
+    secret = tmp / "artifacts" / "secret.json"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text('{"leaked": true}', encoding="utf-8")
+    for bad in ("a/../../secret", "../secret", "0" * 63, "g" * 64):
+        try:
+            store.get({"artifact_id": bad})
+            check(f"非法工件 id 被拒绝：{bad[:16]}", False, "读取成功")
+        except Exception:  # noqa: BLE001
+            check(f"非法工件 id 被拒绝：{bad[:16]}", True)
+    check("合法 id 仍可读取", store.get(used) is not None)
+
     print(f"\n{'PASS' if not failures else 'FAIL'} 工件保留策略回归{'通过' if not failures else '失败'}")
     return 1 if failures else 0
 

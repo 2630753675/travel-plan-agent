@@ -22,7 +22,19 @@ DEFAULT_ARTIFACT_DIR = DATA_DIR / "artifacts"
 
 
 class ArtifactMissing(RuntimeError):
-    """引用存在但工件文件已被清理。"""
+    """引用存在但工件文件已被清理（或引用本身非法）。"""
+
+
+_HEX = set("0123456789abcdef")
+
+
+def _valid_id(artifact_id: object) -> bool:
+    """工件 id 必须是 64 位 sha256 十六进制：路径由它直接拼出来，不能接受任意字符串。"""
+    return (
+        isinstance(artifact_id, str)
+        and len(artifact_id) == 64
+        and all(char in _HEX for char in artifact_id)
+    )
 
 
 class ArtifactStore:
@@ -49,8 +61,10 @@ class ArtifactStore:
 
     def get(self, ref: dict):
         artifact_id = (ref or {}).get("artifact_id")
-        if not isinstance(artifact_id, str) or not artifact_id:
+        if not artifact_id:
             raise ArtifactMissing("工件引用缺少 artifact_id")
+        if not _valid_id(artifact_id):
+            raise ArtifactMissing(f"工件引用格式非法：{str(artifact_id)[:40]}")
         path = self._path(artifact_id)
         if not path.is_file():
             raise ArtifactMissing(

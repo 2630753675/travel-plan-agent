@@ -454,7 +454,8 @@ async def run_turn(
         if calls:
             messages.append(_assistant_msg(resp.get("content") or "", calls))
             for call in calls:
-                emit("tool_call", agent=agent, tool=call["name"], arguments=call["arguments"])
+                emit("tool_call", agent=agent, tool=call["name"], arguments=call["arguments"],
+                     call_id=str(call["id"]))
             precomputed: dict[str, dict] = {}
             if len(calls) > 1 and all(
                 call["name"] in PARALLEL_READ_TOOLS
@@ -470,7 +471,7 @@ async def run_turn(
                     for call in calls
                 ))
                 precomputed = {str(call["id"]): result for call, result in zip(calls, results)}
-            for call in calls:
+            for index, call in enumerate(calls):
                 used.append(call["name"])
                 if call["name"] == DECISION_TOOL:
                     try:
@@ -479,7 +480,7 @@ async def run_turn(
                         decision = _finalize_decision(agent, dict(call["arguments"]), ctx)
                     except ValueError as exc:
                         result = {"ok": False, "error": f"决策不合协议：{exc}"}
-                        emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=False,
+                        emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=False, call_id=str(call["id"]),
                              summary=_summarize_result(result), evidence_id=None)
                         messages.append({
                             "role": "tool",
@@ -496,7 +497,17 @@ async def run_turn(
                         "tool_call_id": call["id"],
                         "content": json.dumps({"ok": True, "accepted": True}, ensure_ascii=False),
                     })
-                    emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=True,
+                    # 同一响应里排在决策之后的工具调用不会执行，但也必须闭合，否则历史同样损坏。
+                    for skipped in calls[index + 1:]:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": skipped["id"],
+                            "content": json.dumps(
+                                {"ok": False, "error": "本回合已提交决策，该调用未执行"},
+                                ensure_ascii=False,
+                            ),
+                        })
+                    emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=True, call_id=str(call["id"]),
                          summary=f"决策已提交（{decision.get('kind')}）", evidence_id=None)
                     return AgentTurn(content=text, decision=decision, tool_calls=used,
                                      history=messages, evidence_ids=evidence_ids)
@@ -507,6 +518,8 @@ async def run_turn(
                     and prior.get("status") == "succeeded"
                     and prior.get("agent") == agent
                     and prior.get("tool") == call["name"]
+                    # 参数也要一致：只比 id 会把"复用同名 id 的新查询"误当成旧操作重放。
+                    and prior.get("arguments") == call["arguments"]
                 ):
                     # 恢复后同一调用已成功过：复用结果，避免重复写副作用。
                     result = {**deepcopy(prior.get("result") or {}), "replayed": True}
@@ -555,6 +568,7 @@ async def run_turn(
                     ok=bool(result.get("ok")),
                     summary=_summarize_result(result),
                     evidence_id=result.get("evidence_id"),
+                    call_id=str(call["id"]),
                 )
                 messages.append(
                     {

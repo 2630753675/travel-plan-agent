@@ -55,7 +55,13 @@ CREATE TABLE IF NOT EXISTS runs (
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    # WAL + 忙等待：一次运行会写几十条事件，并发运行时避免 "database is locked" 直接失败。
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.DatabaseError:
+        pass
     conn.executescript(_SCHEMA)
     # 兼容早期版本的库
     cols = {row[1] for row in conn.execute("PRAGMA table_info(plans)")}

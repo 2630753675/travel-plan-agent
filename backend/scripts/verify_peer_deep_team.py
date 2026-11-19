@@ -92,8 +92,10 @@ def test_operation_replay() -> None:
     execute(ctx, "set_hotel", {"hotel_id": "春熙里和颐"})
     version = ctx.plan_version
     call_id = "call-fixed"
+    replay_args = {"date": "2026-11-24", "title": "重复", "start_time": "05:40", "end_time": "07:00"}
     ctx.operations[call_id] = {
-        "agent": "local_expert", "tool": "add_fixed_event", "arguments": {},
+        # 真实账本记录的是当时实际参数；重放要求 id、工具与参数都一致。
+        "agent": "local_expert", "tool": "add_fixed_event", "arguments": replay_args,
         "status": "succeeded",
         "result": {"ok": True, "event_id": "fe-x", "plan_version": version},
         "before_version": version - 1, "after_version": version,

@@ -641,7 +641,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         resume = _unpack_session(resume, store)
         bus = Bus.from_dict(resume.get("bus"))
         ctx = _restore_context(brief, source, resume.get("context") or {})
-        tasks = dict(resume.get("tasks") or {})
+        # 深拷贝：恢复过程会改写任务状态（status/delivery_base/allowed_repair_tools），
+        # 不复制就会把调用方手里的会话快照一起改掉。
+        tasks = deepcopy(resume.get("tasks") or {})
         histories = dict(resume.get("histories") or {})
         trace = list(resume.get("trace") or [])
         # 每次恢复按新的回合预算执行；否则中断前的消耗会让恢复后几乎没有余量。
@@ -717,6 +719,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
             "tasks": tasks, "histories": _compact_histories(histories), "trace": trace, "turns": turns,
             "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
             "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes, "warnings": warnings,
+            "pending_agent": pending_agent, "pending_task": pending_task,
+            "last_review_packet": review_packet_state,
         }
         return PeerResult(bus=bus, ctx=ctx, itinerary=None, escalation=None,
                           converged=False, rounds=reviews, turns=turns, warnings=warnings,
@@ -928,7 +932,6 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     # 任务一确定就用代码并发拉齐基础事实，专业 Agent 不必各自花一轮去查。
                     await _prefetch_facts(ctx, emit)
                 elif decision.get("rework"):
-                    from copy import deepcopy
                     candidate_tasks = deepcopy(tasks)
                     rework_requests = decision["rework"]
                     if pending_rejections:
@@ -959,6 +962,10 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                                     # materialize/check 用于落定并复核修复结果，都不是任意写入。
                                     repair_tools.update({"get_plan", "materialize_plan", "check_plan"})
                                 task["allowed_repair_tools"] = sorted(repair_tools)
+                            else:
+                                # 依赖传播导致的返工没有本角色的具体问题：必须清掉上一次的
+                                # 工具限制，否则会沿用旧范围、连改日程的工具都被禁掉。
+                                task.pop("allowed_repair_tools", None)
                     tasks = candidate_tasks
                     pending_rejections = []
                     ctx.approved_version, ctx.document = None, None
@@ -1013,6 +1020,8 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     history.append(summary)
                     tasks[active_task]["changes"] = history[-5:]
                 tasks[active_task].pop("delivery_base", None)
+                # 交付完成后清掉返工工具限制：它只对"这一次返工"有效。
+                tasks[active_task].pop("allowed_repair_tools", None)
                 post(agent, ["orchestrator"], "proposal", f"任务 {active_task} 已交付",
                      {"task": tasks[active_task], "evidence_ids": delivered_evidence})
                 # 依赖 DAG 已由主控定义，交付后按依赖直接调度下一个任务，
@@ -1035,7 +1044,13 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 if not review_packet:
                     review_packet = review_packet_state
                 if not isinstance(review_packet, dict) or review_packet.get("packet_id") is None:
-                    raise ValueError("评审缺少有效 ReviewPacket，必须重新提交评审")
+                    # 旧会话没有评审包快照时（收件箱已在上一轮消费）不能空转：
+                    # 直接按当前方案重新提交评审，让 Critic 重新拿到 packet。
+                    outcome = submit_review()
+                    if outcome == "escalate":
+                        break
+                    next_agent, active_task = "critic_agent", None
+                    continue
                 check = review_packet.get("hard_check") or {}
                 # Ledger closure is computed from this packet's deterministic issue list before Critic runs.
                 pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)

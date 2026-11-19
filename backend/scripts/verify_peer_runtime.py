@@ -11,6 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.agents import hub, runtime  # noqa: E402
 from app.agents.bus import Bus  # noqa: E402
+from app.agents.tools_spec import execute  # noqa: E402
 from app.llm import LLMError  # noqa: E402
 from app.models import TripBrief  # noqa: E402
 from app.tools.mock import MockSource  # noqa: E402
@@ -273,6 +274,91 @@ def main() -> int:
     summary = hub._prefetch_summary("local_expert", summary_ctx)
     check("预取摘要包含闭馆日", summary["pois"] and all("closed_days" in p for p in summary["pois"]))
     check("闭馆日不是空壳", any(p["closed_days"] for p in summary["pois"]))
+
+    print("[8] 决策与工具并存、重放与工具事件配对")
+    coexist_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+
+    class DecisionFirst:
+        def __init__(self):
+            self.n = 0
+
+        async def chat_tools(self, messages, tools):
+            self.n += 1
+            if self.n == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "d1", "name": "submit_decision", "arguments": {"kind": "note", "say": "先交决策"}},
+                    {"id": "t1", "name": "list_pois", "arguments": {}},
+                ]}
+            return {"content": "", "tool_calls": [
+                {"id": "d2", "name": "submit_decision", "arguments": {"kind": "note", "say": "结束"}},
+            ]}
+
+    coexist = asyncio.run(runtime.run_turn(
+        agent="local_expert", system="s", prompt="p", tools=["list_pois"], ctx=coexist_ctx, bus=Bus(),
+        client=DecisionFirst(), emit=lambda *a, **k: None, max_steps=2,
+    ))
+    check("决策与其它调用同批时回合成功", coexist.ok, str(coexist.error))
+    try:
+        runtime._validate_history_messages(coexist.history[1:])
+        check("未执行的同批调用也被闭合", True)
+    except ValueError as exc:
+        check("未执行的同批调用也被闭合", False, str(exc))
+
+    replay_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    original = execute(replay_ctx, "get_weather", {})
+    replay_ctx.operations["call_1"] = {
+        "agent": "local_expert", "tool": "get_weather", "arguments": {},
+        "status": "succeeded", "result": {**original, "marker": "OLD"},
+    }
+
+    class ReuseArgs:
+        def __init__(self):
+            self.n = 0
+
+        async def chat_tools(self, messages, tools):
+            self.n += 1
+            if self.n == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "call_1", "name": "get_weather", "arguments": {"destination": "重庆"}},
+                ]}
+            return {"content": "", "tool_calls": [
+                {"id": "d3", "name": "submit_decision", "arguments": {"kind": "note", "say": "ok"}},
+            ]}
+
+    reuse = asyncio.run(runtime.run_turn(
+        agent="local_expert", system="s", prompt="p", tools=["get_weather"], ctx=replay_ctx, bus=Bus(),
+        client=ReuseArgs(), emit=lambda *a, **k: None, max_steps=2,
+    ))
+    tool_content = next(m["content"] for m in reuse.history if m.get("role") == "tool")
+    check("同 id 不同参数不会重放旧结果", "OLD" not in tool_content, tool_content[:120])
+
+    pair_events: list[tuple] = []
+    pair_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+
+    class TwoReads:
+        def __init__(self):
+            self.n = 0
+
+        async def chat_tools(self, messages, tools):
+            self.n += 1
+            if self.n == 1:
+                return {"content": "", "tool_calls": [
+                    {"id": "c1", "name": "list_pois", "arguments": {}},
+                    {"id": "c2", "name": "get_weather", "arguments": {}},
+                ]}
+            return {"content": "", "tool_calls": [
+                {"id": "d4", "name": "submit_decision", "arguments": {"kind": "note", "say": "ok"}},
+            ]}
+
+    asyncio.run(runtime.run_turn(
+        agent="local_expert", system="s", prompt="p", tools=["list_pois", "get_weather"], ctx=pair_ctx,
+        bus=Bus(), client=TwoReads(), emit=lambda kind, **payload: pair_events.append((kind, payload)),
+        max_steps=2,
+    ))
+    calls = [payload["call_id"] for kind, payload in pair_events if kind == "tool_call"]
+    results = [payload["call_id"] for kind, payload in pair_events if kind == "tool_result"]
+    check("每次工具调用带独立 id", calls[:2] == ["c1", "c2"] and "d4" in calls, str(calls))
+    check("工具结果与调用 id 一一对应", sorted(results) == sorted(calls), f"{calls} vs {results}")
 
     print("[9] stop 终态")
     resume = {

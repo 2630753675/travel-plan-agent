@@ -200,6 +200,10 @@ async def _run_graph(
                     cancel_token.raise_if_cancelled()
                 if mode == "custom":
                     trace.append(payload)
+                    version = payload.get("plan_version") or payload.get("version")
+                    if isinstance(version, int) and version > 0:
+                        # 事件带上发生时的方案版本；否则所有事件都停留在构造时的默认值 1。
+                        factory.plan_version = version
                     for event in factory.from_custom(payload):
                         yield publish(event)
                 else:
