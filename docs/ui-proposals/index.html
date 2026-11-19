@@ -3,106 +3,124 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UI 方案对比 · 旅行规划多 Agent 编排</title>
+<title>UI 方案 · 六个方向</title>
 <style>
   :root{
     --bg:#0f1115; --card:#171a21; --line:#262b35; --ink:#e9ecf1; --muted:#9aa2b1; --dim:#6b7382;
-    --a:#58a6ff; --b:#a8462a; --c:#a78bfa;
+    --ok:#3fb950;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
-  .wrap{max-width:1120px;margin:0 auto;padding:56px 28px 80px}
+  .wrap{max-width:1180px;margin:0 auto;padding:52px 28px 80px}
   .kick{font-size:12px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase}
-  h1{font-size:34px;line-height:1.3;margin:10px 0 12px;font-weight:650;letter-spacing:-.01em}
-  .lede{color:var(--muted);max-width:44em;font-size:15px}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px}
+  h1{font-size:32px;line-height:1.3;margin:10px 0 10px;font-weight:650;letter-spacing:-.01em}
+  .lede{color:var(--muted);max-width:46em;font-size:15px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}
   .card{
-    background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;
-    display:flex;flex-direction:column;gap:10px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s;
+    background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;
+    display:flex;flex-direction:column;gap:8px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s;
   }
   .card:hover{border-color:#3a4152;transform:translateY(-2px)}
-  .tag{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-  .card h2{font-size:19px;margin:0;font-weight:600}
-  .card p{margin:0;color:var(--muted);font-size:13.5px}
-  .swatch{display:flex;gap:6px;margin-top:4px}
-  .swatch i{width:22px;height:22px;border-radius:6px;display:block;border:1px solid rgba(255,255,255,.08)}
-  .best{
-    margin-top:12px;font-size:12px;padding:3px 9px;border-radius:99px;align-self:flex-start;
-    background:#10231a;color:#3fb950;border:1px solid #1f3d29;
-  }
-  .compare{margin-top:42px;border-top:1px solid var(--line);padding-top:26px}
-  .compare h3{font-size:16px;margin:0 0 12px}
-  table{width:100%;border-collapse:collapse;font-size:13.5px}
-  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1f242e;vertical-align:top}
-  th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .tag{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .card h2{font-size:17.5px;margin:0;font-weight:600}
+  .card p{margin:0;color:var(--muted);font-size:13px}
+  .swatch{display:flex;gap:5px;margin-top:2px}
+  .swatch i{width:20px;height:20px;border-radius:5px;display:block;border:1px solid rgba(255,255,255,.08)}
+  .badge{margin-top:6px;font-size:11.5px;padding:2px 8px;border-radius:99px;align-self:flex-start;
+    background:#10231a;color:var(--ok);border:1px solid #1f3d29}
+  .badge.neutral{background:#1b1f27;color:var(--muted);border-color:#2b3140}
+
+  .compare{margin-top:38px;border-top:1px solid var(--line);padding-top:24px}
+  .compare h3{font-size:15px;margin:0 0 12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #1f242e;vertical-align:top}
+  th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:600}
   td:first-child{color:var(--muted);white-space:nowrap}
-  .note{margin-top:30px;padding:14px 18px;border-radius:12px;background:#141820;border:1px solid var(--line);color:var(--muted);font-size:13.5px}
-  .note b{color:var(--ink)}
+
+  .rec{margin-top:32px;border:1px solid #24303d;background:#131a22;border-radius:14px;padding:20px 22px}
+  .rec h3{margin:0 0 8px;font-size:16px}
+  .rec p{color:var(--muted);margin:0 0 10px;font-size:13.5px}
+  .rec ol{margin:0;padding-left:20px;color:var(--muted);font-size:13.5px;line-height:1.9}
+  .rec b{color:var(--ink)}
   @media (max-width:900px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="kick">设计方向 · 3 版</div>
-  <h1>同一份真实行程，三种信息架构</h1>
+  <div class="kick">设计方向 · 6 版</div>
+  <h1>同一份行程，六种看法</h1>
   <p class="lede">
-    内容全部来自 2026-11-19 的真实运行（成都 5 天、2 人含老人、7,960 / 8,000、已评审 v8）。
-    三版的差别不是配色，而是“打开页面第一眼该看到什么”。
+    数据全部来自 2026-11-19 的真实运行（成都 5 天、2 人含老人、7,960 / 8,000、已评审 v8、15 次请求）。
+    前三个是通用排版方向，后三个各换了一根主轴：空间、时间、物品。
   </p>
 
   <div class="grid">
     <a class="card" href="01-control-room.html">
-      <span class="tag">方向 A · 深色</span>
-      <h2>指挥台</h2>
-      <p>左需求、中结果、右过程。适合“我要看这五个 Agent 到底干了什么”，信息密度最高。</p>
-      <div class="swatch">
-        <i style="background:#0d1117"></i><i style="background:#161b22"></i><i style="background:#58a6ff"></i><i style="background:#d29922"></i>
-      </div>
-      <span class="best">过程最透明</span>
+      <span class="tag">01 · 深色</span><h2>指挥台</h2>
+      <p>左需求、中结果、右过程。三栏常驻，过程最透明。</p>
+      <div class="swatch"><i style="background:#0d1117"></i><i style="background:#161b22"></i><i style="background:#58a6ff"></i><i style="background:#d29922"></i></div>
+      <span class="badge neutral">适合调试与信任验证</span>
     </a>
-
     <a class="card" href="02-itinerary-first.html">
-      <span class="tag">方向 B · 浅色</span>
-      <h2>行程手册</h2>
-      <p>单列阅读流，像一本给同行家人看的册子。团队过程收进“这份方案怎么来的”。</p>
-      <div class="swatch">
-        <i style="background:#f6f3ec"></i><i style="background:#fffdf8"></i><i style="background:#a8462a"></i><i style="background:#2f6b4f"></i>
-      </div>
-      <span class="best">最好读 · 推荐主形态</span>
+      <span class="tag">02 · 浅色</span><h2>行程手册</h2>
+      <p>单列阅读流，像给同行家人看的册子；过程收进底部。</p>
+      <div class="swatch"><i style="background:#f6f3ec"></i><i style="background:#fffdf8"></i><i style="background:#a8462a"></i><i style="background:#2f6b4f"></i></div>
+      <span class="badge">最好读，可打印</span>
+    </a>
+    <a class="card" href="03-review-board.html">
+      <span class="tag">03 · 深色</span><h2>决策台</h2>
+      <p>先列“需要你判断的事”，行程退居第二。改方案最快。</p>
+      <div class="swatch"><i style="background:#0b0b10"></i><i style="background:#14141c"></i><i style="background:#a78bfa"></i><i style="background:#fbbf24"></i></div>
+      <span class="badge neutral">适合反复调整</span>
     </a>
 
-    <a class="card" href="03-review-board.html">
-      <span class="tag">方向 C · 深色</span>
-      <h2>决策台</h2>
-      <p>先列出“需要你判断的事”，行程退居第二。适合反复改方案、盯预算的人。</p>
-      <div class="swatch">
-        <i style="background:#0b0b10"></i><i style="background:#14141c"></i><i style="background:#a78bfa"></i><i style="background:#fbbf24"></i>
-      </div>
-      <span class="best">决策最快</span>
+    <a class="card" href="04-map-first.html">
+      <span class="tag">04 · 深色 · 空间轴</span><h2>地图优先</h2>
+      <p>城市当画布，酒店是大本营，点位与路线说明“为什么少走”。</p>
+      <div class="swatch"><i style="background:#0a1012"></i><i style="background:#101a1d"></i><i style="background:#2dd4bf"></i><i style="background:#f5b544"></i></div>
+      <span class="badge">空间关系最直观</span>
+    </a>
+    <a class="card" href="05-timetable.html">
+      <span class="tag">05 · 浅色 · 时间轴</span><h2>时刻表</h2>
+      <p>五列 × 小时网格，航班、接驳、景点、餐食、空档一览。</p>
+      <div class="swatch"><i style="background:#f4f5f7"></i><i style="background:#fff"></i><i style="background:#1d3557"></i><i style="background:#2b6e4f"></i></div>
+      <span class="badge">最能暴露冲突</span>
+    </a>
+    <a class="card" href="06-travel-kit.html">
+      <span class="tag">06 · 纸质 · 物品轴</span><h2>出行包</h2>
+      <p>登机牌、房卡、每日票根、预算小票、评审印章。可打印带走。</p>
+      <div class="swatch"><i style="background:#e9e3d6"></i><i style="background:#fbf8f1"></i><i style="background:#1e2f47"></i><i style="background:#a33a2a"></i></div>
+      <span class="badge">最有记忆点</span>
     </a>
   </div>
 
   <section class="compare">
-    <h3>三版的关键取舍</h3>
+    <h3>六个方向的取舍</h3>
     <table>
-      <thead>
-        <tr><th scope="col">维度</th><th scope="col">A 指挥台</th><th scope="col">B 行程手册</th><th scope="col">C 决策台</th></tr>
-      </thead>
+      <thead><tr><th scope="col">方向</th><th scope="col">主轴</th><th scope="col">首屏主角</th><th scope="col">团队过程</th><th scope="col">最强场景</th><th scope="col">代价</th></tr></thead>
       <tbody>
-        <tr><td>首屏主角</td><td>结果 + 过程并列</td><td>计划书结论</td><td>待决策事项</td></tr>
-        <tr><td>团队过程</td><td>常驻右栏</td><td>底部“怎么来的”</td><td>独立标签页</td></tr>
-        <tr><td>适合场景</td><td>调试 / 信任验证</td><td>出行前阅读、给家人看</td><td>反复改方案</td></tr>
-        <tr><td>预算表达</td><td>进度条 + 分项</td><td>大数字 + 一句话提醒</td><td>仪表 + 决策卡</td></tr>
-        <tr><td>打印 / 分享</td><td>一般</td><td>好</td><td>一般</td></tr>
-        <tr><td>风险</td><td>信息密度高，首次使用压力大</td><td>过程需要多点一次</td><td>行程被弱化，可能找不到细节</td></tr>
+        <tr><td>01 指挥台</td><td>并行信息</td><td>结果 + 过程</td><td>常驻右栏</td><td>验证 Agent 真的做了事</td><td>密度高，首次使用压力大</td></tr>
+        <tr><td>02 行程手册</td><td>阅读</td><td>结论与每日安排</td><td>底部“怎么来的”</td><td>出行前阅读、分享家人</td><td>细节要多滚一屏</td></tr>
+        <tr><td>03 决策台</td><td>判断</td><td>待决策事项</td><td>独立标签页</td><td>反复改方案、盯预算</td><td>行程被弱化</td></tr>
+        <tr><td>04 地图优先</td><td>空间</td><td>城市与路线</td><td>无（需另开）</td><td>判断“会不会太折腾”</td><td>需要真实地理数据才可信</td></tr>
+        <tr><td>05 时刻表</td><td>时间</td><td>五天的块与空档</td><td>底部检查清单</td><td>看冲突、空档、赶不赶</td><td>景点信息密度低，阅读感弱</td></tr>
+        <tr><td>06 出行包</td><td>物品</td><td>登机牌与每日票根</td><td>评审印章</td><td>打印、发给同行人、留纪念</td><td>信息最碎，不适合深入比对</td></tr>
       </tbody>
     </table>
   </section>
 
-  <div class="note">
-    <b>我的建议：</b>
-    以 <b>B 行程手册</b> 作为主形态（结果可读、可打印、适合和同行人分享），把 <b>C 的“待你判断”</b> 收成顶部一条提醒，把 <b>A 的三栏过程</b> 保留为“协作轨迹”抽屉。
-    这样三种信息各有归宿，而不是挤在一屏里互相争夺注意力。
+  <div class="rec">
+    <h3>如果让我落地，会这样做</h3>
+    <p>六个方向不是六选一，而是六种“视图”。真实产品应该让它们各归其位：</p>
+    <ol>
+      <li><b>默认结果页 = 02 行程手册</b>：可读、可打印，是家人真正会看的那一屏。</li>
+      <li><b>切换“时间视图” = 05 时刻表</b>：想看冲突、空档、赶不赶时切过去，这是产品最强的说服力。</li>
+      <li><b>切换“地图视图” = 04 地图优先</b>：回答“会不会太折腾”，但必须接真实坐标，否则只是装饰。</li>
+      <li><b>“协作轨迹”抽屉 = 01 指挥台的右栏</b>：默认收起，出问题或想审计时打开。</li>
+      <li><b>“分享 / 打印” = 06 出行包</b>：同一个方案换一套皮肤，做成可保存的 PDF 或图片。</li>
+      <li>03 决策台的“待你判断”，收成 02 顶部的一条提醒，不单独成页。</li>
+    </ol>
+    <p style="margin-top:10px">也就是：<b>一份数据，多种视图</b>，而不是一个页面塞下所有信息。</p>
   </div>
 </div>
 </body>
