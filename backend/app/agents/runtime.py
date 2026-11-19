@@ -259,8 +259,16 @@ def _finalize_decision(agent: str, decision: dict, ctx: ToolContext) -> dict:
     """把"模型给出的决策"变成可执行决策：统一做协议、角色与证据校验。"""
     if not isinstance(decision, dict):
         raise ValueError("决策必须是 JSON 对象")
+    decision = dict(decision)
+    # 工具 schema 只强制 kind/say；其余字段是"有默认值"的可选字段。
+    # 之前 schema 与校验不一致，真实模型照 schema 填会被判缺字段，白烧 4 次请求。
+    for field, default in (("to", []), ("wake", []), ("done", True), ("escalate", None)):
+        if field not in decision or (decision[field] is None and field != "escalate"):
+            decision[field] = default
     if agent == "critic_agent":
         decision["agent"] = "critic_agent"
+        # 评审依据是服务端 ReviewPacket，Critic 没有工具，不接受它自带（必然是编造或空的）证据。
+        decision["evidence"] = []
     _validate_decision(decision)
     if agent == "critic_agent" and decision.get("kind") == "objection":
         changes = decision.get("changes")

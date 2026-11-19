@@ -178,6 +178,39 @@ def main() -> int:
     check("缺字段时用工具错误并要求同回合修正", fixed.ok and repaired.calls == 2, f"{fixed.ok}/{repaired.calls}")
     check("修正后决策生效", fixed.decision.get("say") == "补齐字段后重新提交", str(fixed.decision)[:120])
 
+    class MinimalOnly:
+        async def chat_tools(self, messages, tools):
+            return {"content": "", "tool_calls": [
+                {"id": "m1", "name": "submit_decision", "arguments": {"kind": "note", "say": "只给必填字段"}},
+            ]}
+
+    minimal = asyncio.run(runtime.run_turn(
+        agent="orchestrator", system="s", prompt="p", tools=[], ctx=decision_ctx, bus=Bus(),
+        client=MinimalOnly(), emit=lambda *_a, **_k: None, max_steps=2,
+    ))
+    check("只填 kind/say 也能通过（其余取默认）", minimal.ok, str(minimal.error))
+    check("默认值已补齐", minimal.decision.get("to") == [] and minimal.decision.get("wake") == []
+          and minimal.decision.get("done") is True and minimal.decision.get("escalate") is None,
+          str(minimal.decision)[:160])
+
+    critic_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+
+    class CriticFakeEvidence:
+        async def chat_tools(self, messages, tools):
+            return {"content": "", "tool_calls": [
+                {"id": "c1", "name": "submit_decision", "arguments": {
+                    "kind": "accept", "say": "基于 ReviewPacket 通过",
+                    "approved_version": 9, "evidence": [{"id": "made-up"}],
+                }},
+            ]}
+
+    critic_turn = asyncio.run(runtime.run_turn(
+        agent="critic_agent", system="s", prompt="p", tools=[], ctx=critic_ctx, bus=Bus(),
+        client=CriticFakeEvidence(), emit=lambda *_a, **_k: None, max_steps=2,
+    ))
+    check("Critic 自造 evidence 不再导致协议失败", critic_turn.ok, str(critic_turn.error))
+    check("Critic 证据被清空", critic_turn.decision.get("evidence") == [], str(critic_turn.decision.get("evidence")))
+
     print("[6] stop 终态")
     resume = {
         "architecture": "professional_team", "bus": {}, "context": {}, "tasks": {},

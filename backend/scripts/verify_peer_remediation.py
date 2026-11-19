@@ -355,7 +355,24 @@ def main() -> int:
     legacy = {"histories": {"x": []}, "bus": {}, "context": {}}
     check("旧内联会话不需要工件库", hub._unpack_session(dict(legacy), art_store) == legacy)
 
-    print("\n[I] API 中断与停止终态（经真实流式路径）")
+    print("\n[I] 成功运行落库")
+    from app.api import main as api  # noqa: PLC0415
+    captured: dict = {}
+    original_save_run = api.store.save_run
+    api.store.save_run = lambda run_id, status, payload: captured.update(
+        {"run_id": run_id, "status": status, "payload": payload})
+    try:
+        api._record_completed_run("plan-x", version=3, revision=1, passed=True,
+                                  total_cost=5560.0, stats={"calls": 23, "total_tokens": 205955})
+    finally:
+        api.store.save_run = original_save_run
+    check("成功运行写入 completed", captured.get("status") == "completed", str(captured.get("status")))
+    check("落库包含运行用量", (captured.get("payload") or {}).get("llm_stats", {}).get("calls") == 23)
+    check("落库包含版本与花费",
+          (captured.get("payload") or {}).get("version") == 3
+          and (captured.get("payload") or {}).get("total_cost") == 5560.0)
+
+    print("\n[J] API 中断与停止终态（经真实流式路径）")
     api_events, api_runs = _run_api_flow()
     kinds = [event_type for event_type, _ in api_events]
     check("请求返回中断而不是失败", "run_interrupted" in kinds and "run_failed" not in kinds, str(kinds))

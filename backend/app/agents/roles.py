@@ -9,9 +9,10 @@ from .runtime import render_bus
 from .tools_spec import ToolContext
 
 CONTRACT = """提交决策的两种方式：优先调用 submit_decision 工具，参数就是下面这个决策对象（格式错误会作为一次工具错误返回，可直接在同一回合修正）；不支持时再在正文里只输出 JSON 对象。
-决策对象：
+决策对象：只有 kind 与 say 必填；to/wake 缺省为空数组、done 缺省 true、escalate 缺省 null。
 {"say":"不超过 500 字的结论、问题或依据，不要复述完整方案/全量数字", "kind":"request|proposal|objection|accept|escalate|final|note",
  "to":[], "wake":[], "done":true, "changes":[], "evidence":[], "escalate":null}
+Critic 的评审依据是服务端 ReviewPacket，不需要填 evidence。
 角色代号：orchestrator / logistics / local_expert / critic_agent / writer。
 需要修改就用 objection 并填写结构化 changes；accept 表示没有待修改项。proposal、objection、accept、final 必须填写 evidence 对象数组，格式为 [{"id":"工具结果返回的 evidence_id"}]；不得自行编造 ID。事实不足时明确写“未核实/待确认”，不得补造事实。
 无法自行协调的取舍用 escalate，并提供 {"question":"问题","options":[{"value":"选择值","label":"选择说明"}]}。
@@ -95,6 +96,7 @@ ROLES: dict[str, Role] = {
         [],
         "你是独立财务与风控评审。职责是依据结构化 ReviewPacket 找出可验证问题，不能修改被评审方案，也不能只复述主控结论。",
         'ReviewPacket 已由服务端汇总方案、费用、硬约束和体验风险；不得再调用工具重复读取同一份数据。'
+        '你不需要填写 evidence：评审依据就是 ReviewPacket，任何自造 evidence 都会被忽略。'
         '检查预算、酒店晚数、航班方向和老人出行时刻、抵达/返程转场、每日强度、闭馆、雨天、项目被静默丢弃及需求偏好。'
         '只有 ReviewPacket 中可验证、且有 repair_tools 的确定性 blocker 可以拒绝交付；主观体验偏好、缺少数据的房型/楼层/发票/确认号只能写入 advisory，不得阻塞或编造事实。'
         '若硬约束没有问题，且 Issue Ledger 无未关闭问题，kind=accept，approved_version 使用当前待审版本号。'

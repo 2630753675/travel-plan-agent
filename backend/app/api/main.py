@@ -134,6 +134,19 @@ def _prior_run_stats(plan_id: str) -> dict:
     return (record.get("payload") or {}).get("llm_stats") or {}
 
 
+def _record_completed_run(plan_id: str, *, version: int, revision: int,
+                          passed: bool, total_cost: float, stats: dict) -> None:
+    """成功运行也记一条 runs：否则真实用量只留在事件流里，无法按运行对比。"""
+    store.save_run(plan_id, "completed", {
+        "plan_id": plan_id,
+        "version": version,
+        "revision": revision,
+        "passed": passed,
+        "total_cost": total_cost,
+        "llm_stats": stats or {},
+    })
+
+
 def _issue_ledger_view(team_session: dict) -> list[dict]:
     """把 Issue Ledger 裁剪成界面需要的字段，不暴露模型私有上下文。"""
     fields = ("code", "severity", "owner", "status", "acceptance",
@@ -415,6 +428,11 @@ async def _run_graph(
         note=note,
     )
     result["version"] = version
+    # 成功运行也落一条 runs 记录：否则真实用量只存在于事件流里，无法按运行对比。
+    _record_completed_run(
+        plan_id, version=version, revision=revision, passed=critique.passed,
+        total_cost=itinerary.total_cost, stats=result["llm_stats"],
+    )
     yield publish(
         factory.make(
             "run_completed",
