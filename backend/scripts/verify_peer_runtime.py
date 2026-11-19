@@ -259,7 +259,22 @@ def main() -> int:
     else:
         check("工具状态不完整时仍然拒绝", False)
 
-    print("[8] stop 终态")
+    print("[8] 决策 schema 与预取摘要")
+    props = runtime.DECISION_SCHEMA["properties"]
+    check("决策 schema 声明主控字段", {"tasks", "rework"} <= set(props), str(sorted(props)))
+    check("决策 schema 声明交付与文档字段",
+          {"delivery", "delivery_patch", "document", "approved_version"} <= set(props))
+    check("tasks 字段说明形状",
+          props["tasks"]["items"]["required"] == ["id", "owner", "goal"], str(props["tasks"]["items"].get("required")))
+
+    summary_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    run_tool = __import__("app.agents.tools_spec", fromlist=["execute"]).execute
+    run_tool(summary_ctx, "list_pois", {})
+    summary = hub._prefetch_summary("local_expert", summary_ctx)
+    check("预取摘要包含闭馆日", summary["pois"] and all("closed_days" in p for p in summary["pois"]))
+    check("闭馆日不是空壳", any(p["closed_days"] for p in summary["pois"]))
+
+    print("[9] stop 终态")
     resume = {
         "architecture": "professional_team", "bus": {}, "context": {}, "tasks": {},
         "histories": {}, "trace": [], "turns": 1, "reviews": 0,

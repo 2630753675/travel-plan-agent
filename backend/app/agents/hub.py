@@ -145,6 +145,7 @@ def _prefetch_summary(agent: str, ctx: ToolContext) -> dict:
             "pois": [
                 {"id": p.id, "name": p.name, "duration_min": p.duration_min,
                  "open": f"{p.open_time.strftime('%H:%M')}-{p.close_time.strftime('%H:%M')}",
+                 "closed_days": list(p.closed_days),
                  "tags": list(p.tags)[:3]}
                 for p in ctx.poi.candidates[:8]
             ],

@@ -44,6 +44,70 @@ DECISION_SCHEMA = {
         "changes": {"type": "array", "items": {"type": "object"}},
         "evidence": {"type": "array", "items": {"type": "object"}},
         "advisory": {"type": "array", "items": {"type": "object"}},
+        # 角色专用字段：不写清楚形状，模型会把它们写进正文，然后被判缺字段。
+        "tasks": {
+            "type": "array",
+            "description": "主控拆解结果，必须放在顶层（不要写进 say）",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "owner": {"type": "string", "enum": ["logistics", "local_expert"]},
+                    "goal": {"type": "string"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["id", "owner", "goal"],
+            },
+        },
+        "rework": {
+            "type": "array",
+            "description": "主控返工派工，必须放在顶层",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["task_id", "reason"],
+            },
+        },
+        "delivery": {
+            "type": "object",
+            "description": "专业交付摘要；服务端会按工具状态校正，模型只需给 rationale",
+            "properties": {
+                "rationale": {"type": "string"},
+                "outbound_flight_no": {"type": "string"},
+                "inbound_flight_no": {"type": "string"},
+                "hotel_id": {"type": "string"},
+                "days": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["rationale"],
+        },
+        "delivery_patch": {
+            "type": "object",
+            "description": "返工时的差异交付",
+            "properties": {
+                "base_version": {"type": "integer"},
+                "rationale": {"type": "string"},
+                "days": {"type": "array", "items": {"type": "object"}},
+                "hotel_id": {"type": "string"},
+                "outbound_flight_no": {"type": "string"},
+                "inbound_flight_no": {"type": "string"},
+            },
+            "required": ["base_version", "rationale"],
+        },
+        "document": {
+            "type": "object",
+            "description": "Writer 的整合结果",
+            "properties": {
+                "title": {"type": "string"},
+                "overview": {"type": "string"},
+                "days": {"type": "array", "items": {"type": "object"}},
+                "practical_notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["title", "overview", "days"],
+        },
+        "approved_version": {"type": ["integer", "null"], "description": "评审接受时的版本，服务端会补默认"},
     },
     "required": ["kind", "say"],
     "additionalProperties": True,
