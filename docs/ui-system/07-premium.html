@@ -8,7 +8,7 @@
   :root{
     --bg:#07080a; --bg2:#0b0d11; --s1:#0f1217; --s2:#141821; --s3:#1a1f29;
     --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.13);
-    --ink:#f3f5f8; --sub:#a6afba; --dim:#6a7480;
+    --ink:#f3f5f8; --sub:#b3bcc7; --dim:#8b95a1;
     --gold:#d9b877; --gold2:#f2ddb0; --jade:#7fd1b9; --rose:#ef8b95; --blue:#8ab4ff;
     --serif:"Iowan Old Style","Songti SC","Noto Serif SC",Georgia,serif;
     --mono:ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
@@ -22,7 +22,7 @@
       radial-gradient(900px 560px at 92% 4%,rgba(127,209,185,.07),transparent 55%),
       radial-gradient(1200px 800px at 50% 110%,rgba(138,180,255,.06),transparent 60%);
   }
-  .sr{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+  .sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
   .label{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
   .gold{color:var(--gold)}
 
@@ -151,7 +151,7 @@
     background:radial-gradient(circle,rgba(217,184,119,.20),transparent 68%);
     display:grid;place-items:center;animation:breathe 3.4s ease-in-out infinite}
   .core .halo b{font-family:var(--serif);font-size:17px;font-weight:500;color:var(--gold2)}
-  .core small{display:block;font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.1em;margin-top:2px}
+  .core small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--dim);letter-spacing:.1em;margin-top:2px}
   @keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(217,184,119,.12)}50%{box-shadow:0 0 46px 6px rgba(217,184,119,.10)}}
   svg.links{position:absolute;inset:0;width:100%;height:100%}
   .sat{position:absolute;left:50%;top:50%;transform:translate(calc(-50% + var(--x)),calc(-50% + var(--y)));
@@ -159,13 +159,12 @@
   .sat .orb{width:46px;height:46px;border-radius:50%;margin:0 auto 8px;display:grid;place-items:center;
     font-size:12px;font-weight:700;color:#0a0b0d;background:var(--c);box-shadow:0 0 0 1px rgba(255,255,255,.12),0 0 26px -6px var(--c)}
   .sat .nm{font-size:12.5px;color:var(--sub)}
-  .sat .st{font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:2px;letter-spacing:.06em}
+  .sat .st{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;letter-spacing:.06em}
   #play:checked ~ .run-wrap .sat{animation:ignite .8s both}
   #play:checked ~ .run-wrap .sat{animation-delay:var(--d,0s)}
   @keyframes ignite{0%{opacity:.35}100%{opacity:1}}
-  #play:checked ~ .run-wrap .sat .st:after{content:" · 处理中"}
-  #play:checked ~ .run-wrap .progress3 i{animation:fill3 5.6s cubic-bezier(.3,.7,.3,1) both}
-  @keyframes fill3{from{width:2%}to{width:96%}}
+    #play:checked ~ .run-wrap .progress3 i{animation:fill3 5.6s cubic-bezier(.3,.7,.3,1) both}
+  @keyframes fill3{from{width:2%}to{width:100%}}
   .progress3{height:2px;background:rgba(255,255,255,.07);margin:0 26px;overflow:hidden}
   .progress3 i{display:block;height:100%;width:2%;background:linear-gradient(90deg,var(--gold),var(--jade))}
   .run-foot{display:flex;align-items:center;gap:16px;padding:18px 26px 22px;font-size:11px;color:var(--dim)}
@@ -195,6 +194,8 @@
   #app-change:checked ~ .plan .layout .p-change{display:block}
 
   .layout{display:grid;grid-template-columns:172px minmax(0,1fr) 286px;gap:22px;margin-top:18px;align-items:start}
+  .layout > div{min-width:0}
+  .tt{max-width:100%}
 
   /* 日期脊柱 */
   .spine{position:sticky;top:80px}
@@ -245,10 +246,10 @@
   .tt .dh:last-child{border-right:none}
   .tt .dh .d{font-family:var(--mono);font-size:11px;color:var(--sub)}
   .tt .dh .w{font-size:10px;color:var(--dim);margin-top:2px}
-  .tt .dh .c{font-family:var(--mono);font-size:10px;color:var(--gold);margin-top:3px}
+  .tt .dh .c{font-family:var(--mono);font-size:10.5px;color:var(--sub);margin-top:3px}
   .tt .corner{border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
   .tt .axis{position:relative;border-right:1px solid var(--line)}
-  .tt .axis span{position:absolute;right:6px;font-family:var(--mono);font-size:9px;color:var(--dim);transform:translateY(-50%);background:#0d1015;padding:0 2px}
+  .tt .axis span{position:absolute;right:6px;font-family:var(--mono);font-size:10px;color:var(--dim);transform:translateY(-50%);background:#0d1015;padding:0 2px}
   .tt .col{position:relative;border-right:1px solid var(--line);transition:opacity .25s}
   .tt .col:last-child{border-right:none}
   .tt .col:after{content:"";position:absolute;inset:0;pointer-events:none;
@@ -278,15 +279,15 @@
     border:1px solid transparent;transition:transform .16s,box-shadow .16s,border-color .16s;overflow:visible}
   .blk:hover{transform:translateY(-2px);box-shadow:0 16px 30px -18px #000;z-index:8}
   .blk:before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;background:var(--bar,transparent);opacity:.9}
-  .blk .t{font-family:var(--mono);font-size:8.5px;color:rgba(255,255,255,.5);display:block}
-  .blk .n{font-size:10.5px;font-weight:600;display:block;line-height:1.3;color:rgba(255,255,255,.92)}
-  .blk .s{font-size:9px;color:rgba(255,255,255,.45);display:block}
+  .blk .t{font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.72);display:block}
+  .blk .n{font-size:11.5px;font-weight:600;display:block;line-height:1.3;color:rgba(255,255,255,.96)}
+  .blk .s{font-size:10.5px;color:rgba(255,255,255,.66);display:block}
   .blk.flight{background:linear-gradient(160deg,rgba(138,180,255,.20),rgba(138,180,255,.07));border-color:rgba(138,180,255,.35);--bar:#8ab4ff}
   .blk.transfer{background:repeating-linear-gradient(135deg,rgba(255,255,255,.06),rgba(255,255,255,.06) 5px,rgba(255,255,255,.02) 5px,rgba(255,255,255,.02) 10px);border-color:var(--line);--bar:#a6afba}
   .blk.sight{background:linear-gradient(160deg,rgba(127,209,185,.18),rgba(127,209,185,.05));border-color:rgba(127,209,185,.3);--bar:#7fd1b9}
   .blk.meal{background:linear-gradient(160deg,rgba(217,184,119,.14),rgba(217,184,119,.04));border-color:rgba(217,184,119,.25);--bar:#d9b877}
   .blk.hotel{background:linear-gradient(160deg,rgba(255,255,255,.08),rgba(255,255,255,.03));border-color:var(--line);--bar:#8a93a0}
-  .blk.free{background:rgba(255,255,255,.025);border:1px dashed rgba(255,255,255,.16);color:rgba(255,255,255,.5);font-style:italic}
+  .blk.free{background:rgba(255,255,255,.035);border:1px dashed rgba(255,255,255,.22);color:rgba(255,255,255,.62);font-style:italic}
   .new-1121{display:none}
   #cmd-indoor:checked ~ .plan .old-1121{display:none}
   #cmd-indoor:checked ~ .plan .new-1121{display:block;background:linear-gradient(160deg,rgba(127,209,185,.3),rgba(127,209,185,.1));border-color:rgba(127,209,185,.55)}
@@ -297,7 +298,9 @@
   .pop b{display:block;font-size:12px;color:var(--ink);margin-bottom:3px}
   .pop:after{content:"";position:absolute;left:16px;top:100%;border:5px solid transparent;border-top-color:rgba(217,184,119,.4)}
   .col input:checked + .blk .pop{display:block}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;padding:11px 13px;border-top:1px solid var(--line);font-size:10px;color:var(--dim)}
+  .col:last-child .pop{left:auto;right:-4px}
+  .col:last-child .pop:after{left:auto;right:16px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;padding:11px 13px;border-top:1px solid var(--line);font-size:11px;color:var(--dim)}
   .legend i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:5px}
 
   /* 指令条 */
@@ -307,6 +310,12 @@
   .cmdbar .text{flex:1;font-size:13px;color:var(--sub)}
   .cmdbar .send{cursor:pointer;font-size:11.5px;font-weight:600;color:#0a0b0d;background:linear-gradient(180deg,var(--gold2),var(--gold));
     padding:6px 13px;border-radius:8px}
+  .cmdchip{cursor:pointer;font-size:11.5px;font-weight:600;color:#0a0b0d;background:linear-gradient(180deg,var(--gold2),var(--gold));
+    padding:6px 13px;border-radius:8px}
+  .cmdreset{cursor:pointer;font-size:11px;color:var(--dim);padding:6px 10px;border:1px solid var(--line);border-radius:8px}
+  #cmd-indoor:checked ~ .plan .cmdchip{opacity:.45}
+  #cmd-indoor:checked ~ .plan .cmdreset{color:var(--ink);border-color:var(--line2)}
+  #cmd-none:checked ~ .plan .text:after{content:"　· 未执行";color:var(--dim)}
   .cmdhint{display:flex;gap:6px;margin-top:9px}
   .cmdhint label{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:4px 10px;cursor:pointer}
   .cmdhint label:hover{color:var(--sub);border-color:var(--line2)}
@@ -355,17 +364,72 @@
   .newchange{display:none}
   #cmd-indoor:checked ~ .plan .layout .newchange{display:grid}
 
-  .foot{margin-top:34px;display:flex;gap:18px;align-items:center;color:var(--dim);font-size:10.5px;
+  .foot{margin-top:34px;display:flex;gap:18px;align-items:center;color:var(--dim);font-size:11px;
     border-top:1px solid var(--line);padding-top:14px;letter-spacing:.04em}
   .foot .spacer{flex:1}
 
+
+  /* 键盘焦点：所有隐藏输入获得焦点时，让对应标签显形 */
+  #step1:focus-visible ~ .chrome .steps label[for=step1],
+  #step2:focus-visible ~ .chrome .steps label[for=step2],
+  #step3:focus-visible ~ .chrome .steps label[for=step3],
+  #step4:focus-visible ~ .chrome .steps label[for=step4],
+  #app-tt:focus-visible ~ .tabs label[for=app-tt],
+  #app-budget:focus-visible ~ .tabs label[for=app-budget],
+  #app-change:focus-visible ~ .tabs label[for=app-change],
+  #day-20:focus-visible ~ .plan .layout .daybtn[for=day-20],
+  #day-21:focus-visible ~ .plan .layout .daybtn[for=day-21],
+  #day-22:focus-visible ~ .plan .layout .daybtn[for=day-22],
+  #day-23:focus-visible ~ .plan .layout .daybtn[for=day-23],
+  #day-24:focus-visible ~ .plan .layout .daybtn[for=day-24],
+  .sr:focus-visible + .blk,
+  .chips label:has(input:focus-visible),
+  .opt:has(input:focus-visible),
+  .scen label:has(input:focus-visible),
+  .cmdchip:focus-visible,
+  .cmdreset:focus-visible,
+  .cta:focus-visible,
+  .ghost:focus-visible{
+    outline:2px solid var(--gold); outline-offset:3px;
+  }
+
+  @media (max-width:720px){
+    .chrome{height:auto;flex-wrap:wrap;padding:10px 14px;gap:8px}
+    .chrome .right{display:none}
+    .steps{width:100%;overflow-x:auto;white-space:nowrap;margin-left:0}
+    .steps label{flex:none}
+    .stage{padding:24px 14px 60px}
+    .hero h1{font-size:31px}
+    .hero .lede{font-size:14px}
+    .stats{gap:20px}
+    .demand{padding:14px}
+    .parse{grid-template-columns:1fr;padding:16px;gap:14px}
+    .parse .sentence{font-size:17px}
+    .plan-head{flex-direction:column;align-items:flex-start;gap:10px}
+    .plan-head h2{font-size:23px}
+    .plan-head .right{margin-left:0;flex-wrap:wrap}
+    .tabs{overflow-x:auto;white-space:nowrap}
+    .dayctx{grid-template-columns:1fr !important}
+    .dayctx .cap{font-size:17px}
+    .cmdbar{flex-wrap:wrap}
+    .cmdbar .text{flex:1 1 100%;order:3;font-size:12px}
+    .confirm{flex-wrap:wrap;gap:10px}
+    .orbit-box{height:320px;transform:scale(.6);transform-origin:top center;margin-bottom:-110px}
+    .run-top h2{font-size:21px}
+    .run-top .meta{display:none}
+    .run-foot{flex-wrap:wrap}
+    .ticker3{max-width:none;text-align:left;margin-left:0;width:100%}
+  }
   @media (max-width:1080px){
+    .tt{overflow-x:auto}
+    .tt .grid{min-width:760px}
+    .layout > div{min-width:0}
     .hero{grid-template-columns:1fr;gap:28px}
     .layout{grid-template-columns:1fr}
     .spine{position:static;display:flex;gap:8px;overflow:auto}
     .spine .label,.allbtn{display:none}
     .daybtn{border-left:none;border-top:1px solid var(--line);min-width:96px}
-    .dayctx{grid-template-columns:1fr}
+    .dayctx{grid-template-columns:1fr !important}
     .decide{grid-template-columns:1fr}
     .ledger{grid-template-columns:1fr}
   }
@@ -381,7 +445,7 @@
 <!-- 取舍（跨步保留） -->
 
 <header class="chrome">
-  <div class="brand"><i></i>行程协作 <small>premium · mock</small></div>
+  <div class="brand"><i></i>行程协作 <small>零脚本原型</small></div>
   <nav class="steps">
     <label for="step1"><span class="idx">01</span>说需求</label>
     <label for="step2"><span class="idx">02</span>定取舍</label>
@@ -421,11 +485,11 @@
       <div class="card demand">
         <textarea>成都 5 天，2 人，带 1 位老人，预算 8000，想看人文、吃点好的，节奏适中，别太赶</textarea>
         <div class="fields">
-          <div class="fld"><span>from</span><b>上海</b></div>
-          <div class="fld"><span>to</span><b>成都</b></div>
-          <div class="fld"><span>dates</span><b>11-20 → 11-24</b></div>
-          <div class="fld"><span>pax</span><b>2</b></div>
-          <div class="fld"><span>budget</span><b>8,000</b></div>
+          <div class="fld"><span>出发</span><b>上海</b></div>
+          <div class="fld"><span>到达</span><b>成都</b></div>
+          <div class="fld"><span>日期</span><b>11-20 → 11-24</b></div>
+          <div class="fld"><span>人数</span><b>2</b></div>
+          <div class="fld"><span>预算</span><b>8,000</b></div>
         </div>
         <div class="chips">
           <label><input type="checkbox" checked>带老人</label>
@@ -538,7 +602,8 @@
 
   <!-- ================= 04 ================= -->
   <section class="view v4">
-    <input class="sr" type="checkbox" id="cmd-indoor">
+    <input class="sr" type="radio" name="cmd" id="cmd-none" checked>
+    <input class="sr" type="radio" name="cmd" id="cmd-indoor">
     <input class="sr" type="radio" name="app" id="app-tt" checked>
     <input class="sr" type="radio" name="app" id="app-budget">
     <input class="sr" type="radio" name="app" id="app-change">
@@ -589,7 +654,7 @@
             <div class="panel p-tt">
               <!-- 旁白 + 迷你地图（按天联动） -->
               <div class="dayctx ctx-all">
-                <div class="cap">五天只安排了 8 处景点，<br>留白比行程本身更重要。<small>每天不超过两处；下午留 1 小时回房；雨天整日室内</small></div>
+                <div class="cap">五天只安排了 7 处景点，<br>留白比行程本身更重要。<small>每天不超过两处；下午留 1 小时回房；雨天整日室内</small></div>
                 <div class="minimap"><svg viewBox="0 0 210 96">
                   <path d="M0 68 C 42 58, 74 74, 112 66 S 176 54, 210 62 L210 96 L0 96Z" fill="#0f2024"/>
                   <path d="M18 78 C 58 70, 80 56, 112 50 S 172 34, 196 28" fill="none" stroke="#2f5f57" stroke-width="1" stroke-dasharray="3 3"/>
@@ -655,53 +720,53 @@
                   </div>
 
                   <div class="col" data-day="20" style="height:784px">
-                    <input class="sr" type="checkbox" id="k1">
+                    <input class="sr" type="radio" name="blk" id="k1">
                     <label class="blk flight" for="k1" style="top:5px;height:182px">
                       <span class="t">08:05–11:20</span><span class="n">MU5401 上海→成都</span><span class="s">2 人 ¥1,960</span>
                       <span class="pop"><b>MU5401 · 08:05–11:20</b>11:20 落地天府，2 人 ¥1,960；含 23kg 行李。价格未预订。</span>
                     </label>
-                    <label class="blk transfer" style="top:186px;height:75px"><span class="t">11:20–12:40</span><span class="n">机场→酒店</span></label>
-                    <label class="blk sight" style="top:270px;height:112px"><span class="t">12:50–14:50</span><span class="n">春熙路太古里</span><span class="s">免费 · 0.5km</span></label>
-                    <label class="blk meal" style="top:588px;height:75px"><span class="t">18:30</span><span class="n">晚餐窗口</span></label>
-                    <label class="blk hotel" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">入住 · 第 1 晚</span></label>
+                    <input class="sr" type="radio" name="blk" id="b11"><label class="blk transfer" for="b11" style="top:186px;height:75px"><span class="t">11:20–12:40</span><span class="n">机场→酒店</span><span class="pop"><b>机场→酒店</b>11:20–12:40 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b12"><label class="blk sight" for="b12" style="top:270px;height:112px"><span class="t">12:50–14:50</span><span class="n">春熙路太古里</span><span class="s">免费 · 0.5km</span><span class="pop"><b>春熙路太古里</b>12:50–14:50 · 免费 · 0.5km</span></label>
+                    <input class="sr" type="radio" name="blk" id="b13"><label class="blk meal" for="b13" style="top:588px;height:75px"><span class="t">18:30</span><span class="n">晚餐窗口</span><span class="pop"><b>晚餐窗口</b>18:30 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b14"><label class="blk hotel" for="b14" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">入住 · 第 1 晚</span><span class="pop"><b>入住 · 第 1 晚</b>21:00 · 价格与开放时间以现场为准</span></label>
                   </div>
 
                   <div class="col" data-day="21" style="height:784px">
-                    <input class="sr" type="checkbox" id="k2">
+                    <input class="sr" type="radio" name="blk" id="k2">
                     <label class="blk sight" for="k2" style="top:56px;height:84px">
                       <span class="t">09:00–10:30</span><span class="n">杜甫草堂</span><span class="s">50 元/人</span>
                       <span class="pop"><b>杜甫草堂 · 09:00–10:30</b>门票 50/人，园内平缓、多处可坐；建议停留 90 分钟。</span>
                     </label>
-                    <label class="blk meal" style="top:224px;height:56px"><span class="t">12:00</span><span class="n">回酒店午休</span></label>
+                    <input class="sr" type="radio" name="blk" id="b15"><label class="blk meal" for="b15" style="top:224px;height:56px"><span class="t">12:00</span><span class="n">回酒店午休</span><span class="pop"><b>回酒店午休</b>12:00 · 价格与开放时间以现场为准</span></label>
                     <label class="blk old-1121 sight" style="top:280px;height:112px"><span class="t">13:00–15:00</span><span class="n">宽窄巷子</span><span class="s">免费</span></label>
                     <label class="blk new-1121 sight" style="top:280px;height:112px"><span class="t">13:00–15:00</span><span class="n">成都博物馆（室内）</span><span class="s">免费 · 需预约</span></label>
-                    <label class="blk free" style="top:392px;height:196px"><span class="t">15:00</span><span class="n">自由时间</span></label>
-                    <label class="blk hotel" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    <input class="sr" type="radio" name="blk" id="b16"><label class="blk free" for="b16" style="top:392px;height:196px"><span class="t">15:00</span><span class="n">自由时间</span><span class="pop"><b>自由时间</b>15:00 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b17"><label class="blk hotel" for="b17" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span><span class="pop"><b>回酒店</b>21:00 · 价格与开放时间以现场为准</span></label>
                   </div>
 
                   <div class="col" data-day="22" style="height:784px">
-                    <label class="blk sight" style="top:56px;height:112px"><span class="t">09:00–11:00</span><span class="n">成都博物馆</span><span class="s">免费</span></label>
-                    <label class="blk meal" style="top:196px;height:56px"><span class="t">11:30</span><span class="n">午餐</span></label>
-                    <label class="blk sight" style="top:280px;height:112px"><span class="t">13:00–15:00</span><span class="n">四川博物院</span><span class="s">免费</span></label>
-                    <label class="blk free" style="top:392px;height:196px"><span class="t">15:00</span><span class="n">自由时间</span></label>
-                    <label class="blk hotel" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    <input class="sr" type="radio" name="blk" id="b18"><label class="blk sight" for="b18" style="top:56px;height:112px"><span class="t">09:00–11:00</span><span class="n">成都博物馆</span><span class="s">免费</span><span class="pop"><b>成都博物馆</b>09:00–11:00 · 免费</span></label>
+                    <input class="sr" type="radio" name="blk" id="b19"><label class="blk meal" for="b19" style="top:196px;height:56px"><span class="t">11:30</span><span class="n">午餐</span><span class="pop"><b>午餐</b>11:30 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b20"><label class="blk sight" for="b20" style="top:280px;height:112px"><span class="t">13:00–15:00</span><span class="n">四川博物院</span><span class="s">免费</span><span class="pop"><b>四川博物院</b>13:00–15:00 · 免费</span></label>
+                    <input class="sr" type="radio" name="blk" id="b21"><label class="blk free" for="b21" style="top:392px;height:196px"><span class="t">15:00</span><span class="n">自由时间</span><span class="pop"><b>自由时间</b>15:00 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b22"><label class="blk hotel" for="b22" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span><span class="pop"><b>回酒店</b>21:00 · 价格与开放时间以现场为准</span></label>
                   </div>
 
                   <div class="col" data-day="23" style="height:784px">
-                    <label class="blk sight" style="top:28px;height:84px"><span class="t">08:30–10:00</span><span class="n">武侯祠</span><span class="s">50 元/人</span></label>
-                    <label class="blk sight" style="top:140px;height:84px"><span class="t">10:30–12:00</span><span class="n">锦里古街</span><span class="s">免费</span></label>
-                    <label class="blk meal" style="top:224px;height:56px"><span class="t">12:00</span><span class="n">午餐（就地）</span></label>
-                    <label class="blk free" style="top:280px;height:308px"><span class="t">13:00</span><span class="n">自由时间</span></label>
-                    <label class="blk hotel" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    <input class="sr" type="radio" name="blk" id="b23"><label class="blk sight" for="b23" style="top:28px;height:84px"><span class="t">08:30–10:00</span><span class="n">武侯祠</span><span class="s">50 元/人</span><span class="pop"><b>武侯祠</b>08:30–10:00 · 50 元/人</span></label>
+                    <input class="sr" type="radio" name="blk" id="b24"><label class="blk sight" for="b24" style="top:140px;height:84px"><span class="t">10:30–12:00</span><span class="n">锦里古街</span><span class="s">免费</span><span class="pop"><b>锦里古街</b>10:30–12:00 · 免费</span></label>
+                    <input class="sr" type="radio" name="blk" id="b25"><label class="blk meal" for="b25" style="top:224px;height:56px"><span class="t">12:00</span><span class="n">午餐（就地）</span><span class="pop"><b>午餐（就地）</b>12:00 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b26"><label class="blk free" for="b26" style="top:280px;height:308px"><span class="t">13:00</span><span class="n">自由时间</span><span class="pop"><b>自由时间</b>13:00 · 价格与开放时间以现场为准</span></label>
+                    <input class="sr" type="radio" name="blk" id="b27"><label class="blk hotel" for="b27" style="top:728px;height:56px"><span class="t">21:00</span><span class="n">回酒店</span><span class="pop"><b>回酒店</b>21:00 · 价格与开放时间以现场为准</span></label>
                   </div>
 
                   <div class="col" data-day="24" style="height:784px">
-                    <input class="sr" type="checkbox" id="k3">
+                    <input class="sr" type="radio" name="blk" id="k3">
                     <label class="blk transfer" for="k3" style="top:75px;height:65px">
                       <span class="t">09:20–10:30</span><span class="n">酒店→天府机场</span>
                       <span class="pop"><b>酒店 → 天府机场</b>按起飞前 150 分钟到达预留；当天中雨，建议再加 20 分钟。</span>
                     </label>
-                    <label class="blk flight" style="top:280px;height:173px"><span class="t">13:00–16:05</span><span class="n">MU5402 成都→上海</span><span class="s">2 人 ¥1,920</span></label>
+                    <input class="sr" type="radio" name="blk" id="b28"><label class="blk flight" for="b28" style="top:280px;height:173px"><span class="t">13:00–16:05</span><span class="n">MU5402 成都→上海</span><span class="s">2 人 ¥1,920</span><span class="pop"><b>MU5402 成都→上海</b>13:00–16:05 · 2 人 ¥1,920</span></label>
                   </div>
                 </div>
                 <div class="legend">
@@ -714,12 +779,13 @@
               </div>
 
               <div class="cmdbar">
-                <span class="slash">/</span><span class="text">把 11-21 下午换成室内</span>
-                <label class="send" for="cmd-indoor">发送</label>
+                <span class="slash">/</span>
+                <span class="text">把 11-21 下午换成室内（演示指令，可执行也可还原）</span>
+                <label class="cmdchip" for="cmd-indoor">执行</label>
+                <label class="cmdreset" for="cmd-none">还原</label>
               </div>
               <div class="cmdhint">
-                <label for="cmd-indoor"><input type="checkbox" hidden>换成室内</label>
-                <label for="app-budget"><input type="checkbox" hidden>压预算</label>
+                <label for="app-budget"><input type="checkbox" hidden>看替代方案</label>
                 <label for="app-change"><input type="checkbox" hidden>看变更</label>
               </div>
               <div class="applied">团队已只改 11-21：宽窄巷子 → 成都博物馆；评审通过，计划书重写为 v9。</div>
@@ -797,6 +863,10 @@
             <h3>待你判断</h3>
             <div class="row"><span>预算余量</span><b style="color:var(--gold)">¥40</b></div>
             <div class="warnbox">换酒店或加景点都会超支；要改建议先看「预算」里的替代方案。</div>
+            <div style="display:flex;gap:8px;margin-top:10px">
+              <label class="ghost" for="app-budget" style="font-size:11.5px">看替代方案</label>
+              <label class="ghost" for="app-change" style="font-size:11.5px">看变更</label>
+            </div>
           </div>
           <div class="card sc">
             <h3>团队</h3>
@@ -818,9 +888,9 @@
   </section>
 
   <div class="foot">
-    <span>PREMIUM PROTOTYPE · 零脚本交互 · MOCK DATA</span>
+    <span>交互原型 · 演示数据 · 零脚本</span>
     <span class="spacer"></span>
-    <span>MOCK DATA · 成都 5 天 · 7,960 / 8,000</span>
+    <span>演示数据 · 成都 5 天 · 7,960 / 8,000</span>
   </div>
 </div>
 </body>
