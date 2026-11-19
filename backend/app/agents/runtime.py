@@ -255,6 +255,37 @@ def _evidence_id(agent: str, tool: str, arguments: object, result: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
+def _repair_history(messages: list[dict]) -> list[dict]:
+    """丢弃尾部不完整的事务，返回可安全发送的历史。
+
+    历史里可能残留"有 assistant.tool_calls、没有对应 tool 结果"的尾巴（例如旧版本
+    决策工具漏回填）。整轮因此失败代价太大：能把尾巴修好就继续。
+
+    修法优先保留内容：去掉这条 assistant 的 tool_calls（它说过的话仍是上下文），
+    只有连正文都没有时才整条丢弃；孤立的 tool 结果直接丢弃。
+    """
+    working = [dict(message) for message in messages]
+    while working:
+        try:
+            _validate_history_messages(working)
+            return working
+        except ValueError:
+            for index in range(len(working) - 1, -1, -1):
+                message = working[index]
+                if message.get("role") == "assistant" and message.get("tool_calls"):
+                    stripped = dict(message)
+                    stripped.pop("tool_calls", None)
+                    if stripped.get("content") in (None, ""):
+                        working = working[:index]
+                    else:
+                        working = working[:index] + [stripped]
+                    break
+            else:
+                # 没有可修的 assistant 事务：只剩孤立 tool 结果，丢掉最后一条重试。
+                working = working[:-1]
+    return working
+
+
 def _finalize_decision(agent: str, decision: dict, ctx: ToolContext) -> dict:
     """把"模型给出的决策"变成可执行决策：统一做协议、角色与证据校验。"""
     if not isinstance(decision, dict):
@@ -318,7 +349,12 @@ async def run_turn(
     try:
         _validate_history_messages(messages[1:])
     except ValueError as exc:
-        return AgentTurn(error=str(exc), error_type="HistoryCorrupt", history=messages)
+        # 历史已被写坏（例如旧版本漏回填决策工具的 tool 结果）：修好尾部继续，
+        # 哪怕整段历史都不可用，也比让用户卡在一个永远恢复不了的中断上好。
+        repaired = _repair_history(messages[1:])
+        emit("history_repaired", agent=agent, dropped=len(messages) - 1 - len(repaired),
+             reason=str(exc))
+        messages = [messages[0]] + repaired
     messages.append({"role": "user", "content": prompt})
     schemas = tools_spec.schemas_for(tools)
     schemas = schemas + [_decision_tool()]
@@ -389,6 +425,13 @@ async def run_turn(
                         continue
                     text = str(decision.get("say") or "")
                     emit("say", agent=agent, text=text)
+                    # 决策工具也是 tool_call：必须回填对应的 tool 消息，否则历史里会留下
+                    # 未闭合的 assistant.tool_calls，下一回合恢复时被判为损坏。
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": json.dumps({"ok": True, "accepted": True}, ensure_ascii=False),
+                    })
                     return AgentTurn(content=text, decision=decision, tool_calls=used,
                                      history=messages, evidence_ids=evidence_ids)
                 prior = ctx.operations.get(str(call["id"]))

@@ -192,6 +192,11 @@ def main() -> int:
     check("默认值已补齐", minimal.decision.get("to") == [] and minimal.decision.get("wake") == []
           and minimal.decision.get("done") is True and minimal.decision.get("escalate") is None,
           str(minimal.decision)[:160])
+    try:
+        runtime._validate_history_messages(minimal.history[1:])
+        check("决策工具留下闭合的工具事务（可继续下一回合）", True)
+    except ValueError as exc:
+        check("决策工具留下闭合的工具事务（可继续下一回合）", False, str(exc))
 
     critic_ctx = hub.ToolContext(brief=brief(), source=MockSource())
 
@@ -211,7 +216,26 @@ def main() -> int:
     check("Critic 自造 evidence 不再导致协议失败", critic_turn.ok, str(critic_turn.error))
     check("Critic 证据被清空", critic_turn.decision.get("evidence") == [], str(critic_turn.decision.get("evidence")))
 
-    print("[6] stop 终态")
+    print("[6] 损坏历史自愈")
+    repair_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    broken_history = [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "x1", "type": "function", "function": {"name": "set_flights", "arguments": "{}"}},
+        ]},
+        # 故意缺少 tool 结果：旧版本决策工具漏回填时留下的形态
+    ]
+    repair_events: list[tuple] = []
+    repaired_turn = asyncio.run(runtime.run_turn(
+        agent="logistics", system="s", prompt="p", tools=["set_flights"], ctx=repair_ctx, bus=Bus(),
+        client=Client([reply(kind="note", say="已修复历史后继续")]),
+        emit=lambda *a, **k: repair_events.append((a, k)), history=broken_history, max_steps=2,
+    ))
+    check("损坏历史被自愈而不是整轮失败", repaired_turn.ok, str(repaired_turn.error))
+    check("发出 history_repaired 事件", any(a and a[0] == "history_repaired" for a, _ in repair_events),
+          str([a for a, _ in repair_events]))
+    check("自愈后历史合法", runtime._validate_history_messages(repaired_turn.history[1:]) is None)
+
+    print("[7] stop 终态")
     resume = {
         "architecture": "professional_team", "bus": {}, "context": {}, "tasks": {},
         "histories": {}, "trace": [], "turns": 1, "reviews": 0,
