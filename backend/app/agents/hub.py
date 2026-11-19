@@ -503,6 +503,21 @@ def _delivery_change_summary(base: dict, patch: dict, plan_version: int) -> dict
     }
 
 
+def _expected_delivery(agent: str, ctx: ToolContext) -> dict:
+    """把"当前工具状态对应的交付字段"写进驳回信息，让模型一次改对而不是反复试。"""
+    if agent == "logistics":
+        out, back = ctx.transport.chosen_outbound, ctx.transport.chosen_inbound
+        return {
+            "outbound_flight_no": out.flight_no if out else None,
+            "inbound_flight_no": back.flight_no if back else None,
+            "hotel_id": ctx.hotel_id,
+        }
+    return {"days": [
+        {"date": str(day), "poi_ids": list(ctx.assignment.get(day, []))}
+        for day in sorted(ctx.assignment)
+    ]}
+
+
 def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripBrief) -> bool:
     if not isinstance(delivery, dict) or not delivery.get("rationale"):
         return False
@@ -950,7 +965,10 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     continue
                 delivery = _merge_delivery(tasks[active_task], decision) if active_task else None
                 if not active_task or kind != "proposal" or not _delivery_valid(agent, delivery, ctx, brief):
-                    raise ValueError("专业交付必须用 proposal，并且 delivery 与实际工具选择/完整日期一致")
+                    raise ValueError(
+                        "专业交付必须用 proposal，并且 delivery 与实际工具选择/完整日期一致；"
+                        f"按当前工具状态，delivery 应为 {json.dumps(_expected_delivery(agent, ctx), ensure_ascii=False)}"
+                    )
                 # 把专业交付引用的工具证据转交主控，主控提交评审时据此引用，避免无工具角色凭空造证据。
                 delivered_evidence = [
                     item["id"] for item in decision.get("evidence") or []

@@ -432,6 +432,8 @@ async def run_turn(
                         "tool_call_id": call["id"],
                         "content": json.dumps({"ok": True, "accepted": True}, ensure_ascii=False),
                     })
+                    emit("tool_result", agent=agent, tool=DECISION_TOOL, ok=True,
+                         summary=f"决策已提交（{decision.get('kind')}）", evidence_id=None)
                     return AgentTurn(content=text, decision=decision, tool_calls=used,
                                      history=messages, evidence_ids=evidence_ids)
                 prior = ctx.operations.get(str(call["id"]))
