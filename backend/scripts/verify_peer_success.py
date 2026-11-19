@@ -404,7 +404,35 @@ async def main() -> int:
           not any(i["code"] == "AIRPORT_TRANSFER_DUPLICATE" for i in fixed_packet["hard_check"]["issues"])
           and closed_ledger[0]["status"] == "closed")
 
-    print("\n[5] 评审上限后升级")
+    print("\n[6] 评审退回后仍能看到评审包")
+    class RetryCritic(ScriptedTeam):
+        def __init__(self):
+            super().__init__()
+            self.critic_turns = 0
+
+        async def chat_tools(self, messages, tools):
+            if role_of(messages[0]["content"]) == "critic_agent":
+                text = prompt_text(messages)
+                if "packet_id" not in text:
+                    raise AssertionError("Critic 重试回合拿不到 ReviewPacket")
+                self.critic_turns += 1
+                match = re.search(r"待审版本：(\d+)", text)
+                version = int(match.group(1)) if match else 1
+                # 首轮故意给错版本，触发主控退回；次轮给正确版本。
+                approved = version if self.critic_turns > 1 else version - 1
+                return say("accept", None, to=["writer"], wake=["writer"],
+                           approved_version=approved, say="按评审包核对")
+            return await super().chat_tools(messages, tools)
+
+    retry_team = RetryCritic()
+    retried = await hub.run_session(
+        brief=brief(), source=MockSource(), client=retry_team,
+        emit=lambda *a, **k: None, max_turns=20, max_rounds=2,
+    )
+    check("评审退回后重新评审可收敛", retried.converged, str(retried.escalation)[:200])
+    check("Critic 恰好重试一次", retry_team.critic_turns == 2, str(retry_team.critic_turns))
+
+    print("\n[7] 评审上限后升级")
     ok, escalation = await unresolved_conflict_reaches_user(result.session)
     check("评审上限后升级给用户", ok, str(escalation)[:240])
     check("升级说明评审已到上限", "评审" in str(escalation.get("question", "")), str(escalation)[:160])

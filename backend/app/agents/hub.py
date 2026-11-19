@@ -641,6 +641,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
     review_version = (resume or {}).get("review_version")
     pending_rejections = list((resume or {}).get("pending_rejections") or [])
     pending_issue_codes = list((resume or {}).get("pending_issue_codes") or [])
+    review_packet_state = (resume or {}).get("last_review_packet") or None
     pending_agent = (resume or {}).get("pending_agent")
     pending_task = (resume or {}).get("pending_task")
     next_agent = "orchestrator"
@@ -720,7 +721,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         再消耗一次模型请求纯属浪费，所以由代码完成。返回 "escalate" 表示
         评审轮次已用尽、需要用户决策。
         """
-        nonlocal reviews, review_version, proposal_id, pending_issue_codes, escalation
+        nonlocal reviews, review_version, proposal_id, pending_issue_codes, escalation, review_packet_state
         if reviews >= max_rounds:
             changes = pending_rejections or []
             detail = "；".join(
@@ -745,6 +746,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         review_packet = build_review_packet(ctx)
         if not review_packet.get("ok"):
             raise ValueError(f"无法生成 ReviewPacket：{review_packet.get('error')}")
+        # 记住本轮评审包：Critic 若因协议被退回重做，收件箱里的 proposal 已经被消费掉了，
+        # 没有这份快照它就拿不到评审依据，只能反复报"缺少 ReviewPacket"直到回合耗尽。
+        review_packet_state = review_packet
         pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
         reviews += 1
         bus.round = reviews
@@ -795,6 +799,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         if agent == "critic_agent":
             latest_proposal = next((m for m in reversed(inbox) if m.kind == "proposal"), None)
             review_packet = (latest_proposal.payload.get("review_packet") if latest_proposal else None)
+            if not review_packet:
+                # 协议退回重做时收件箱已空：用本轮已提交的评审包快照，而不是给模型一个空对象。
+                review_packet = review_packet_state
             prompt += "\n结构化 ReviewPacket（唯一事实来源）：" + json.dumps(review_packet or {}, ensure_ascii=False)
             prompt += "\n当前 Issue Ledger：" + json.dumps(pending_issue_codes, ensure_ascii=False)
         allowed_repair_tools = (
@@ -1006,14 +1013,24 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     raise ValueError("评审期间方案版本发生变化，必须重新提交")
                 latest_proposal = next((m for m in reversed(inbox) if m.kind == "proposal"), None)
                 review_packet = latest_proposal.payload.get("review_packet") if latest_proposal else None
+                if not review_packet:
+                    review_packet = review_packet_state
                 if not isinstance(review_packet, dict) or review_packet.get("packet_id") is None:
                     raise ValueError("评审缺少有效 ReviewPacket，必须重新提交评审")
                 check = review_packet.get("hard_check") or {}
                 # Ledger closure is computed from this packet's deterministic issue list before Critic runs.
                 pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
                 if kind == "accept":
-                    if decision.get("changes") or decision.get("approved_version") != review_version or not check.get("passed"):
-                        raise ValueError("评审接受必须版本一致、没有待办修改且硬约束通过")
+                    # 分开报错：笼统一句话会让模型只能猜哪里不对，白白多跑几轮。
+                    if decision.get("changes"):
+                        raise ValueError("接受时 changes 必须为空；如有问题请用 objection")
+                    if decision.get("approved_version") != review_version:
+                        raise ValueError(
+                            f"接受时 approved_version 必须等于待审版本 {review_version}，"
+                            f"当前为 {decision.get('approved_version')}"
+                        )
+                    if not check.get("passed"):
+                        raise ValueError("硬校验未通过，不能接受")
                     open_issues = [item for item in pending_issue_codes if item.get("status") != "closed"]
                     if open_issues:
                         raise ValueError("Issue Ledger 仍有未关闭问题，不能接受")
@@ -1096,6 +1113,7 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
         "reviews": reviews, "proposal_id": proposal_id, "review_version": review_version,
         "pending_rejections": pending_rejections, "pending_issue_codes": pending_issue_codes,
         "pending_agent": pending_agent, "pending_task": pending_task, "warnings": warnings,
+        "last_review_packet": review_packet_state,
     }
     return PeerResult(bus=bus, ctx=ctx, itinerary=ctx.itinerary if converged else None,
                       escalation=escalation, converged=converged, rounds=reviews, turns=turns,
