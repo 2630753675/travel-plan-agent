@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>行程协作 · 从需求到交付</title>
+<style>
+  :root{
+    --bg:#06070c; --s1:#0b0e15; --s2:#10141d; --s3:#161b26;
+    --line:rgba(255,255,255,.075); --line2:rgba(255,255,255,.15);
+    --ink:#eef1f7; --sub:#9aa4b4; --dim:#626c7c;
+    --indigo:#8b9cff; --mint:#6fe3c0; --amber:#f0b872; --rose:#f28ba0; --violet:#c0a8ff;
+    --sans:"Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.65 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(900px 560px at 78% -12%,rgba(139,156,255,.13),transparent 62%),
+      radial-gradient(760px 520px at 6% 108%,rgba(111,227,192,.06),transparent 60%)}
+  body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.5;
+    background-image:linear-gradient(rgba(255,255,255,.026) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.026) 1px,transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(900px 600px at 60% 0%,#000 15%,transparent 80%);
+    mask-image:radial-gradient(900px 600px at 60% 0%,#000 15%,transparent 80%)}
+
+  .sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .label{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+  .mono{font-family:var(--mono)}
+
+  /* ---------- shell ---------- */
+  .hdr{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:24px;
+    padding:14px 30px;background:rgba(6,7,12,.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+  .brand i{width:13px;height:13px;border-radius:3px;background:var(--ink);position:relative}
+  .brand i::after{content:"";position:absolute;inset:4px;background:var(--bg);border-radius:1px}
+  .brand small{font-family:var(--mono);font-size:9px;font-weight:400;letter-spacing:.16em;color:var(--dim)}
+  .steps{display:flex;align-items:center;gap:4px;margin-left:14px}
+  .steps span{font-family:var(--mono);font-size:9px;color:var(--dim);padding:4px 8px;border-radius:5px;letter-spacing:.06em;transition:.2s}
+  .hdr .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .tag{font-family:var(--mono);font-size:9px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:3px 7px}
+  .tag.live{color:var(--mint);border-color:rgba(111,227,192,.3)}
+  .reset{font-size:11px;color:var(--dim);cursor:pointer}
+  .reset:hover{color:var(--sub)}
+
+  #home:checked ~ .hdr .st-home,
+  #demand:checked ~ .hdr .st-demand,
+  #brief:checked ~ .hdr .st-brief,
+  #run:checked ~ .hdr .st-run,
+  #plan:checked ~ .hdr .st-plan,
+  #share:checked ~ .hdr .st-share{color:#0a0b0d;background:var(--ink);font-weight:600}
+
+  .stage{position:relative;z-index:1}
+  .scene{display:none;min-height:calc(100vh - 57px)}
+  #home:checked ~ .stage .s-home{display:flex}
+  #demand:checked ~ .stage .s-demand,
+  #brief:checked ~ .stage .s-brief,
+  #run:checked ~ .stage .s-run,
+  #plan:checked ~ .stage .s-plan,
+  #share:checked ~ .stage .s-share{display:block}
+  .s-home{flex-direction:column;min-height:calc(100vh - 57px)}
+  #home:checked ~ .stage .s-home,
+  #demand:checked ~ .stage .s-demand,
+  #brief:checked ~ .stage .s-brief,
+  #run:checked ~ .stage .s-run,
+  #plan:checked ~ .stage .s-plan,
+  #share:checked ~ .stage .s-share{animation:fadeUp .4s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* ---------- buttons ---------- */
+  .btn{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:600;
+    color:#0a0b0d;background:var(--ink);padding:9px 16px;border-radius:8px;border:1px solid var(--ink);text-decoration:none}
+  .btn:hover{background:#fff}
+  .btn.ghost{background:transparent;color:var(--sub);border-color:var(--line2);font-weight:500}
+  .btn.ghost:hover{color:var(--ink);border-color:rgba(255,255,255,.28)}
+  .btn.sm{padding:6px 12px;font-size:11.5px}
+
+  /* ---------- home ---------- */
+  .home{flex:1;display:grid;grid-template-columns:1.04fr .96fr;gap:54px;align-items:center;
+    max-width:1340px;margin:0 auto;width:100%;padding:34px 40px 26px}
+  .eyebrow{display:flex;align-items:center;gap:10px}
+  .eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 3px rgba(111,227,192,.12)}
+  h1{font-size:clamp(44px,5vw,68px);line-height:1.06;letter-spacing:-.05em;margin:22px 0 20px;font-weight:600}
+  h1 span{color:var(--sub)}
+  .lede{font-size:15px;color:var(--sub);line-height:1.85;max-width:30em;margin:0}
+  .cta-row{display:flex;align-items:center;gap:14px;margin-top:30px;flex-wrap:wrap}
+  .meta-line{display:flex;gap:20px;flex-wrap:wrap;margin-top:22px;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  .meta-line b{color:var(--sub);font-weight:500}
+
+  .deck-wrap{position:relative;height:480px}
+  .big-n{position:absolute;right:-10px;top:-40px;font-size:300px;line-height:1;font-weight:600;letter-spacing:-.06em;
+    color:transparent;-webkit-text-stroke:1px rgba(255,255,255,.085);pointer-events:none;user-select:none}
+  .deck{position:relative;height:calc(100% - 26px);display:flex;flex-direction:column;justify-content:center;gap:8px}
+  .deck-cap{position:absolute;left:0;right:0;bottom:0;text-align:center;font-family:var(--mono);font-size:8.5px;color:var(--dim);letter-spacing:.06em}
+  .card{position:relative;display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;
+    padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,#0e1118,#0a0d13);
+    transition:.2s;animation:cardIn .5s both}
+  .card:nth-child(1){animation-delay:.05s}.card:nth-child(2){animation-delay:.12s}
+  .card:nth-child(3){animation-delay:.19s}.card:nth-child(4){animation-delay:.26s}
+  .card:nth-child(5){animation-delay:.33s}
+  @keyframes cardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .card:hover{border-color:var(--line2);transform:translateX(3px)}
+  .card .d{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+  .card .t{display:block;font-size:12.5px;color:var(--ink)}
+  .card .s{display:block;font-size:9.5px;color:var(--dim);margin-top:1px}
+  .card .c{font-family:var(--mono);font-size:10px;color:var(--sub)}
+  .card .flag{grid-column:2 / -1;font-size:9.5px;color:var(--mint);display:flex;align-items:center;gap:5px}
+  .card .flag::before{content:"";width:4px;height:4px;border-radius:50%;background:var(--mint)}
+  .card.hot{border-color:rgba(139,156,255,.35);box-shadow:0 0 0 1px rgba(139,156,255,.08),0 20px 50px -30px rgba(139,156,255,.5)}
+
+  .features{max-width:1340px;margin:0 auto;width:100%;padding:0 40px 22px;display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+  .feat{border-top:1px solid var(--line);padding-top:13px}
+  .feat .n{font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:.1em}
+  .feat h3{font-size:13.5px;font-weight:600;margin:5px 0 3px}
+  .feat p{margin:0;font-size:11px;color:var(--dim);line-height:1.75}
+  .foot{max-width:1340px;margin:0 auto;width:100%;display:flex;align-items:center;gap:16px;
+    padding:14px 40px 20px;border-top:1px solid var(--line);font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+  .foot .spacer{flex:1}
+
+  /* ---------- inner pages ---------- */
+  .page{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+  .page.wide{max-width:1340px;padding:26px 28px 70px}
+  .topbar{display:flex;align-items:center;gap:12px;margin-bottom:28px}
+  .back{cursor:pointer;font-size:11px;color:var(--dim);border-bottom:1px solid var(--line2);padding-bottom:1px}
+  .back:hover{color:var(--sub)}
+  .step-no{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.12em}
+  .pill{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim);border:1px solid var(--line2);border-radius:99px;padding:3px 8px}
+  h2{font-size:clamp(28px,3.2vw,40px);line-height:1.15;letter-spacing:-.04em;margin:0 0 10px;font-weight:600}
+  .sub{color:var(--sub);font-size:13.5px;max-width:36em;margin:0 0 26px;line-height:1.85}
+
+  .panel{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  textarea{width:100%;min-height:110px;background:none;border:none;outline:none;color:var(--ink);resize:vertical;font:15px/1.8 var(--sans)}
+  textarea::placeholder{color:#495060}
+  .fields{display:flex;flex-wrap:wrap;gap:6px;padding-top:13px;border-top:1px solid var(--line);margin-top:4px}
+  .fld{display:flex;align-items:baseline;gap:6px;border:1px solid var(--line);border-radius:6px;padding:5px 9px;color:var(--dim)}
+  .fld span{font-family:var(--mono);font-size:8.5px;letter-spacing:.08em}
+  .fld b{font-family:var(--mono);font-size:11px;font-weight:500}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .chips label{cursor:pointer;font-size:11px;padding:5px 10px;border-radius:6px;border:1px solid var(--line);color:var(--sub)}
+  .chips input{display:none}
+  .chips label:has(input:checked){color:var(--ink);border-color:var(--line2);background:rgba(255,255,255,.06)}
+  .actions{display:flex;align-items:center;gap:14px;margin-top:20px;flex-wrap:wrap}
+  .hint{font-size:10.5px;color:var(--dim)}
+  .two-col{display:grid;grid-template-columns:1.15fr .85fr;gap:20px;align-items:start}
+  .preview-panel{background:linear-gradient(180deg,#0d1118,#0a0d13);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .pv-row{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .pv-row:last-child{border-bottom:none}
+  .pv-row b{font-family:var(--mono);color:var(--sub);font-weight:500}
+  .pv-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+  .pv-tags span{font-family:var(--mono);font-size:8.5px;color:var(--dim);border:1px dashed var(--line2);border-radius:4px;padding:2px 6px}
+  .pv-step{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);font-size:10px;color:var(--dim);line-height:1.9}
+  .pv-step b{color:var(--sub);font-weight:500}
+
+  /* brief */
+  .brief-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}
+  .decisions{display:flex;flex-direction:column;gap:12px}
+  .q-head{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+  .q-no{font-family:var(--mono);font-size:8.5px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-top:2px}
+  .q-title{font-size:13.5px;font-weight:600;margin:0 0 1px}
+  .q-why{font-size:10.5px;color:var(--dim)}
+  .opt{display:block;cursor:pointer;border:1px solid var(--line);border-radius:8px;padding:11px 13px;margin-top:7px;transition:.15s}
+  .opt .t{display:flex;align-items:center;gap:8px;font-size:12px}
+  .opt .t i{width:13px;height:13px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center}
+  .opt .cons{font-size:10px;color:var(--dim);margin-top:4px;padding-left:21px}
+  .opt:hover{border-color:var(--line2)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early],
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon],
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late],
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same],
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early] i,
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon] i,
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late] i,
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same] i,
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch] i{border-color:var(--indigo)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early] i::after,
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon] i::after,
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late] i::after,
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same] i::after,
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+
+  .skeleton{position:sticky;top:76px;background:linear-gradient(180deg,#0d1118,#0a0d13);border:1px solid var(--line2);border-radius:12px;padding:15px 16px}
+  .sk-head{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .sk-head b{font-size:11.5px;font-weight:600}
+  .sk-head .live{margin-left:auto;display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:8.5px;color:var(--mint)}
+  .sk-head .live i{width:5px;height:5px;border-radius:50%;background:var(--mint);animation:blink 2.4s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+  .sk-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:10.5px;color:var(--dim)}
+  .sk-row b{font-family:var(--mono);font-size:11.5px;font-weight:500;color:var(--ink)}
+  .sk{display:none}
+  #rv-early:checked ~ .brief-grid .v-early,
+  #rv-noon:checked ~ .brief-grid .v-noon,
+  #rv-late:checked ~ .brief-grid .v-late,
+  #stay-same:checked ~ .brief-grid .v-same,
+  #stay-switch:checked ~ .brief-grid .v-switch{display:inline;animation:tick .28s ease-out}
+  @keyframes tick{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
+  .sk-strip{margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+  .sk-strip .label{display:block;margin-bottom:6px}
+  .strip{display:none;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;color:var(--sub)}
+  .strip .sep{flex:1;height:1px;background:var(--line)}
+  .strip b{color:var(--ink);font-weight:500}
+  #rv-early:checked ~ .brief-grid .strip-early,
+  #rv-noon:checked ~ .brief-grid .strip-noon,
+  #rv-late:checked ~ .brief-grid .strip-late{display:flex}
+  .sk-judge{display:none;margin-top:9px;padding:7px 9px;border-radius:6px;background:rgba(240,184,114,.07);
+    border:1px solid rgba(240,184,114,.24);color:var(--amber);font-size:9.5px;line-height:1.6}
+  #rv-early:checked ~ .brief-grid .sk-judge,
+  #rv-noon:checked ~ .brief-grid .sk-judge,
+  #rv-late:checked ~ .brief-grid .sk-judge{display:block}
+  .sk-judge span{display:none}
+  #rv-early:checked ~ .brief-grid .j-early,
+  #rv-noon:checked ~ .brief-grid .j-noon,
+  #rv-late:checked ~ .brief-grid .j-late{display:block}
+  #rv-noon:checked ~ .brief-grid .sk-judge{background:rgba(111,227,192,.06);border-color:rgba(111,227,192,.24);color:var(--mint)}
+  #stay-switch:checked ~ .brief-grid .v-switch{color:var(--amber)}
+
+  /* run */
+  .line-wrap{border:1px solid var(--line);border-radius:12px;background:var(--s1);padding:18px}
+  .rail{position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:4px 0 2px}
+  .rail::before{content:"";position:absolute;left:7%;right:7%;top:18px;height:1px;background:var(--line2)}
+  .station{position:relative;text-align:center;opacity:.4;transition:opacity .3s}
+  .station .idx{font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:.08em;margin-bottom:4px}
+  .station .dot{width:28px;height:28px;border-radius:7px;margin:0 auto;display:grid;place-items:center;
+    font-size:10px;font-weight:700;color:#0a0b0d;background:var(--c)}
+  .station .role{font-size:11px;margin-top:6px}
+  .station .out{font-family:var(--mono);font-size:8.5px;color:var(--dim);margin-top:2px;white-space:nowrap}
+  .station::after{content:"✓";position:absolute;right:calc(50% - 24px);top:-2px;font-size:8px;color:var(--mint);opacity:0}
+  #play:checked ~ .page .station{animation:lit .45s both;animation-delay:var(--d)}
+  #play:checked ~ .page .station::after{animation:checkIn .3s both;animation-delay:calc(var(--d) + .3s)}
+  @keyframes lit{to{opacity:1}}
+  @keyframes checkIn{to{opacity:1}}
+  .packet{position:absolute;top:14px;left:7%;width:8px;height:8px;border-radius:50%;background:#fff;
+    box-shadow:0 0 14px rgba(255,255,255,.65);opacity:0}
+  #play:checked ~ .page .packet{animation:packet 4.4s linear both}
+  @keyframes packet{0%{left:7%;opacity:0}6%{opacity:1}94%{opacity:1}100%{left:91%;opacity:0}}
+  .run-body{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:12px;margin-top:14px}
+  .assembly,.issues{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:rgba(255,255,255,.015)}
+  .asm-head,.iss-head{display:flex;justify-content:space-between;font-size:10px;color:var(--sub);margin-bottom:5px}
+  .asm-head .mono,.iss-head em{font-family:var(--mono);font-size:8.5px;color:var(--dim);font-style:normal}
+  .asm-day{display:grid;grid-template-columns:22px 1fr auto;gap:9px;align-items:center;padding:7px 0;
+    border-bottom:1px solid rgba(255,255,255,.05);font-size:10.5px;color:var(--sub);opacity:.3}
+  .asm-day:last-child{border-bottom:none}
+  .asm-day .d{font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+  .asm-day .n{display:flex;align-items:center;gap:6px}
+  .asm-day .n i{width:4px;height:4px;border-radius:50%;background:var(--c)}
+  .asm-day .c{font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+  #play:checked ~ .page .asm-day{animation:asm .35s both;animation-delay:var(--d)}
+  @keyframes asm{to{opacity:1}}
+  .asm-foot{margin-top:7px;font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+  .asm-done{margin-top:6px;font-size:10px;color:var(--mint);opacity:0}
+  #play:checked ~ .page .asm-done{animation:asm .4s 4.5s both}
+  .issue{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:6px 0;
+    border-bottom:1px solid rgba(255,255,255,.05);font-size:10px;color:var(--sub)}
+  .issue:last-child{border-bottom:none}
+  .issue .tag{font-family:var(--mono);font-size:8px;border:1px solid var(--line2);border-radius:3px;padding:0 4px;color:var(--dim)}
+  .issue .st{font-family:var(--mono);font-size:8px;color:var(--amber);white-space:nowrap}
+  .issue.closed .st{color:var(--mint)}
+  .issue.closed .txt{color:var(--dim);text-decoration:line-through}
+  .run-foot{display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap}
+  .run-legend{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+
+  /* ---------- plan ---------- */
+  .plan-head{display:flex;align-items:flex-end;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .plan-head h2{font-size:26px;margin:0;letter-spacing:-.03em}
+  .plan-head .meta{font-size:11px;color:var(--dim);margin-top:3px}
+  .plan-head .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .ver{font-family:var(--mono);font-size:9.5px;padding:3px 8px;border-radius:99px;border:1px solid var(--line);color:var(--sub)}
+  .v9{display:none}
+  #cmd-indoor:checked ~ .page .plan-wrap .v8{display:none}
+  #cmd-indoor:checked ~ .page .plan-wrap .v9{display:inline-block;color:var(--mint);border-color:rgba(111,227,192,.35);background:rgba(111,227,192,.08)}
+
+  .tabs{display:flex;gap:22px;margin-top:12px;border-bottom:1px solid var(--line)}
+  .tabs label{cursor:pointer;font-size:11.5px;color:var(--dim);padding:0 0 10px;border-bottom:1px solid transparent}
+  .tabs label:hover{color:var(--sub)}
+  #app-tt:checked ~ .page .plan-wrap .tabs label[for=app-tt],
+  #app-budget:checked ~ .page .plan-wrap .tabs label[for=app-budget],
+  #app-change:checked ~ .page .plan-wrap .tabs label[for=app-change]{color:var(--ink);border-bottom-color:var(--indigo)}
+  .panel2{display:none;padding-top:14px}
+  #app-tt:checked ~ .page .plan-wrap .p-tt,
+  #app-budget:checked ~ .page .plan-wrap .p-budget,
+  #app-change:checked ~ .page .plan-wrap .p-change{display:block}
+
+  .layout{display:grid;grid-template-columns:132px minmax(0,1fr) 262px;gap:16px;align-items:start;margin-top:14px}
+  #app-budget:checked ~ .page .plan-wrap .rail-days,
+  #app-change:checked ~ .page .plan-wrap .rail-days{display:none}
+  #app-budget:checked ~ .page .plan-wrap .layout,
+  #app-change:checked ~ .page .plan-wrap .layout{grid-template-columns:minmax(0,1fr) 262px}
+  .rail-days{position:sticky;top:74px}
+  .rail-days .label{display:block;margin-bottom:8px}
+  .daybtn{display:block;cursor:pointer;padding:9px 10px 9px 13px;border-left:1px solid var(--line);position:relative;transition:.15s}
+  .daybtn::before{content:"";position:absolute;left:-3px;top:14px;width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.16)}
+  .daybtn .d{font-family:var(--mono);font-size:10px;color:var(--sub)}
+  .daybtn .t{font-size:10.5px;color:var(--dim);margin-top:1px}
+  .daybtn .c{font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:2px}
+  #day-1:checked ~ .page .plan-wrap .daybtn[for=day-1],
+  #day-2:checked ~ .page .plan-wrap .daybtn[for=day-2],
+  #day-3:checked ~ .page .plan-wrap .daybtn[for=day-3],
+  #day-4:checked ~ .page .plan-wrap .daybtn[for=day-4],
+  #day-5:checked ~ .page .plan-wrap .daybtn[for=day-5]{border-left-color:var(--indigo)}
+  #day-1:checked ~ .page .plan-wrap .daybtn[for=day-1]::before,
+  #day-2:checked ~ .page .plan-wrap .daybtn[for=day-2]::before,
+  #day-3:checked ~ .page .plan-wrap .daybtn[for=day-3]::before,
+  #day-4:checked ~ .page .plan-wrap .daybtn[for=day-4]::before,
+  #day-5:checked ~ .page .plan-wrap .daybtn[for=day-5]::before{background:var(--indigo);box-shadow:0 0 8px var(--indigo)}
+
+  .tt{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.015);overflow:visible}
+  .tt .grid{display:grid;grid-template-columns:38px repeat(5,1fr)}
+  .tt .dh{padding:9px 9px 8px;border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+  .tt .dh:last-child{border-right:none}
+  .tt .dh .d{font-family:var(--mono);font-size:9.5px;color:var(--sub)}
+  .tt .dh .w{font-size:9px;color:var(--dim);margin-top:1px}
+  .tt .dh .c{font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:2px}
+  .tt .corner{border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+  .tt .axis{position:relative;border-right:1px solid var(--line)}
+  .tt .axis span{position:absolute;right:4px;font-family:var(--mono);font-size:8px;color:var(--dim);transform:translateY(-50%);background:#0a0d13;padding:0 2px}
+  .tt .col{position:relative;border-right:1px solid var(--line);transition:opacity .25s}
+  .tt .col:last-child{border-right:none}
+  .tt .col::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(180deg,transparent 0 51px,rgba(255,255,255,.04) 51px 52px)}
+  #day-1:checked ~ .page .plan-wrap .tt .col{opacity:.2}
+  #day-1:checked ~ .page .plan-wrap .tt .col[data-d="1"]{opacity:1}
+  #day-2:checked ~ .page .plan-wrap .tt .col{opacity:.2}
+  #day-2:checked ~ .page .plan-wrap .tt .col[data-d="2"]{opacity:1}
+  #day-3:checked ~ .page .plan-wrap .tt .col{opacity:.2}
+  #day-3:checked ~ .page .plan-wrap .tt .col[data-d="3"]{opacity:1}
+  #day-4:checked ~ .page .plan-wrap .tt .col{opacity:.2}
+  #day-4:checked ~ .page .plan-wrap .tt .col[data-d="4"]{opacity:1}
+  #day-5:checked ~ .page .plan-wrap .tt .col{opacity:.2}
+  #day-5:checked ~ .page .plan-wrap .tt .col[data-d="5"]{opacity:1}
+
+  .blk{position:absolute;left:4px;right:4px;border-radius:6px;padding:4px 6px;cursor:pointer;
+    border:1px solid transparent;transition:.15s;z-index:2}
+  .blk:hover{transform:translateY(-1px);box-shadow:0 14px 24px -18px #000;z-index:8}
+  .blk .t{font-family:var(--mono);font-size:8px;color:rgba(255,255,255,.55);display:block}
+  .blk .n{font-size:9.5px;font-weight:600;display:block;line-height:1.25}
+  .blk .s{font-size:8px;color:rgba(255,255,255,.45);display:block}
+  .blk.flight{background:rgba(139,156,255,.16);border-color:rgba(139,156,255,.35);color:#cdd6ff}
+  .blk.transfer{background:repeating-linear-gradient(135deg,rgba(255,255,255,.05),rgba(255,255,255,.05) 4px,rgba(255,255,255,.02) 4px,rgba(255,255,255,.02) 8px);
+    border-color:var(--line);color:var(--sub)}
+  .blk.sight{background:rgba(111,227,192,.14);border-color:rgba(111,227,192,.3);color:#bff2e2}
+  .blk.meal{background:rgba(240,184,114,.12);border-color:rgba(240,184,114,.25);color:#f4d9b4}
+  .blk.hotel{background:rgba(255,255,255,.05);border-color:var(--line);color:var(--sub)}
+  .blk.free{background:rgba(255,255,255,.015);border:1px dashed rgba(255,255,255,.14);color:var(--dim);font-style:italic}
+  .new-1121{display:none}
+  #cmd-indoor:checked ~ .page .plan-wrap .old-1121{display:none}
+  #cmd-indoor:checked ~ .page .plan-wrap .new-1121{display:block;background:rgba(111,227,192,.22);border-color:rgba(111,227,192,.5)}
+  .col input:checked + .blk{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink);z-index:12}
+  .pop{display:none;position:absolute;left:-4px;bottom:calc(100% + 8px);width:200px;z-index:20;
+    background:#121620;border:1px solid var(--line2);border-radius:8px;padding:9px 11px;font-size:9.5px;
+    line-height:1.6;color:var(--sub);box-shadow:0 24px 44px -22px #000}
+  .pop b{display:block;font-size:10.5px;color:var(--ink);margin-bottom:2px}
+  .col input:checked + .blk .pop{display:block}
+  .col:last-child .pop{left:auto;right:-4px}
+
+  .legend{display:flex;gap:12px;flex-wrap:wrap;padding:9px 11px;border-top:1px solid var(--line);font-size:9px;color:var(--dim)}
+  .legend i{display:inline-block;width:6px;height:6px;border-radius:2px;margin-right:4px}
+
+  .cmdbar{margin-top:12px;display:flex;align-items:center;gap:10px;padding:8px 10px 8px 12px;
+    border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.02);flex-wrap:wrap}
+  .cmdbar .slash{font-family:var(--mono);color:var(--indigo);font-size:12px}
+  .cmdbar .text{flex:1;font-size:11.5px;color:var(--sub);min-width:180px}
+  .cmdchip{cursor:pointer;font-size:10.5px;font-weight:600;color:#0a0b0d;background:var(--ink);padding:5px 10px;border-radius:6px}
+  .cmdreset{cursor:pointer;font-size:10px;color:var(--dim);padding:5px 9px;border:1px solid var(--line);border-radius:6px}
+  .applied{display:none;margin-top:8px;font-size:10px;color:var(--mint);background:rgba(111,227,192,.06);
+    border:1px solid rgba(111,227,192,.22);border-radius:7px;padding:7px 10px}
+  #cmd-indoor:checked ~ .page .plan-wrap .applied{display:block}
+  #cmd-indoor:checked ~ .page .plan-wrap .cmdchip{opacity:.4}
+  #cmd-none:checked ~ .page .plan-wrap .text::after{content:"　· 未执行";color:var(--dim)}
+
+  .side .sc{padding:12px 14px;margin-bottom:9px}
+  .side h3{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 7px}
+  .side .row{display:flex;justify-content:space-between;font-size:10.5px;color:var(--sub);padding:3px 0}
+  .side .row b{font-family:var(--mono);color:var(--ink);font-weight:500}
+  .warnbox{background:rgba(240,184,114,.06);border:1px solid rgba(240,184,114,.22);border-radius:7px;
+    padding:8px 10px;font-size:10px;color:var(--amber);line-height:1.65;margin-top:7px}
+  .rolemini{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--sub);padding:2px 0}
+  .rolemini i{width:4px;height:4px;border-radius:50%}
+  .rolemini b{margin-left:auto;color:var(--mint);font-weight:500;font-size:9px}
+
+  /* budget tab */
+  .ledger{display:grid;grid-template-columns:1fr 260px;gap:24px}
+  .big{font-family:var(--mono);font-size:34px;letter-spacing:-.03em}
+  .track{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;margin:12px 0 7px}
+  .track i{display:block;height:100%}
+  .scen{display:flex;gap:6px;margin:14px 0}
+  .scen label{cursor:pointer;font-size:10.5px;padding:5px 10px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .scen label:has(input:checked){color:var(--ink);border-color:var(--line2);background:rgba(255,255,255,.06)}
+  .sp{display:none}
+  #scen-base:checked ~ .ledger .sp-base,
+  #scen-cheap:checked ~ .ledger .sp-cheap,
+  #scen-short:checked ~ .ledger .sp-short{display:block}
+  .rows div{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);padding:6px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .rows b{font-family:var(--mono);color:var(--ink);font-weight:500}
+  .note3{font-size:10.5px;color:var(--dim);line-height:1.8;margin-top:10px;max-width:34em}
+
+  /* change tab */
+  .chg{display:grid;grid-template-columns:54px 1fr;gap:12px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+  .chg .d{font-family:var(--mono);font-size:9.5px;color:var(--indigo)}
+  .chg .from{color:rgba(242,139,160,.85);text-decoration:line-through}
+  .chg .to{color:var(--mint)}
+  .chg .why{font-size:9.5px;color:var(--dim);margin-top:2px}
+  .chg .why code{font-family:var(--mono);font-size:8.5px;background:rgba(255,255,255,.05);padding:0 4px;border-radius:3px}
+  .newchange{display:none}
+  #cmd-indoor:checked ~ .page .plan-wrap .newchange{display:grid}
+
+  /* ---------- share ---------- */
+  .share-wrap{max-width:760px;margin:0 auto;padding:54px 28px 80px;text-align:center}
+  .share-wrap h2{font-size:clamp(28px,3.6vw,40px);margin:14px 0 8px}
+  .share-wrap .sub{margin:0 auto 28px}
+  .trip-card{text-align:left;background:linear-gradient(180deg,#0e121a,#0a0d13);border:1px solid var(--line2);
+    border-radius:16px;padding:22px;box-shadow:0 40px 90px -50px #000}
+  .tc-top{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .tc-top h3{font-size:18px;font-weight:600;margin:0;letter-spacing:-.02em}
+  .tc-top .m{font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:3px}
+  .tc-top .ok{margin-left:auto;font-size:9.5px;color:var(--mint);border:1px solid rgba(111,227,192,.3);border-radius:99px;padding:2px 8px;white-space:nowrap}
+  .tc-days{margin:4px 0 12px}
+  .tc-day{display:grid;grid-template-columns:34px 1fr auto;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px}
+  .tc-day .d{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .tc-day .n{color:var(--sub)}
+  .tc-day .c{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .tc-foot{display:flex;align-items:center;gap:16px;padding-top:12px;font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+  .tc-foot b{color:var(--sub);font-weight:500}
+  .share-actions{display:flex;justify-content:center;gap:10px;margin-top:24px;flex-wrap:wrap}
+  .share-note{margin-top:18px;font-family:var(--mono);font-size:8.5px;color:var(--dim);letter-spacing:.08em}
+  .recap{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px;text-align:left}
+  .recap div{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .recap .k{font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:.08em}
+  .recap .v{font-family:var(--mono);font-size:16px;margin-top:2px}
+  .recap .s{font-size:9px;color:var(--dim);margin-top:1px}
+
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  @media (max-width:1100px){
+    .home{grid-template-columns:1fr;gap:30px;padding:22px 22px 20px}
+    .deck-wrap{height:380px}
+    .big-n{font-size:220px;right:0;top:-30px}
+    .features{grid-template-columns:1fr;gap:14px;padding:0 22px 16px}
+    .foot{padding:12px 22px 18px}
+    .two-col,.brief-grid,.run-body,.ledger{grid-template-columns:1fr}
+    .skeleton{position:static}
+    .layout{grid-template-columns:1fr}
+    .rail-days{display:flex;gap:6px;overflow-x:auto;position:static}
+    .rail-days .label{display:none}
+    .daybtn{border-left:none;border-top:1px solid var(--line);min-width:88px;padding:7px 9px}
+    .tt{overflow-x:auto}
+    .tt .grid{min-width:700px}
+    .side{order:2}
+    .page{padding:28px 18px 60px}
+    .page.wide{padding:20px 18px 50px}
+    .steps{display:none}
+    .plan-head{flex-wrap:wrap}
+    .plan-head .right{margin-left:0;flex-wrap:wrap}
+    .recap{grid-template-columns:1fr}
+  }
+  @media (max-width:640px){
+    .rail{grid-template-columns:repeat(5,88px);overflow-x:auto;justify-content:start}
+    .rail::before{display:none}
+    .packet{display:none}
+    .station .out{font-size:8px}
+    .big-n{display:none}
+    h1{font-size:clamp(34px,10vw,46px)}
+  }
+</style>
+</head>
+<body>
+
+<!-- 场景 -->
+<input class="sr" type="radio" name="scene" id="home" checked>
+<input class="sr" type="radio" name="scene" id="demand">
+<input class="sr" type="radio" name="scene" id="brief">
+<input class="sr" type="radio" name="scene" id="run">
+<input class="sr" type="radio" name="scene" id="plan">
+<input class="sr" type="radio" name="scene" id="share">
+
+<header class="hdr">
+  <div class="brand"><i></i>行程协作 <small>PLANNER</small></div>
+  <nav class="steps">
+    <span class="st-home">01 入口</span>
+    <span class="st-demand">02 需求</span>
+    <span class="st-brief">03 取舍</span>
+    <span class="st-run">04 运行</span>
+    <span class="st-plan">05 方案</span>
+    <span class="st-share">06 交付</span>
+  </nav>
+  <div class="right">
+    <span class="tag">演示数据</span>
+    <span class="tag live">0 脚本</span>
+    <label class="reset" for="home">重新开始</label>
+  </div>
+</header>
+
+<main class="stage">
+
+  <!-- ================= 01 入口 ================= -->
+  <section class="scene s-home">
+    <div class="home">
+      <div>
+        <div class="eyebrow"><i></i><span class="label">multi-agent travel planning</span></div>
+        <h1>旅行规划，<br><span>应该经得起审阅。</span></h1>
+        <p class="lede">主控拆任务，交通住宿与本地体验各自交付，独立评审做硬约束校验，文案整合成稿。每一处改动都有理由、有版本、可回滚。</p>
+        <div class="cta-row">
+          <label class="btn" for="demand">开始规划</label>
+          <label class="btn ghost" for="plan">看完整示例</label>
+        </div>
+        <div class="meta-line">
+          <span><b>5</b> 个角色</span><span><b>15</b> 次请求</span><span><b>2′02″</b> 平均耗时</span><span><b>真实</b> 模型</span>
+        </div>
+      </div>
+
+      <div class="deck-wrap" aria-hidden="true">
+        <div class="big-n">05</div>
+        <div class="deck">
+          <div class="card"><span class="d">D1</span><span><span class="t">抵达 · 安顿</span><span class="s">机场 → 酒店 · 2 处</span></span><span class="c">08:05</span></div>
+          <div class="card"><span class="d">D2</span><span><span class="t">老城 · 步行</span><span class="s">一条巷子走到晚 · 2 处</span></span><span class="c">09:00</span></div>
+          <div class="card hot"><span class="d">D3</span><span><span class="t">近郊 · 半日</span><span class="s">午后有雨，已改室内 · 1 处</span></span><span class="c">10:30</span>
+            <span class="flag">评审建议已采纳</span></div>
+          <div class="card"><span class="d">D4</span><span><span class="t">雨天预案 · 室内</span><span class="s">两馆，均免费 · 2 处</span></span><span class="c">09:00</span></div>
+          <div class="card"><span class="d">D5</span><span><span class="t">返程 · 留足时间</span><span class="s">提前 150 分钟到机场 · 0 处</span></span><span class="c">09:20</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="feat"><div class="n">01 / SPLIT</div><h3>分工，而不是一个模型硬编</h3><p>五个角色各做一件事，交付物独立可检查。</p></div>
+      <div class="feat"><div class="n">02 / VERIFY</div><h3>硬约束校验</h3><p>预算、闭馆、赶机、体力；不过就退回重排。</p></div>
+      <div class="feat"><div class="n">03 / EDIT</div><h3>改一处，只动一天</h3><p>下指令改某一天，其余不动；版本可回滚。</p></div>
+    </div>
+
+    <footer class="foot">
+      <span>MULTI-AGENT PLANNER · PROTOTYPE</span>
+      <span class="spacer"></span>
+      <span>V1.0 · 2026</span>
+    </footer>
+  </section>
+
+  <!-- ================= 02 需求 ================= -->
+  <section class="scene s-demand">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="home">← 返回</label>
+        <span class="step-no">STEP 02 / 06</span>
+        <span class="pill">NEW TRIP</span>
+      </div>
+      <h2>先说说这趟旅行。</h2>
+      <p class="sub">一句话就够。没说的部分，下一步团队会问你，不会替你猜。</p>
+
+      <div class="two-col">
+        <div class="panel">
+          <textarea placeholder="例如：成都 5 天，2 人，带一位老人，预算 8000，想看人文、吃点好的，节奏别太赶"></textarea>
+          <div class="fields">
+            <div class="fld"><span>出发</span><b>—</b></div>
+            <div class="fld"><span>到达</span><b>—</b></div>
+            <div class="fld"><span>日期</span><b>—</b></div>
+            <div class="fld"><span>人数</span><b>—</b></div>
+            <div class="fld"><span>预算</span><b>—</b></div>
+          </div>
+          <div class="chips">
+            <label><input type="checkbox">带老人</label>
+            <label><input type="checkbox">带儿童</label>
+            <label><input type="checkbox">人文</label>
+            <label><input type="checkbox">美食</label>
+            <label><input type="checkbox">自然</label>
+            <label><input type="checkbox">节奏适中</label>
+          </div>
+        </div>
+
+        <aside class="preview-panel">
+          <div class="label" style="margin-bottom:8px">解析预览</div>
+          <div class="pv-row"><span>目的地</span><b>—</b></div>
+          <div class="pv-row"><span>天数</span><b>—</b></div>
+          <div class="pv-row"><span>同行</span><b>—</b></div>
+          <div class="pv-row"><span>预算</span><b>—</b></div>
+          <div class="pv-tags"><span>偏好 —</span><span>节奏 —</span></div>
+          <div class="pv-step">填写后，团队会：<br><b>① 解析需求</b> → <b>② 问你两个取舍</b> → <b>③ 开工</b></div>
+        </aside>
+      </div>
+
+      <div class="actions">
+        <label class="btn" for="brief">继续，确认取舍 →</label>
+        <span class="hint">原型演示：继续会用一份示例数据走完流程</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 03 取舍 ================= -->
+  <section class="scene s-brief">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="demand">← 改需求</label>
+        <span class="step-no">STEP 03 / 06</span>
+        <span class="pill">SAMPLE DATA</span>
+      </div>
+      <h2>每选一次，骨架就变一次。</h2>
+      <p class="sub">只有你能定的两件事。选完之后，骨架上会立刻写出代价——不是形容词。</p>
+
+      <div class="brief-wrap">
+        <input class="sr" type="radio" name="rv" id="rv-early">
+        <input class="sr" type="radio" name="rv" id="rv-noon" checked>
+        <input class="sr" type="radio" name="rv" id="rv-late">
+        <input class="sr" type="radio" name="stay" id="stay-same" checked>
+        <input class="sr" type="radio" name="stay" id="stay-switch">
+
+        <div class="brief-grid">
+          <div class="decisions">
+            <div class="panel">
+              <div class="q-head"><span class="q-no">01</span><div><div class="q-title">返程怎么走</div><div class="q-why">最后一天有两班可选</div></div></div>
+              <label class="opt" for="rv-early"><span class="t"><i></i>尽量早回</span><span class="cons">代价：05:50 起床，前一晚 21:30 前必须睡</span></label>
+              <label class="opt" for="rv-noon"><span class="t"><i></i>中午前后，别太赶</span><span class="cons">代价：到家接近晚高峰</span></label>
+              <label class="opt" for="rv-late"><span class="t"><i></i>傍晚再走</span><span class="cons">代价：到家约 22:10，老人较累</span></label>
+            </div>
+            <div class="panel">
+              <div class="q-head"><span class="q-no">02</span><div><div class="q-title">住宿怎么住</div><div class="q-why">四晚同店省心，换一次更近机场</div></div></div>
+              <label class="opt" for="stay-same"><span class="t"><i></i>四晚同一家</span><span class="cons">代价：最后一天去机场约 80 分钟</span></label>
+              <label class="opt" for="stay-switch"><span class="t"><i></i>最后一晚换机场附近</span><span class="cons">代价：多搬一次行李，预算 +300</span></label>
+            </div>
+          </div>
+
+          <aside class="skeleton">
+            <div class="sk-head"><b>行程骨架</b><span class="live"><i></i>实时</span></div>
+            <div class="sk-row"><span>返程航班</span><b><span class="sk v-early">08:00</span><span class="sk v-noon">13:00</span><span class="sk v-late">18:40</span></b></div>
+            <div class="sk-row"><span>到家时间</span><b><span class="sk v-early">12:30</span><span class="sk v-noon">18:30</span><span class="sk v-late">22:10</span></b></div>
+            <div class="sk-row"><span>住宿</span><b><span class="sk v-same">1 家 · 4 晚</span><span class="sk v-switch">2 家 · 3+1</span></b></div>
+            <div class="sk-row"><span>预计花费</span><b><span class="sk v-same">¥7,960</span><span class="sk v-switch">¥8,260</span></b></div>
+            <div class="sk-row"><span>体力消耗</span><b><span class="sk v-early">偏紧</span><span class="sk v-noon">适中</span><span class="sk v-late">偏松</span></b></div>
+            <div class="sk-strip">
+              <span class="label">最后一天</span>
+              <div class="strip strip-early"><span>05:50 起床</span><span class="sep"></span><span>08:00 起飞</span><span class="sep"></span><b>12:30 到家</b></div>
+              <div class="strip strip-noon"><span>09:20 出发</span><span class="sep"></span><span>13:00 起飞</span><span class="sep"></span><b>18:30 到家</b></div>
+              <div class="strip strip-late"><span>12:00 退房</span><span class="sep"></span><span>18:40 起飞</span><span class="sep"></span><b>22:10 到家</b></div>
+            </div>
+            <div class="sk-judge">
+              <span class="j-early">⚠ 05:50 起床会被评审标记为体力风险</span>
+              <span class="j-noon">✓ 节奏在可接受范围，评审不会拦</span>
+              <span class="j-late">⚠ 22:10 到家会被标记为疲劳风险</span>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="actions">
+        <label class="btn" for="run">确认，团队开工 →</label>
+        <label class="back" for="demand">← 回去改需求</label>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 04 运行 ================= -->
+  <section class="scene s-run">
+    <input class="sr" type="checkbox" id="play">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="brief">← 改取舍</label>
+        <span class="step-no">STEP 04 / 06</span>
+        <span class="pill">SAMPLE DATA</span>
+      </div>
+      <h2>五个角色，把方案接力装出来。</h2>
+      <p class="sub">每个角色交付一个可检查的中间产物，评审不过就退回重排。你看到的不是黑箱，是装配过程。</p>
+
+      <div class="line-wrap">
+        <div class="rail">
+          <div class="station" style="--c:#8b9cff;--d:.1s"><div class="idx">01</div><div class="dot">主</div><div class="role">主控</div><div class="out">2 个任务</div></div>
+          <div class="station" style="--c:#f0b872;--d:.9s"><div class="idx">02</div><div class="dot">交</div><div class="role">交通住宿</div><div class="out">2 航班 · 1 酒店</div></div>
+          <div class="station" style="--c:#6fe3c0;--d:1.8s"><div class="idx">03</div><div class="dot">本</div><div class="role">本地体验</div><div class="out">5 天 · 8 处</div></div>
+          <div class="station" style="--c:#c0a8ff;--d:2.7s"><div class="idx">04</div><div class="dot">审</div><div class="role">独立评审</div><div class="out">2 条问题</div></div>
+          <div class="station" style="--c:#9ec5fe;--d:3.6s"><div class="idx">05</div><div class="dot">文</div><div class="role">文案</div><div class="out">1 份文稿</div></div>
+          <div class="packet"></div>
+        </div>
+
+        <div class="run-body">
+          <div class="assembly">
+            <div class="asm-head"><span>正在装配</span><span class="mono">v0 → v1</span></div>
+            <div class="asm-day" style="--d:.4s"><span class="d">D1</span><span class="n"><i style="--c:#8b9cff"></i>抵达 · 机场 → 酒店</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:1.2s"><span class="d">D2</span><span class="n"><i style="--c:#6fe3c0"></i>老城 · 步行</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:2.0s"><span class="d">D3</span><span class="n"><i style="--c:#6fe3c0"></i>近郊 · 半日</span><span class="c">1 处</span></div>
+            <div class="asm-day" style="--d:2.8s"><span class="d">D4</span><span class="n"><i style="--c:#f0b872"></i>雨天预案 · 室内</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:3.6s"><span class="d">D5</span><span class="n"><i style="--c:#8b9cff"></i>返程 · 留足时间</span><span class="c">0 处</span></div>
+            <div class="asm-foot">5 天 · 8 处 · ¥7,960 · 15 次请求</div>
+            <div class="asm-done">装配完成 · v1 · 评审通过</div>
+          </div>
+
+          <div class="issues">
+            <div class="iss-head"><span>问题清单</span><em>2 开 / 2 关</em></div>
+            <div class="issue"><span class="tag">BUDGET</span><span class="txt">预算余量仅 ¥40</span><span class="st">未关闭</span></div>
+            <div class="issue closed"><span class="tag">RAIN</span><span class="txt">第 3 天户外改室内</span><span class="st">已关闭</span></div>
+            <div class="issue"><span class="tag">TRANSFER</span><span class="txt">机场接驳重复</span><span class="st">未关闭</span></div>
+            <div class="issue closed"><span class="tag">PACE</span><span class="txt">第 4 天下午空档不足</span><span class="st">已关闭</span></div>
+          </div>
+        </div>
+
+        <div class="run-foot">
+          <label class="btn" for="play">▶ 播放装配</label>
+          <label class="btn ghost" for="plan">查看完整方案 →</label>
+          <span class="run-legend">15 REQUESTS · 2′02″</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 05 方案 ================= -->
+  <section class="scene s-plan">
+    <input class="sr" type="radio" name="app" id="app-tt" checked>
+    <input class="sr" type="radio" name="app" id="app-budget">
+    <input class="sr" type="radio" name="app" id="app-change">
+
+    <input class="sr" type="radio" name="day" id="day-all" checked>
+    <input class="sr" type="radio" name="day" id="day-1">
+    <input class="sr" type="radio" name="day" id="day-2">
+    <input class="sr" type="radio" name="day" id="day-3">
+    <input class="sr" type="radio" name="day" id="day-4">
+    <input class="sr" type="radio" name="day" id="day-5">
+
+    <input class="sr" type="radio" name="cmd" id="cmd-none" checked>
+    <input class="sr" type="radio" name="cmd" id="cmd-indoor">
+
+    <div class="page wide">
+      <div class="plan-wrap">
+        <div class="plan-head">
+          <div>
+            <div class="label">STEP 05 / 06 · 方案</div>
+            <h2>上海—成都 5 日适老行程</h2>
+            <div class="meta">以春熙路为大本营 · 每日 1–2 处 · 雨天换室内</div>
+          </div>
+          <div class="right">
+            <span class="ver v8">已评审 v8</span>
+            <span class="ver v9">已评审 v9</span>
+            <span class="ver">¥7,960 / 8,000</span>
+            <label class="btn ghost sm" for="demand">重新提需求</label>
+            <label class="btn sm" for="share">交付 →</label>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <label for="app-tt">时刻表</label>
+          <label for="app-budget">预算</label>
+          <label for="app-change">变更</label>
+        </div>
+
+        <div class="layout">
+          <aside class="rail-days">
+            <span class="label">五天</span>
+            <label class="daybtn" for="day-all"><div class="d">全部</div><div class="t">5 天</div><div class="c">¥7,960</div></label>
+            <label class="daybtn" for="day-1"><div class="d">11-20</div><div class="t">抵达</div><div class="c">¥2,860</div></label>
+            <label class="daybtn" for="day-2"><div class="d">11-21</div><div class="t">人文</div><div class="c">¥1,000</div></label>
+            <label class="daybtn" for="day-3"><div class="d">11-22</div><div class="t">雨天</div><div class="c">¥900</div></label>
+            <label class="daybtn" for="day-4"><div class="d">11-23</div><div class="t">老城</div><div class="c">¥1,000</div></label>
+            <label class="daybtn" for="day-5"><div class="d">11-24</div><div class="t">返程</div><div class="c">¥2,200</div></label>
+          </aside>
+
+          <div>
+            <div class="panels">
+              <div class="panel2 p-tt">
+                <div class="tt">
+                  <div class="grid">
+                    <div class="corner"></div>
+                    <div class="dh"><div class="d">11-20</div><div class="w">抵达 · 多云</div><div class="c">¥2,860</div></div>
+                    <div class="dh"><div class="d">11-21</div><div class="w">人文 · 晴</div><div class="c">¥1,000</div></div>
+                    <div class="dh"><div class="d">11-22</div><div class="w">雨天 · 小雨</div><div class="c">¥900</div></div>
+                    <div class="dh"><div class="d">11-23</div><div class="w">老城 · 阴</div><div class="c">¥1,000</div></div>
+                    <div class="dh"><div class="d">11-24</div><div class="w">返程 · 中雨</div><div class="c">¥2,200</div></div>
+
+                    <div class="axis" style="height:728px">
+                      <span style="top:0px">08</span><span style="top:104px">10</span><span style="top:208px">12</span>
+                      <span style="top:312px">14</span><span style="top:416px">16</span><span style="top:520px">18</span>
+                      <span style="top:624px">20</span>
+                    </div>
+
+                    <div class="col" data-d="1" style="height:728px">
+                      <input class="sr" type="radio" name="blk" id="b1">
+                      <label class="blk flight" for="b1" style="top:4px;height:169px">
+                        <span class="t">08:05–11:20</span><span class="n">MU5401 上海→成都</span><span class="s">2 人 ¥1,960</span>
+                        <span class="pop"><b>MU5401 · 08:05–11:20</b>11:20 落地天府，含 23kg 行李；价格未预订。</span>
+                      </label>
+                      <label class="blk transfer" style="top:174px;height:73px"><span class="t">11:20–12:40</span><span class="n">机场→酒店</span></label>
+                      <label class="blk sight" style="top:251px;height:104px"><span class="t">12:50–14:50</span><span class="n">春熙路太古里</span></label>
+                      <label class="blk meal" style="top:546px;height:65px"><span class="t">18:30</span><span class="n">晚餐窗口</span></label>
+                      <label class="blk hotel" style="top:676px;height:52px"><span class="t">21:00</span><span class="n">入住 · 第 1 晚</span></label>
+                    </div>
+
+                    <div class="col" data-d="2" style="height:728px">
+                      <input class="sr" type="radio" name="blk" id="b2">
+                      <label class="blk sight" for="b2" style="top:52px;height:78px">
+                        <span class="t">09:00–10:30</span><span class="n">杜甫草堂</span><span class="s">50 元/人</span>
+                        <span class="pop"><b>杜甫草堂 · 09:00–10:30</b>园内平缓、多处可坐；建议停留 90 分钟。</span>
+                      </label>
+                      <label class="blk meal" style="top:208px;height:52px"><span class="t">12:00</span><span class="n">回酒店午休</span></label>
+                      <label class="blk old-1121 sight" style="top:260px;height:104px"><span class="t">13:00–15:00</span><span class="n">宽窄巷子</span></label>
+                      <label class="blk new-1121 sight" style="top:260px;height:104px"><span class="t">13:00–15:00</span><span class="n">成都博物馆（室内）</span><span class="s">免费 · 需预约</span></label>
+                      <label class="blk free" style="top:364px;height:182px"><span class="t">15:00</span><span class="n">自由时间</span></label>
+                      <label class="blk hotel" style="top:676px;height:52px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    </div>
+
+                    <div class="col" data-d="3" style="height:728px">
+                      <label class="blk sight" style="top:52px;height:104px"><span class="t">09:00–11:00</span><span class="n">成都博物馆</span></label>
+                      <label class="blk meal" style="top:182px;height:52px"><span class="t">11:30</span><span class="n">午餐</span></label>
+                      <label class="blk sight" style="top:260px;height:104px"><span class="t">13:00–15:00</span><span class="n">四川博物院</span></label>
+                      <label class="blk free" style="top:364px;height:182px"><span class="t">15:00</span><span class="n">自由时间</span></label>
+                      <label class="blk hotel" style="top:676px;height:52px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    </div>
+
+                    <div class="col" data-d="4" style="height:728px">
+                      <label class="blk sight" style="top:26px;height:78px"><span class="t">08:30–10:00</span><span class="n">武侯祠</span></label>
+                      <label class="blk sight" style="top:130px;height:78px"><span class="t">10:30–12:00</span><span class="n">锦里古街</span></label>
+                      <label class="blk meal" style="top:208px;height:52px"><span class="t">12:00</span><span class="n">午餐（就地）</span></label>
+                      <label class="blk free" style="top:260px;height:286px"><span class="t">13:00</span><span class="n">自由时间</span></label>
+                      <label class="blk hotel" style="top:676px;height:52px"><span class="t">21:00</span><span class="n">回酒店</span></label>
+                    </div>
+
+                    <div class="col" data-d="5" style="height:728px">
+                      <input class="sr" type="radio" name="blk" id="b3">
+                      <label class="blk transfer" for="b3" style="top:70px;height:60px">
+                        <span class="t">09:20–10:30</span><span class="n">酒店→天府机场</span>
+                        <span class="pop"><b>酒店 → 天府机场</b>按起飞前 150 分钟到达；当天中雨，建议再加 20 分钟。</span>
+                      </label>
+                      <label class="blk flight" style="top:260px;height:160px"><span class="t">13:00–16:05</span><span class="n">MU5402 成都→上海</span><span class="s">2 人 ¥1,920</span></label>
+                    </div>
+                  </div>
+                  <div class="legend">
+                    <span><i style="background:#8b9cff"></i>航班</span>
+                    <span><i style="background:#6fe3c0"></i>景点</span>
+                    <span><i style="background:rgba(255,255,255,.25)"></i>接驳</span>
+                    <span><i style="background:#f0b872"></i>餐食</span>
+                    <span><i style="background:rgba(255,255,255,.12)"></i>住宿</span>
+                  </div>
+                </div>
+
+                <div class="cmdbar">
+                  <span class="slash">/</span>
+                  <span class="text">把 11-21 下午换成室内</span>
+                  <label class="cmdchip" for="cmd-indoor">执行</label>
+                  <label class="cmdreset" for="cmd-none">还原</label>
+                </div>
+                <div class="applied">已只改 11-21：宽窄巷子 → 成都博物馆（室内），评审通过，计划书重写为 v9。</div>
+              </div>
+
+              <div class="panel2 p-budget">
+                <input class="sr" type="radio" name="scen" id="scen-base" checked>
+                <input class="sr" type="radio" name="scen" id="scen-cheap">
+                <input class="sr" type="radio" name="scen" id="scen-short">
+                <div class="ledger">
+                  <div>
+                    <div class="scen">
+                      <label for="scen-base">当前方案</label>
+                      <label for="scen-cheap">换便宜酒店</label>
+                      <label for="scen-short">减一天</label>
+                    </div>
+                    <div class="sp sp-base">
+                      <div class="big">¥7,960</div>
+                      <div class="track"><i style="width:99.5%;background:linear-gradient(90deg,#8b9cff,#f28ba0)"></i></div>
+                      <div class="meta-line" style="margin-top:0"><span>已用 99.5%</span><span>余 ¥40</span></div>
+                      <div class="note3">交通 3,880 · 住宿 2,080 · 餐饮 1,120 · 门票 600 · 市内 280。余量几乎为零：改任何一天都可能超支。</div>
+                    </div>
+                    <div class="sp sp-cheap">
+                      <div class="big">¥7,660</div>
+                      <div class="track"><i style="width:95.7%;background:linear-gradient(90deg,#6fe3c0,#3f8f74)"></i></div>
+                      <div class="meta-line" style="margin-top:0"><span>已用 95.7%</span><span>余 ¥340</span></div>
+                      <div class="note3">同区换一家 3 星，约 ¥450/晚。代价：评价与早餐质量未知，需你确认能否接受。</div>
+                    </div>
+                    <div class="sp sp-short">
+                      <div class="big">¥6,060</div>
+                      <div class="track"><i style="width:75.8%;background:linear-gradient(90deg,#8b9cff,#3f5f9f)"></i></div>
+                      <div class="meta-line" style="margin-top:0"><span>已用 75.8%</span><span>余 ¥1,940</span></div>
+                      <div class="note3">11-24 改高铁并少住一晚。代价：多 4 小时车程，老人更累。</div>
+                    </div>
+                  </div>
+                  <div class="panel" style="padding:14px">
+                    <div class="label" style="margin-bottom:6px">当前方案 · 分项</div>
+                    <div style="font-size:9px;color:var(--dim);margin-bottom:4px">对比基准，不随左侧场景变化</div>
+                    <div class="rows">
+                      <div><span>交通</span><b>3,880</b></div>
+                      <div><span>住宿</span><b>2,080</b></div>
+                      <div><span>餐饮</span><b>1,120</b></div>
+                      <div><span>门票</span><b>600</b></div>
+                      <div><span>市内</span><b>280</b></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel2 p-change">
+                <div class="chg newchange"><div class="d">11-21</div><div>
+                  <div><span class="from">宽窄巷子（户外）</span> <span style="color:var(--dim)">→</span> <span class="to">成都博物馆（室内）</span></div>
+                  <div class="why">按你的指令调整，评审复核通过 · <code>USER_REQUEST</code></div>
+                </div></div>
+                <div class="chg"><div class="d">11-22</div><div>
+                  <div><span class="from">人民公园、浣花溪公园</span> <span style="color:var(--dim)">→</span> <span class="to">成都博物馆、四川博物院</span></div>
+                  <div class="why">当天小雨，评审提示室内优先 · <code>RAIN_OUTDOOR</code> 已关闭</div>
+                </div></div>
+                <div class="chg"><div class="d">11-24</div><div>
+                  <div><span class="from">两条送机</span> <span style="color:var(--dim)">→</span> <span class="to">合并为一条 09:20</span></div>
+                  <div class="why">硬校验判定重复接驳 · <code>AIRPORT_TRANSFER_DUPLICATE</code> 已关闭</div>
+                </div></div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="side">
+            <div class="sc panel">
+              <h3>待你判断</h3>
+              <div class="row"><span>预算余量</span><b style="color:var(--amber)">¥40</b></div>
+              <div class="warnbox">换酒店或加景点都会超支；要改先看「预算」里的替代方案。</div>
+            </div>
+            <div class="sc panel">
+              <h3>团队</h3>
+              <div class="rolemini"><i style="background:#8b9cff"></i>主控<b>已完成</b></div>
+              <div class="rolemini"><i style="background:#f0b872"></i>交通住宿<b>已交付</b></div>
+              <div class="rolemini"><i style="background:#6fe3c0"></i>本地体验<b>已交付</b></div>
+              <div class="rolemini"><i style="background:#c0a8ff"></i>独立评审<b>已通过</b></div>
+              <div class="rolemini"><i style="background:#9ec5fe"></i>文案<b>已整合</b></div>
+            </div>
+            <div class="sc panel">
+              <h3>还不知道的事</h3>
+              <div class="row"><span>房型 / 早餐</span><span>待确认</span></div>
+              <div class="row"><span>两馆预约</span><span>待确认</span></div>
+              <div class="row"><span>机场车费</span><span>估算</span></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 06 交付 ================= -->
+  <section class="scene s-share">
+    <div class="share-wrap">
+      <div class="label">STEP 06 / 06 · 交付</div>
+      <h2>方案已交付。</h2>
+      <p class="sub">一份可读、可改、可追溯的行程。发给同行的人，或自己带走。</p>
+
+      <div class="trip-card">
+        <div class="tc-top">
+          <div>
+            <h3>上海—成都 5 日适老行程</h3>
+            <div class="m">2026.11.20 — 11.24 · 2 人 · 含老人 · ¥7,960 / 8,000</div>
+          </div>
+          <span class="ok">已评审</span>
+        </div>
+        <div class="tc-days">
+          <div class="tc-day"><span class="d">D1</span><span class="n">抵达 · 机场 → 酒店 · 太古里</span><span class="c">08:05</span></div>
+          <div class="tc-day"><span class="d">D2</span><span class="n">杜甫草堂 · 宽窄巷子</span><span class="c">09:00</span></div>
+          <div class="tc-day"><span class="d">D3</span><span class="n">成都博物馆 · 四川博物院（雨天）</span><span class="c">09:00</span></div>
+          <div class="tc-day"><span class="d">D4</span><span class="n">武侯祠 · 锦里古街</span><span class="c">08:30</span></div>
+          <div class="tc-day"><span class="d">D5</span><span class="n">酒店 → 天府机场 · 返程</span><span class="c">09:20</span></div>
+        </div>
+        <div class="tc-foot">
+          <span>5 天 · 8 处 · ¥7,960</span>
+          <span class="spacer" style="flex:1"></span>
+          <b>15 REQUESTS · 2′02″</b>
+        </div>
+      </div>
+
+      <div class="recap">
+        <div><div class="k">角色</div><div class="v">5</div><div class="s">全部交付</div></div>
+        <div><div class="k">问题</div><div class="v">2 / 2</div><div class="s">已关闭 / 保留</div></div>
+        <div><div class="k">版本</div><div class="v">已评审</div><div class="s">可回滚</div></div>
+      </div>
+
+      <div class="share-actions">
+        <label class="btn" for="plan">回到方案</label>
+        <label class="btn ghost" for="home">重新规划</label>
+      </div>
+      <div class="share-note">分享链接、导出 PDF、打印版 · 下一版接入</div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>行程协作 · 多角色旅行规划</title>
+<style>
+  :root{
+    --bg:#08090b; --s1:#0e1013; --s2:#13161a; --s3:#191d22;
+    --line:rgba(255,255,255,.075); --line2:rgba(255,255,255,.14);
+    --ink:#f6f7f9; --sub:#a4abb6; --dim:#6b7280;
+    --blue:#8fb4ff; --mint:#7ee0b8; --amber:#f0c674; --rose:#f49aa4;
+    --sans:"Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.65 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+    background:
+      radial-gradient(900px 520px at 72% -10%,rgba(120,150,255,.10),transparent 60%),
+      radial-gradient(700px 460px at 8% 100%,rgba(126,224,184,.06),transparent 60%)}
+  body::after{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.45;
+    background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);
+    background-size:48px 48px;
+    -webkit-mask-image:radial-gradient(900px 600px at 60% 20%,#000 20%,transparent 75%);
+    mask-image:radial-gradient(900px 600px at 60% 20%,#000 20%,transparent 75%)}
+
+  .sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  .label{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+
+  .stage{position:relative;z-index:1;min-height:100vh}
+  .scene{display:none;min-height:100vh}
+  #home:checked ~ .stage .s-home{display:flex}
+  #demand:checked ~ .stage .s-demand,
+  #brief:checked ~ .stage .s-brief,
+  #run:checked ~ .stage .s-run{display:block}
+  .s-home{min-height:100vh;flex-direction:column}
+  #home:checked ~ .stage .s-home,
+  #demand:checked ~ .stage .s-demand,
+  #brief:checked ~ .stage .s-brief,
+  #run:checked ~ .stage .s-run{animation:fadeUp .45s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* ---------- nav ---------- */
+  .nav{display:flex;align-items:center;gap:28px;padding:20px 40px;max-width:1320px;margin:0 auto;width:100%}
+  .brand{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:600;letter-spacing:-.01em}
+  .brand i{width:14px;height:14px;border-radius:4px;background:var(--ink);position:relative;display:block}
+  .brand i::after{content:"";position:absolute;inset:4px;border-radius:1px;background:var(--bg)}
+  .brand small{font-family:var(--mono);font-size:9.5px;font-weight:400;letter-spacing:.14em;color:var(--dim)}
+  .links{display:flex;gap:22px;margin-left:22px;font-size:12.5px}
+  .links a,.links label{color:var(--dim);text-decoration:none;cursor:pointer}
+  .links a:hover,.links label:hover{color:var(--ink)}
+  .nav .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .btn-white{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:600;
+    color:#0a0b0d;background:var(--ink);padding:8px 15px;border-radius:8px;border:1px solid var(--ink)}
+  .btn-white:hover{background:#fff}
+  .btn-ghost{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:var(--sub);
+    padding:8px 14px;border-radius:8px;border:1px solid var(--line2);background:transparent}
+  .btn-ghost:hover{color:var(--ink);border-color:rgba(255,255,255,.28)}
+
+  /* ---------- hero ---------- */
+  .home{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:center;
+    max-width:1320px;margin:0 auto;width:100%;padding:36px 40px 48px}
+  .hero-eyebrow{display:flex;align-items:center;gap:10px}
+  .hero-eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--mint);
+    box-shadow:0 0 0 3px rgba(126,224,184,.12)}
+  h1{font-family:var(--sans);font-size:clamp(40px,4.6vw,62px);line-height:1.1;letter-spacing:-.045em;
+    margin:22px 0 20px;font-weight:600}
+  h1 span{color:var(--sub)}
+  .lede{font-size:15px;color:var(--sub);line-height:1.85;max-width:31em;margin:0}
+  .cta-row{display:flex;align-items:center;gap:14px;margin-top:30px;flex-wrap:wrap}
+  .cta-main{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:13.5px;font-weight:600;
+    color:#0a0b0d;background:var(--ink);padding:12px 20px;border-radius:10px;border:1px solid var(--ink)}
+  .cta-main:hover{background:#fff}
+
+  .meta-line{display:flex;gap:20px;flex-wrap:wrap;margin-top:22px;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  .meta-line b{color:var(--sub);font-weight:500}
+
+  /* ---------- product window ---------- */
+  .frame{position:relative;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,#101318,#0c0e11);
+    box-shadow:0 30px 70px -40px #000, inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden;
+    animation:float 9s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+  .frame-top{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line)}
+  .frame-top .dot{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px rgba(126,224,184,.6)}
+  .frame-top .t{font-size:12.5px;font-weight:500}
+  .frame-top .v{font-family:var(--mono);font-size:10px;color:var(--sub);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  .frame-top .state{margin-left:auto;font-size:10px;color:var(--mint);display:flex;align-items:center;gap:5px}
+  .frame-top .state i{width:5px;height:5px;border-radius:50%;background:var(--mint);animation:blink 2.4s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+
+  .frame-body{padding:6px 14px 10px}
+  .row{display:grid;grid-template-columns:34px 54px 1fr auto;gap:10px;align-items:center;
+    padding:10px 4px;border-bottom:1px solid rgba(255,255,255,.055);font-size:12px;opacity:0;
+    animation:rowIn .5s both}
+  .row:nth-child(1){animation-delay:.15s}.row:nth-child(2){animation-delay:.22s}
+  .row:nth-child(3){animation-delay:.29s}.row:nth-child(4){animation-delay:.36s}
+  .row:nth-child(5){animation-delay:.43s}
+  @keyframes rowIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .row:last-child{border-bottom:none}
+  .row .d{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+  .row .time{font-family:var(--mono);font-size:10px;color:var(--sub)}
+  .row .n{display:flex;align-items:center;gap:8px;color:var(--ink)}
+  .row .n i{width:3px;height:14px;border-radius:2px;background:var(--c,var(--dim))}
+  .row .c{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+
+  .change{margin:10px 0 4px;display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border-radius:8px;
+    background:rgba(126,224,184,.055);border:1px solid rgba(126,224,184,.22);font-size:10.5px;line-height:1.65;color:var(--sub)}
+  .change b{color:var(--mint);font-weight:600}
+  .change .code{font-family:var(--mono);font-size:9px;color:var(--dim);margin-left:4px}
+  .change .ok{margin-left:auto;font-size:9px;color:var(--mint);border:1px solid rgba(126,224,184,.3);border-radius:4px;padding:0 5px;white-space:nowrap}
+
+  .frame-foot{display:flex;align-items:center;gap:9px;padding:10px 14px;border-top:1px solid var(--line)}
+  .avs{display:flex}
+  .avs span{width:18px;height:18px;border-radius:50%;margin-left:-4px;display:grid;place-items:center;
+    font-size:8px;font-weight:700;color:#0a0b0d;border:1.5px solid #0e1013}
+  .avs span:first-child{margin-left:0}
+  .frame-foot .k{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:.06em}
+
+  .frame-meta{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.04em}
+
+  /* ---------- features ---------- */
+  .features{max-width:1320px;margin:0 auto;width:100%;padding:0 40px 26px;display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+  .feat{border-top:1px solid var(--line);padding-top:14px}
+  .feat .n{font-family:var(--mono);font-size:9.5px;color:var(--dim);letter-spacing:.1em}
+  .feat h3{font-size:14px;font-weight:600;letter-spacing:-.01em;margin:5px 0 4px}
+  .feat p{margin:0;font-size:11.5px;color:var(--dim);line-height:1.75}
+
+  .foot{max-width:1320px;margin:0 auto;width:100%;display:flex;align-items:center;gap:16px;
+    padding:16px 40px 22px;border-top:1px solid var(--line);color:var(--dim);font-size:10.5px}
+  .foot .spacer{flex:1}
+
+  /* ---------- inner pages ---------- */
+  .page{max-width:1040px;margin:0 auto;padding:44px 28px 90px}
+  .topbar{display:flex;align-items:center;gap:14px;margin-bottom:32px}
+  .back{cursor:pointer;font-size:11.5px;color:var(--dim);border-bottom:1px solid var(--line2);padding-bottom:1px}
+  .back:hover{color:var(--sub)}
+  .step-no{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.14em}
+  .chip-demo{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim);border:1px solid var(--line2);border-radius:99px;padding:3px 9px;letter-spacing:.08em}
+  h2{font-size:clamp(28px,3.4vw,38px);line-height:1.2;letter-spacing:-.035em;margin:0 0 10px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;max-width:34em;margin:0 0 26px;line-height:1.85}
+  .panel{background:var(--s1);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  textarea{width:100%;min-height:108px;background:none;border:none;outline:none;color:var(--ink);resize:vertical;
+    font:15px/1.8 var(--sans)}
+  textarea::placeholder{color:#4d535d}
+  .fields{display:flex;flex-wrap:wrap;gap:6px;padding-top:12px;border-top:1px solid var(--line);margin-top:4px}
+  .fld{display:flex;align-items:baseline;gap:6px;border:1px solid var(--line);border-radius:7px;padding:5px 9px;color:var(--dim)}
+  .fld span{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+  .fld b{font-family:var(--mono);font-size:11.5px;font-weight:500}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .chips label{cursor:pointer;font-size:11.5px;padding:5px 11px;border-radius:7px;border:1px solid var(--line);color:var(--sub)}
+  .chips input{display:none}
+  .chips label:has(input:checked){color:var(--ink);border-color:var(--line2);background:rgba(255,255,255,.06)}
+  .cta{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:600;
+    padding:10px 18px;border-radius:8px;color:#0a0b0d;background:var(--ink);border:1px solid var(--ink)}
+  .cta:hover{background:#fff}
+  .actions{display:flex;align-items:center;gap:16px;margin-top:20px;flex-wrap:wrap}
+  .hint{font-size:11px;color:var(--dim)}
+  .preview-strip{display:grid;grid-template-columns:1.5fr .5fr;gap:24px;margin-top:30px;padding-top:20px;border-top:1px solid var(--line)}
+  .tags{display:flex;flex-wrap:wrap;gap:6px}
+  .tags span{font-size:10.5px;color:var(--dim);border:1px dashed var(--line2);border-radius:6px;padding:4px 9px}
+  .est{font-family:var(--mono);font-size:10px;color:var(--dim);text-align:right;line-height:1.9}
+  .est b{color:var(--sub);font-weight:500}
+
+  /* ---- 取舍：实时骨架 ---- */
+  .brief-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start;margin-top:4px}
+  .decisions{display:flex;flex-direction:column;gap:14px}
+  .q-head{display:flex;gap:10px;align-items:flex-start;margin-bottom:8px}
+  .q-no{font-family:var(--mono);font-size:9px;color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-top:2px}
+  .q-title{font-size:14px;font-weight:600;margin:0 0 1px}
+  .q-why{font-size:11px;color:var(--dim)}
+  .opt{display:block;cursor:pointer;border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-top:7px;transition:.15s}
+  .opt .t{display:flex;align-items:center;gap:8px;font-size:12.5px}
+  .opt .t i{width:14px;height:14px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center}
+  .opt .cons{font-size:10.5px;color:var(--dim);margin-top:4px;padding-left:22px}
+  .opt:hover{border-color:var(--line2)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early],
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon],
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late],
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same],
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch]{border-color:rgba(143,180,255,.5);background:rgba(143,180,255,.07)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early] i,
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon] i,
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late] i,
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same] i,
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch] i{border-color:var(--blue)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early] i:after,
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon] i:after,
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late] i:after,
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same] i:after,
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch] i:after{content:"";width:6px;height:6px;border-radius:50%;background:var(--blue)}
+  #rv-early:checked ~ .brief-grid .opt[for=rv-early] .cons,
+  #rv-noon:checked ~ .brief-grid .opt[for=rv-noon] .cons,
+  #rv-late:checked ~ .brief-grid .opt[for=rv-late] .cons,
+  #stay-same:checked ~ .brief-grid .opt[for=stay-same] .cons,
+  #stay-switch:checked ~ .brief-grid .opt[for=stay-switch] .cons{color:var(--blue)}
+
+  .skeleton{position:sticky;top:20px;background:linear-gradient(180deg,#101318,#0c0e11);
+    border:1px solid var(--line2);border-radius:12px;padding:16px 16px 14px}
+  .sk-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .sk-head b{font-size:11.5px;font-weight:600}
+  .sk-head .live{display:flex;align-items:center;gap:4px;margin-left:auto;font-size:9px;color:var(--mint)}
+  .sk-head .live i{width:5px;height:5px;border-radius:50%;background:var(--mint);animation:blink 2.4s infinite}
+  .sk-row{display:flex;align-items:baseline;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:11px;color:var(--dim)}
+  .sk-row b{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--ink)}
+  .sk{display:none}
+  #rv-early:checked ~ .brief-grid .v-early,
+  #rv-noon:checked ~ .brief-grid .v-noon,
+  #rv-late:checked ~ .brief-grid .v-late,
+  #stay-same:checked ~ .brief-grid .v-same,
+  #stay-switch:checked ~ .brief-grid .v-switch{display:inline;animation:tick .3s ease-out}
+  @keyframes tick{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
+  .sk-strip{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+  .sk-strip .label{margin-bottom:7px;display:block}
+  .strip{display:none;align-items:center;gap:6px;font-family:var(--mono);font-size:9.5px;color:var(--sub)}
+  .strip span{white-space:nowrap}
+  .strip .sep{flex:1;height:1px;background:var(--line)}
+  .strip b{font-weight:500;color:var(--ink)}
+  #rv-early:checked ~ .brief-grid .strip-early,
+  #rv-noon:checked ~ .brief-grid .strip-noon,
+  #rv-late:checked ~ .brief-grid .strip-late{display:flex}
+  .sk-judge{display:none;margin-top:10px;padding:8px 9px;border-radius:6px;font-size:10px;line-height:1.6}
+  #rv-early:checked ~ .brief-grid .sk-judge,
+  #rv-noon:checked ~ .brief-grid .sk-judge,
+  #rv-late:checked ~ .brief-grid .sk-judge{display:block}
+  #rv-early:checked ~ .brief-grid .j-early,
+  #rv-noon:checked ~ .brief-grid .j-noon,
+  #rv-late:checked ~ .brief-grid .j-late{display:block}
+  .sk-judge{background:rgba(240,198,116,.07);border:1px solid rgba(240,198,116,.25);color:var(--amber)}
+  #rv-noon:checked ~ .brief-grid .j-noon{background:rgba(126,224,184,.06);border-color:rgba(126,224,184,.25);color:var(--mint)}
+  #stay-switch:checked ~ .brief-grid .v-switch{color:var(--amber)}
+  .sk-note{margin-top:10px;font-size:9.5px;color:var(--dim);line-height:1.6}
+
+  /* ---- 运行：装配线 ---- */
+  .line-wrap{border:1px solid var(--line);border-radius:14px;background:var(--s1);padding:20px}
+  .rail{position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:4px 0 2px}
+  .rail::before{content:"";position:absolute;left:7%;right:7%;top:19px;height:1px;background:var(--line2)}
+  .station{position:relative;text-align:center;opacity:.4;transition:opacity .3s}
+  .station .dot{width:30px;height:30px;border-radius:8px;margin:0 auto;display:grid;place-items:center;
+    font-size:10.5px;font-weight:700;color:#0a0b0d;background:var(--c)}
+  .station .idx{font-family:var(--mono);font-size:8.5px;color:var(--dim);letter-spacing:.08em;margin-bottom:5px}
+  .station .role{font-size:11.5px;margin-top:6px;color:var(--ink)}
+  .station .out{font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:2px}
+  .station::after{content:"✓";position:absolute;right:calc(50% - 26px);top:-2px;font-size:9px;color:var(--mint);opacity:0}
+  #play:checked ~ .page .station::after{animation:checkIn .3s both;animation-delay:calc(var(--d) + .35s)}
+  @keyframes checkIn{to{opacity:1}}
+  #play:checked ~ .page .station{animation:lit .45s both;animation-delay:var(--d)}
+  @keyframes lit{to{opacity:1}}
+  .packet{position:absolute;top:15px;left:7%;width:9px;height:9px;border-radius:50%;background:#fff;
+    box-shadow:0 0 14px rgba(255,255,255,.65);opacity:0}
+  #play:checked ~ .page .packet{animation:packet 4.6s linear both}
+  @keyframes packet{0%{left:7%;opacity:0}6%{opacity:1}94%{opacity:1}100%{left:91%;opacity:0}}
+
+  .run-body{display:grid;grid-template-columns:minmax(0,1fr) 252px;gap:14px;margin-top:16px}
+  .assembly{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:rgba(255,255,255,.015)}
+  .asm-head{display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:var(--sub);margin-bottom:4px}
+  .asm-head .mono{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .asm-day{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;color:var(--sub);opacity:.3}
+  .asm-day:last-child{border-bottom:none}
+  .asm-day .d{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .asm-day .n{display:flex;align-items:center;gap:7px}
+  .asm-day .n i{width:5px;height:5px;border-radius:50%;background:var(--c)}
+  .asm-day .c{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  #play:checked ~ .page .asm-day{animation:asm .35s both;animation-delay:var(--d)}
+  @keyframes asm{to{opacity:1}}
+  .asm-foot{margin-top:8px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .asm-done{margin-top:8px;font-size:10.5px;color:var(--mint);opacity:0}
+  #play:checked ~ .page .asm-done{animation:doneIn .4s 4.7s both}
+  @keyframes doneIn{to{opacity:1}}
+
+  .issues{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:rgba(255,255,255,.015)}
+  .iss-head{display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:var(--sub);margin-bottom:8px}
+  .iss-head em{font-style:normal;font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .issue{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:7px 0;
+    border-bottom:1px solid rgba(255,255,255,.05);font-size:10.5px;color:var(--sub)}
+  .issue:last-child{border-bottom:none}
+  .issue .tag{font-family:var(--mono);font-size:8.5px;border:1px solid var(--line2);border-radius:4px;padding:0 4px;color:var(--dim)}
+  .issue .st{font-family:var(--mono);font-size:8.5px;color:var(--amber)}
+  .issue.closed .st{color:var(--mint)}
+  .issue .st::before{content:"○ ";font-size:8px}
+  .issue.closed .st::before{content:"● ";color:var(--mint)}
+  .issue.closed .txt{color:var(--dim);text-decoration:line-through}
+  #play:checked ~ .page .issue.closed .st{animation:closeIssue 1s 3.2s both}
+  @keyframes closeIssue{from{opacity:.4}to{opacity:1}}
+
+  .run-foot{display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap}
+  .run-legend{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+
+  .gear{position:fixed;right:22px;bottom:22px;z-index:20;width:34px;height:34px;border-radius:8px;
+    border:1px solid var(--line2);background:rgba(14,16,19,.9);color:var(--sub);display:grid;place-items:center;
+    cursor:pointer;font-size:14px}
+  .gear:hover{color:var(--ink);border-color:rgba(255,255,255,.28)}
+  .sheet{position:fixed;inset:0;z-index:30;display:none;place-items:center;background:rgba(4,5,7,.72);backdrop-filter:blur(6px)}
+  #panel:checked ~ .sheet{display:grid}
+  .sheet .box{width:min(500px,92vw);background:var(--s1);border:1px solid var(--line2);border-radius:14px;padding:22px;
+    box-shadow:0 40px 90px -40px #000;animation:fadeUp .25s both}
+  .sheet h3{font-size:16px;font-weight:600;margin:0 0 4px}
+  .sheet p{margin:0 0 14px;color:var(--dim);font-size:11px}
+  .sheet .row2{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:12px;color:var(--sub)}
+  .sheet .row2 b{font-family:var(--mono);font-size:11px;color:var(--ink);font-weight:500}
+  .sheet .foot2{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;align-items:center}
+
+  @media (max-width:720px){
+    .rail{grid-template-columns:repeat(5,92px);overflow-x:auto;justify-content:start;padding-bottom:6px}
+    .rail::before{display:none}
+    .station .out{white-space:nowrap}
+  }
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  @media (max-width:1080px){
+    .home{grid-template-columns:1fr;gap:34px;padding:20px 22px 36px}
+    .features{grid-template-columns:1fr;gap:16px;padding:0 22px 20px}
+    .nav{padding:16px 22px}
+    .links{display:none}
+    .foot{padding:14px 22px 20px}
+    .decide{grid-template-columns:1fr}
+    .brief-grid{grid-template-columns:1fr}
+    .skeleton{position:static}
+    .run-body{grid-template-columns:1fr}
+    .rail{gap:2px}
+    .station .out{font-size:8px}
+    .packet{display:none}
+    .preview-strip{grid-template-columns:1fr}
+    .est{text-align:left}
+    .page{padding:28px 18px 70px}
+    h1{font-size:clamp(32px,8vw,44px)}
+  }
+</style>
+</head>
+<body>
+
+<input class="sr" type="radio" name="scene" id="home" checked>
+<input class="sr" type="radio" name="scene" id="demand">
+<input class="sr" type="radio" name="scene" id="brief">
+<input class="sr" type="radio" name="scene" id="run">
+
+<input class="sr" type="radio" name="panel" id="panel-none" checked>
+<input class="sr" type="radio" name="panel" id="panel">
+
+<div class="stage">
+
+  <!-- ================= 首页 ================= -->
+  <section class="scene s-home">
+    <nav class="nav">
+      <div class="brand"><i></i>行程协作 <small>MULTI-AGENT PLANNER</small></div>
+      <div class="links">
+        <a href="07-premium.html">示例行程</a>
+        <label for="panel">模型设置</label>
+      </div>
+      <div class="right">
+        <label class="btn-white" for="demand">开始规划</label>
+      </div>
+    </nav>
+
+    <div class="home">
+      <div>
+        <div class="hero-eyebrow"><i></i><span class="label">5 roles · 15 requests · 2 min</span></div>
+        <h1>规划旅行，<br><span>像审阅一份方案。</span></h1>
+        <p class="lede">主控拆解任务，交通住宿与本地体验各自交付，独立评审做硬约束校验，文案整合成稿。每一处改动都有理由和版本。</p>
+        <div class="cta-row">
+          <label class="cta-main" for="demand">开始规划</label>
+          <a class="btn-ghost" href="07-premium.html">看示例行程</a>
+        </div>
+        <div class="meta-line">
+          <span>真实模型 <b>不降级</b></span>
+          <span>硬约束 <b>不通过就退回</b></span>
+          <span>改动 <b>可回滚</b></span>
+        </div>
+      </div>
+
+      <div class="frame" aria-hidden="true">
+        <div class="frame-top">
+          <span class="dot"></span>
+          <span class="t">新行程</span>
+          <span class="v">v3</span>
+          <span class="state"><i></i>评审通过</span>
+        </div>
+        <div class="frame-body">
+          <div class="row"><span class="d">D1</span><span class="time">08:05</span><span class="n"><i style="--c:var(--blue)"></i>抵达 · 机场 → 酒店</span><span class="c">2 处</span></div>
+          <div class="row"><span class="d">D2</span><span class="time">09:00</span><span class="n"><i style="--c:var(--mint)"></i>老城 · 步行</span><span class="c">2 处</span></div>
+          <div class="row"><span class="d">D3</span><span class="time">10:30</span><span class="n"><i style="--c:var(--mint)"></i>近郊 · 半日</span><span class="c">1 处</span></div>
+          <div class="row"><span class="d">D4</span><span class="time">09:00</span><span class="n"><i style="--c:var(--amber)"></i>雨天预案 · 室内</span><span class="c">2 处</span></div>
+          <div class="row"><span class="d">D5</span><span class="time">09:20</span><span class="n"><i style="--c:var(--blue)"></i>返程 · 留足时间</span><span class="c">0 处</span></div>
+          <div class="change"><span><b>独立评审</b> · 第 3 天午后有雨，已把户外改为室内<span class="code">RAIN_OUTDOOR</span></span><span class="ok">已采纳</span></div>
+        </div>
+        <div class="frame-foot">
+          <div class="avs">
+            <span style="background:#8fb4ff">主</span><span style="background:#f0c674">交</span>
+            <span style="background:#7ee0b8">本</span><span style="background:#c4b5fd">审</span><span style="background:#9ec5fe">文</span>
+          </div>
+          <span class="k">5 ROLES · 15 REQUESTS · 2′02″</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="features">
+      <div class="feat"><div class="n">01 / SPLIT</div><h3>分工，而不是一个模型硬编</h3><p>五个角色各做一件事，交付物独立可检查。</p></div>
+      <div class="feat"><div class="n">02 / VERIFY</div><h3>硬约束校验</h3><p>预算、闭馆、赶机、体力；不过就退回重排。</p></div>
+      <div class="feat"><div class="n">03 / EDIT</div><h3>改一处，只动一天</h3><p>下指令改某一天，其余不动；版本可回滚。</p></div>
+    </div>
+
+    <footer class="foot">
+      <span>交互原型 · 演示数据 · 无脚本</span>
+      <span class="spacer"></span>
+      <span>v0.8</span>
+    </footer>
+  </section>
+
+  <!-- ================= 需求 ================= -->
+  <section class="scene s-demand">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="home">← 返回</label>
+        <span class="step-no">STEP 01 / 03</span>
+        <span class="chip-demo">NEW</span>
+      </div>
+      <h2>先说说这趟旅行。</h2>
+      <p class="sub">一句话就够。没说的部分，下一步团队会问你，不会替你猜。</p>
+
+      <div class="panel">
+        <textarea placeholder="例如：成都 5 天，2 人，带一位老人，预算 8000，想看人文、吃点好的，节奏别太赶"></textarea>
+        <div class="fields">
+          <div class="fld"><span>出发</span><b>—</b></div>
+          <div class="fld"><span>到达</span><b>—</b></div>
+          <div class="fld"><span>日期</span><b>—</b></div>
+          <div class="fld"><span>人数</span><b>—</b></div>
+          <div class="fld"><span>预算</span><b>—</b></div>
+        </div>
+        <div class="chips">
+          <label><input type="checkbox">带老人</label>
+          <label><input type="checkbox">带儿童</label>
+          <label><input type="checkbox">人文</label>
+          <label><input type="checkbox">美食</label>
+          <label><input type="checkbox">自然</label>
+          <label><input type="checkbox">节奏适中</label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <label class="cta" for="brief">继续，确认取舍 →</label>
+        <span class="hint">原型演示：继续会用一份示例数据走完流程</span>
+      </div>
+
+      <div class="preview-strip">
+        <div>
+          <div class="label" style="margin-bottom:9px">填写后显示解析结果</div>
+          <div class="tags">
+            <span>目的地 —</span><span>天数 —</span><span>人数 —</span><span>预算 —</span><span>偏好 —</span>
+          </div>
+        </div>
+        <div class="est">
+          <div>预计 <b>2 分钟</b> · <b>15</b> 次请求 · <b>5</b> 个角色</div>
+          <div class="hint" style="margin-top:5px">接下来只问两个问题</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 取舍 ================= -->
+  <section class="scene s-brief">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="demand">← 改需求</label>
+        <span class="step-no">STEP 02 / 03</span>
+        <span class="chip-demo">SAMPLE DATA</span>
+      </div>
+      <h2>每选一次，骨架就变一次。</h2>
+      <p class="sub">只有你能定的两件事。选完之后，骨架会立刻变——你看到的是代价，不是形容词。</p>
+
+      <div class="brief-wrap">
+        <input class="sr" type="radio" name="rv" id="rv-early">
+        <input class="sr" type="radio" name="rv" id="rv-noon" checked>
+        <input class="sr" type="radio" name="rv" id="rv-late">
+        <input class="sr" type="radio" name="stay" id="stay-same" checked>
+        <input class="sr" type="radio" name="stay" id="stay-switch">
+
+        <div class="brief-grid">
+          <div class="decisions">
+            <div class="panel">
+              <div class="q-head"><span class="q-no">01</span><div><div class="q-title">返程怎么走</div><div class="q-why">最后一天有两班可选</div></div></div>
+              <label class="opt" for="rv-early"><span class="t"><i></i>尽量早回</span>
+                <span class="cons">代价：05:50 起床，前一晚 21:30 前必须睡</span></label>
+              <label class="opt" for="rv-noon"><span class="t"><i></i>中午前后，别太赶</span>
+                <span class="cons">代价：到家接近晚高峰</span></label>
+              <label class="opt" for="rv-late"><span class="t"><i></i>傍晚再走</span>
+                <span class="cons">代价：到家约 22:10，老人较累</span></label>
+            </div>
+            <div class="panel">
+              <div class="q-head"><span class="q-no">02</span><div><div class="q-title">住宿怎么住</div><div class="q-why">四晚同店省心，换一次更近机场</div></div></div>
+              <label class="opt" for="stay-same"><span class="t"><i></i>四晚同一家</span>
+                <span class="cons">代价：最后一天去机场约 80 分钟</span></label>
+              <label class="opt" for="stay-switch"><span class="t"><i></i>最后一晚换机场附近</span>
+                <span class="cons">代价：多搬一次行李，预算 +300</span></label>
+            </div>
+          </div>
+
+          <aside class="skeleton" aria-live="polite">
+            <div class="sk-head"><b>行程骨架</b><span class="live"><i></i>实时</span></div>
+            <div class="sk-row"><span>返程航班</span><b>
+              <span class="sk v-early">08:00</span><span class="sk v-noon">13:00</span><span class="sk v-late">18:40</span>
+            </b></div>
+            <div class="sk-row"><span>到家时间</span><b>
+              <span class="sk v-early">12:30</span><span class="sk v-noon">18:30</span><span class="sk v-late">22:10</span>
+            </b></div>
+            <div class="sk-row"><span>住宿</span><b>
+              <span class="sk v-same">1 家 · 4 晚</span><span class="sk v-switch">2 家 · 3+1</span>
+            </b></div>
+            <div class="sk-row"><span>预计花费</span><b>
+              <span class="sk v-same">¥7,960</span><span class="sk v-switch">¥8,260</span>
+            </b></div>
+            <div class="sk-row"><span>体力消耗</span><b>
+              <span class="sk v-early">偏紧</span><span class="sk v-noon">适中</span><span class="sk v-late">偏松</span>
+            </b></div>
+
+            <div class="sk-strip">
+              <span class="label">最后一天</span>
+              <div class="strip strip-early"><span>05:50 起床</span><span class="sep"></span><span>08:00 起飞</span><span class="sep"></span><b>12:30 到家</b></div>
+              <div class="strip strip-noon"><span>09:20 出发</span><span class="sep"></span><span>13:00 起飞</span><span class="sep"></span><b>18:30 到家</b></div>
+              <div class="strip strip-late"><span>12:00 退房</span><span class="sep"></span><span>18:40 起飞</span><span class="sep"></span><b>22:10 到家</b></div>
+            </div>
+            <div class="sk-judge">
+              <span class="sk j-early">⚠ 05:50 起床会被评审标记为体力风险</span>
+              <span class="sk j-noon">✓ 节奏在可接受范围，评审不会拦</span>
+              <span class="sk j-late">⚠ 22:10 到家会被标记为疲劳风险</span>
+            </div>
+            <div class="sk-note">这些数字会直接写进计划书；评审会按它检查赶机与体力。</div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="actions">
+        <label class="cta" for="run">确认，团队开工 →</label>
+        <label class="back" for="demand" style="border:none">← 回去改需求</label>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 运行 ================= -->
+  <section class="scene s-run">
+    <input class="sr" type="checkbox" id="play">
+    <div class="page">
+      <div class="topbar">
+        <label class="back" for="brief">← 改取舍</label>
+        <span class="step-no">STEP 03 / 03</span>
+        <span class="chip-demo">SAMPLE DATA</span>
+      </div>
+      <h2>五个角色，把一份方案接力装出来。</h2>
+      <p class="sub">每个角色交付一个可检查的中间产物，评审不过就退回重排。你看到的不是黑箱，是装配过程。</p>
+
+      <div class="line-wrap">
+        <div class="rail">
+          <div class="station" style="--c:#8fb4ff;--d:.1s"><div class="idx">01</div><div class="dot">主</div><div class="role">主控</div><div class="out">2 个任务</div></div>
+          <div class="station" style="--c:#f0c674;--d:.9s"><div class="idx">02</div><div class="dot">交</div><div class="role">交通住宿</div><div class="out">2 航班 · 1 酒店</div></div>
+          <div class="station" style="--c:#7ee0b8;--d:1.8s"><div class="idx">03</div><div class="dot">本</div><div class="role">本地体验</div><div class="out">5 天 · 8 处</div></div>
+          <div class="station" style="--c:#c4b5fd;--d:2.7s"><div class="idx">04</div><div class="dot">审</div><div class="role">独立评审</div><div class="out">2 条问题</div></div>
+          <div class="station" style="--c:#9ec5fe;--d:3.6s"><div class="idx">05</div><div class="dot">文</div><div class="role">文案</div><div class="out">1 份文稿</div></div>
+          <div class="packet"></div>
+        </div>
+
+        <div class="run-body">
+          <div class="assembly">
+            <div class="asm-head"><span>正在装配</span><span class="mono">v0 → v1</span></div>
+            <div class="asm-day" style="--d:.4s"><span class="d">D1</span><span class="n"><i style="--c:#8fb4ff"></i>抵达 · 机场 → 酒店</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:1.2s"><span class="d">D2</span><span class="n"><i style="--c:#7ee0b8"></i>老城 · 步行</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:2.0s"><span class="d">D3</span><span class="n"><i style="--c:#7ee0b8"></i>近郊 · 半日</span><span class="c">1 处</span></div>
+            <div class="asm-day" style="--d:2.8s"><span class="d">D4</span><span class="n"><i style="--c:#f0c674"></i>雨天预案 · 室内</span><span class="c">2 处</span></div>
+            <div class="asm-day" style="--d:3.6s"><span class="d">D5</span><span class="n"><i style="--c:#8fb4ff"></i>返程 · 留足时间</span><span class="c">0 处</span></div>
+            <div class="asm-foot">5 天 · 8 处 · ¥7,960 · 15 次请求</div>
+            <div class="asm-done">装配完成 · v1 · 评审通过</div>
+          </div>
+
+          <div class="issues">
+            <div class="iss-head"><span>问题清单</span><em>2 开 / 2 关</em></div>
+            <div class="issue"><span class="tag">BUDGET</span><span class="txt">预算余量仅 ¥40</span><span class="st">未关闭</span></div>
+            <div class="issue closed"><span class="tag">RAIN</span><span class="txt">第 3 天户外改室内</span><span class="st">已关闭</span></div>
+            <div class="issue"><span class="tag">TRANSFER</span><span class="txt">机场接驳重复</span><span class="st">未关闭</span></div>
+            <div class="issue closed"><span class="tag">PACE</span><span class="txt">第 4 天下午空档不足</span><span class="st">已关闭</span></div>
+          </div>
+        </div>
+
+        <div class="run-foot">
+          <label class="cta" for="play">▶ 播放装配</label>
+          <a class="btn-ghost" href="07-premium.html">查看完整方案 →</a>
+          <span class="run-legend">15 REQUESTS · 2′02″</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<label class="gear" for="panel" aria-label="模型设置">⚙</label>
+<div class="sheet">
+  <div class="box">
+    <h3>模型设置</h3>
+    <p>深度团队只使用真实模型；改动会写回服务端配置。</p>
+    <div class="row2"><span>Base URL</span><b>api.deepseek.com</b></div>
+    <div class="row2"><span>Model</span><b>deepseek-flash</b></div>
+    <div class="row2"><span>API Key</span><b>sk-••••••••</b></div>
+    <div class="row2"><span>单次预算上限</span><b>¥8,000</b></div>
+    <div class="row2"><span>减少动效</span><span style="color:var(--dim);font-size:11px">跟随系统</span></div>
+    <div class="foot2">
+      <label class="back" for="panel-none">取消</label>
+      <label class="cta" for="panel-none" style="padding:8px 14px;font-size:12px">保存</label>
+    </div>
+  </div>
+</div>
+</body>
+</html>

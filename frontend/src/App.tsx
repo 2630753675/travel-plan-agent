@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import SettingsPanel from './Settings'
 
+/** ---------------- 类型 ---------------- */
+
 type RunEvent = {
   schema_version: number
   run_id: string
@@ -26,41 +28,9 @@ type Item = {
   note: string
 }
 
-type Day = {
-  date: string
-  items: Item[]
-  day_cost: number
-  notes: string[]
-}
+type Day = { date: string; items: Item[]; day_cost: number; notes: string[] }
 
 type Issue = { severity: 'blocker' | 'warning'; code: string; message: string }
-
-const TOKEN_KEY = 'trip.accessToken'
-
-let onAuthRequired: (() => void) | null = null
-
-/** 所有接口请求都从这里走：带上访问口令，遇到 401 就提示补录。 */
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem(TOKEN_KEY) ?? ''
-  const headers = new Headers(init?.headers ?? {})
-  if (token) headers.set('X-Access-Token', token)
-  const res = await fetch(input, { ...init, headers })
-  if (res.status === 401) onAuthRequired?.()
-  return res
-}
-
-function describeError(e: unknown): string {
-  if (e instanceof TypeError) {
-    // fetch 抛 TypeError 基本只有一种情况：连不上后端
-    return '连不上后端服务。请确认服务已启动，然后重试。'
-  }
-  const text = String(e)
-  const http = text.match(/^HTTP (\d{3})$/)
-  if (http) {
-    return `后端返回 ${http[1]}，请稍后重试；若持续出现，检查设置里的模型配置。`
-  }
-  return text
-}
 
 type CostItem = { key: string; label: string; amount: number; share: number }
 
@@ -68,35 +38,6 @@ type Summary = {
   cost: { total: number; budget: number; items: CostItem[] }
   source: { kind: string; label: string; fetched_at: string; note: string }
   warning_groups: { category: string; label: string; items: string[] }[]
-}
-
-type TeamDocument = {
-  title: string
-  overview: string
-  days: { date: string; summary: string }[]
-  practical_notes: string | string[]
-  approved_version?: number | null
-}
-
-type TeamTask = {
-  owner?: string
-  status?: string
-  rework?: string[]
-  changes?: DeliveryChange[]
-}
-
-type DeliveryFieldChange = {
-  kind: string
-  date?: string
-  before?: unknown
-  after?: unknown
-}
-
-type DeliveryChange = {
-  base_version?: number
-  plan_version?: number
-  fields?: DeliveryFieldChange[]
-  rationale?: string
 }
 
 type IssueLedgerItem = {
@@ -107,7 +48,15 @@ type IssueLedgerItem = {
   acceptance?: string
   first_seen_version?: number
   fixed_in_version?: number | null
-  evidence?: string
+}
+
+type TeamTask = { owner?: string; status?: string; rework?: string[]; changes?: DeliveryChange[] }
+
+type DeliveryChange = {
+  base_version?: number
+  plan_version?: number
+  fields?: { kind: string; date?: string; before?: unknown; after?: unknown }[]
+  rationale?: string
 }
 
 type LlmStats = {
@@ -117,65 +66,41 @@ type LlmStats = {
   output_chars?: number
   latency_ms?: number
   usage_available?: boolean
-  usage_calls?: number
   prompt_tokens?: number
   completion_tokens?: number
   total_tokens?: number
 }
 
-const FIELD_LABEL: Record<string, string> = {
-  days: '每日景点',
-  outbound_flight_no: '去程航班',
-  inbound_flight_no: '返程航班',
-  hotel_id: '酒店',
-}
-
-const OWNER_LABEL: Record<string, string> = {
-  logistics: '交通住宿',
-  local_expert: '本地体验',
-}
-
-function changeText(change: DeliveryChange): string {
-  const fields = Array.isArray(change?.fields) ? change.fields : []
-  if (fields.length === 0) return '无实际变化'
-  return fields
-    .map((field) => {
-      if (field.kind === 'days') {
-        const before = Array.isArray(field.before) ? field.before.length : 0
-        const after = Array.isArray(field.after) ? field.after.length : 0
-        return `${field.date ?? ''} 景点 ${before}→${after} 个`
-      }
-      const label = FIELD_LABEL[field.kind] ?? field.kind
-      return `${label} ${String(field.before ?? '—')} → ${String(field.after ?? '—')}`
-    })
-    .join('；')
-}
-
 type Result = {
   plan_id: string
   brief: { destination: string; origin: string; budget_total: number }
-  itinerary: {
-    days: Day[]
-    total_cost: number
-    budget_total: number
-    warnings: string[]
-  }
+  itinerary: { days: Day[]; total_cost: number; budget_total: number; warnings: string[] }
   critique: { passed: boolean; issues: Issue[]; suggestions: string[] }
   revision: number
   errors: string[]
-  negotiation?: Negotiation | null
-  events?: RunEvent[]
-  activity?: LogEntry[]
-  decision?: string | null
   version?: number
   summary?: Summary
-  document?: TeamDocument | null
+  document?: { title: string; overview: string; days: { date: string; summary: string }[] } | null
   team_tasks?: Record<string, TeamTask>
   issue_ledger?: IssueLedgerItem[]
   approved_version?: number | null
   team_state?: 'approved' | 'detached' | null
   llm_stats?: LlmStats
   share?: string
+}
+
+type InterruptInfo = {
+  type: string
+  message?: string
+  question?: string
+  from?: string
+  total?: number
+  budget?: number
+  over?: number
+  ratio?: number
+  options: { value: string; label: string }[]
+  plan_id: string
+  suggested_max_calls?: number
 }
 
 type VersionInfo = {
@@ -189,73 +114,8 @@ type VersionInfo = {
   blockers: number
 }
 
-const VERSION_SOURCE: Record<string, string> = {
-  initial: '首次生成',
-  refine: '单日重排',
-  downgrade: '按你的选择降配',
-  resume: '中断后继续',
-  rollback: '回滚',
-}
-
-const COST_COLOR: Record<string, string> = {
-  transport: 'var(--cost-1)',
-  hotel: 'var(--cost-2)',
-  meal: 'var(--cost-3)',
-  sight: 'var(--cost-4)',
-  other: 'var(--cost-5)',
-}
-
-function RunUsage({ stats }: { stats?: LlmStats }) {
-  if (!stats || stats.calls === undefined) return null
-  return (
-    <div className="run-usage" role="status">
-      <strong>本次模型用量</strong>
-      <span>{stats.calls} 次请求{stats.max_calls ? ` / 上限 ${stats.max_calls}` : ''}</span>
-      <span>{stats.usage_available
-        ? `供应商报告 ${stats.total_tokens ?? 0} tokens（输入 ${stats.prompt_tokens ?? 0} / 输出 ${stats.completion_tokens ?? 0}）`
-        : `供应商未返回 token usage；输入/输出 ${stats.input_chars ?? 0}/${stats.output_chars ?? 0} 字符`}</span>
-      <span>模型等待 {(Math.max(0, stats.latency_ms ?? 0) / 1000).toFixed(1)} 秒</span>
-    </div>
-  )
-}
-
-function CostBreakdown({ summary }: { summary: Summary }) {
-  const rows = summary.cost.items.filter((i) => i.amount > 0)
-  if (rows.length === 0) return null
-  return (
-    <section className="cost">
-      <div className="section-head">
-        <h2>花费构成</h2>
-        <span className="hint">共 {summary.cost.total.toFixed(0)} 元</span>
-      </div>
-      <div className="cost-bar">
-        {rows.map((row) => (
-          <span
-            key={row.key}
-            className="cost-seg"
-            style={{ width: `${Math.max(row.share * 100, 1.5)}%`, background: COST_COLOR[row.key] ?? 'var(--muted)' }}
-            title={`${row.label} ${row.amount.toFixed(0)} 元`}
-          />
-        ))}
-      </div>
-      <ul className="cost-legend">
-        {rows.map((row) => (
-          <li key={row.key}>
-            <span className="cost-dot" style={{ background: COST_COLOR[row.key] ?? 'var(--muted)' }} />
-            <span className="cost-label">{row.label}</span>
-            <span className="cost-amount">{row.amount.toFixed(0)} 元</span>
-            <span className="cost-share">{(row.share * 100).toFixed(0)}%</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
-const PACE = ['轻松', '适中', '紧凑'] as const
-
-const TODAY = new Date().toISOString().slice(0, 10)
+type Phase = 'form' | 'running' | 'interrupt' | 'done' | 'error' | 'stopped'
+type Screen = 'home' | 'demand' | 'brief' | 'running' | 'plan' | 'share'
 
 type Form = {
   origin: string
@@ -267,20 +127,29 @@ type Form = {
   elder: boolean
   child: boolean
   preferences: string[]
-  pace: (typeof PACE)[number]
+  pace: '轻松' | '适中' | '紧凑'
 }
 
-const DEFAULT_FORM: Form = {
-  origin: '上海',
-  destination: '成都',
-  start_date: '2026-11-20',
-  end_date: '2026-11-24',
-  travelers: 2,
-  budget_total: 8000,
-  elder: true,
-  child: false,
-  preferences: ['美食', '人文'],
-  pace: '适中',
+/** ---------------- 基础设施 ---------------- */
+
+const TOKEN_KEY = 'trip.accessToken'
+let onAuthRequired: (() => void) | null = null
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = localStorage.getItem(TOKEN_KEY) ?? ''
+  const headers = new Headers(init?.headers ?? {})
+  if (token) headers.set('X-Access-Token', token)
+  const res = await fetch(input, { ...init, headers })
+  if (res.status === 401) onAuthRequired?.()
+  return res
+}
+
+function describeError(e: unknown): string {
+  if (e instanceof TypeError) return '连不上后端服务。请确认服务已启动，然后重试。'
+  const text = String(e)
+  const http = text.match(/^HTTP (\d{3})$/)
+  if (http) return `后端返回 ${http[1]}，请稍后重试；若持续出现，检查设置里的模型配置。`
+  return text
 }
 
 async function consume(res: Response, onEvent: (name: string, data: any) => void) {
@@ -307,570 +176,117 @@ async function consume(res: Response, onEvent: (name: string, data: any) => void
 }
 
 function hhmm(t: string) {
-  return t.slice(0, 5)
+  const m = t.match(/(\d{2}):(\d{2})/)
+  return m ? `${m[1]}:${m[2]}` : t.slice(0, 5)
+}
+
+function minutesOf(t: string) {
+  const m = t.match(/(\d{2}):(\d{2})/)
+  return m ? Number(m[1]) * 60 + Number(m[2]) : 0
 }
 
 function weekday(d: string) {
   return '日一二三四五六'[new Date(d + 'T00:00:00').getDay()]
 }
 
-type NegEvidence = { label: string; value: string }
-
-type NegMessage = {
-  round: number
-  speaker: string
-  stance: string
-  claim: string
-  evidence: NegEvidence[]
-  tool_calls: string[]
+function money(n: number) {
+  return `¥${Math.round(n).toLocaleString('zh-CN')}`
 }
 
-type Negotiation = {
-  triggered_by: string
-  rounds: NegMessage[]
-  outcome: string
-  adjustment: { drop_poi_ids: string[]; use_cheaper_hotel: boolean }
-  summary: string
-}
-
-const SPEAKER_LABEL: Record<string, string> = {
-  budget_officer: '预算官',
-  experience_officer: '体验官',
-  mediator: '调解者',
-}
-
-const STANCE_LABEL: Record<string, string> = {
-  propose: '提议',
-  object: '反对',
-  accept: '让步',
-  rule: '裁决',
-  adopt: '采纳',
-  escalate: '升级',
-}
-
-const OUTCOME_LABEL: Record<string, string> = {
-  adopted: '已达成方案',
-  escalated: '未达成一致，交给你决定',
-  no_change: '无需调整',
-}
-
-function NegotiationTrail({ neg }: { neg: Negotiation }) {
-  return (
-    <section className="negotiation">
-      <div className="neg-head">
-        <h2>协商过程</h2>
-        <span className={`neg-outcome ${neg.outcome}`}>{OUTCOME_LABEL[neg.outcome] ?? neg.outcome}</span>
-      </div>
-      <p className="neg-trigger">{neg.triggered_by}</p>
-      <ol className="neg-rounds">
-        {neg.rounds.map((m, i) => (
-          <li key={i} className={`neg-msg ${m.speaker}`}>
-            <div className="neg-who">
-              <span className="neg-name">{SPEAKER_LABEL[m.speaker] ?? m.speaker}</span>
-              <span className={`neg-stance ${m.stance}`}>{STANCE_LABEL[m.stance] ?? m.stance}</span>
-            </div>
-            <p className="neg-claim">{m.claim}</p>
-            {m.evidence.length > 0 && (
-              <ul className="neg-evidence">
-                {m.evidence.map((e, j) => (
-                  <li key={j}>
-                    <span className="neg-label">{e.label}</span>
-                    <span className="neg-value">{e.value}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </li>
-        ))}
-      </ol>
-    </section>
-  )
-}
-
-type LogEntry = {
-  event_id?: string
-  ts: string
-  actor: string
-  kind: string
-  text: string
-  detail: string
-  group: string
-  depth: number
-  tool: string
-}
-
-const GROUP_LABEL: Record<string, string> = {
-  clarify: '需求澄清',
-  retrieval: '查询工具',
-  collab: '工具协作 Workflow',
-  plan: '规划 Agent',
-  review: 'Agent 评审',
-  peer: '专业团队协作',
-  check: '硬约束校验 Workflow',
-  negotiation: '预算与体验协商',
-  confirm: '等你决定',
-  misc: '其他',
-}
-
-const STAGE_STEPS = [
-  { key: 'clarify', label: '澄清需求' },
-  { key: 'retrieval', label: '并行检索' },
-  { key: 'peer', label: '专业团队协作' },
-  { key: 'plan', label: '排行程' },
-  { key: 'check', label: '校验' },
-  { key: 'negotiation', label: '协商' },
-  { key: 'confirm', label: '等你决定' },
-]
-
-/** 按阶段分块：连续同 group 的行归一块（同一阶段多次出现时自然分开） */
-function groupByStage(entries: LogEntry[]) {
-  const groups: { key: string; label: string; ts: string; items: LogEntry[] }[] = []
-  for (const e of entries) {
-    const key = e.group || 'misc'
-    const last = groups[groups.length - 1]
-    if (last && last.key === key) last.items.push(e)
-    else groups.push({ key, label: GROUP_LABEL[key] ?? key, ts: e.ts, items: [e] })
-  }
-  return groups
-}
-
-/** 组内按 actor 分块，让"谁做了什么"一眼可读 */
-function chunkByActor(items: LogEntry[]) {
-  const chunks: { actor: string; items: LogEntry[] }[] = []
-  for (const e of items) {
-    const last = chunks[chunks.length - 1]
-    if (last && last.actor === e.actor) last.items.push(e)
-    else chunks.push({ actor: e.actor, items: [e] })
-  }
-  return chunks
-}
-
-const KIND_MARK: Record<string, string> = {
-  action: '·',
-  decision: '!',
-  question: '?',
-  answer: '✓',
-  tool: '⚙',
-  speech: '“',
-}
-
-function LogGroups({ entries }: { entries: LogEntry[] }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const groups = groupByStage(entries)
-  return (
-    <div className="log-groups">
-      {groups.map((g, gi) => {
-        const key = `${g.key}-${gi}`
-        const isCollapsed = collapsed[key]
-        return (
-          <div key={key} className={`log-group ${isCollapsed ? 'collapsed' : ''}`}>
-            <button
-              className="log-group-head"
-              onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
-            >
-              <span className="log-caret">{isCollapsed ? '▶' : '▼'}</span>
-              <span className="log-group-label">{g.label}</span>
-              <span className="log-group-ts">{g.ts}</span>
-            </button>
-            {!isCollapsed && (
-              <div className="log-group-body">
-                {chunkByActor(g.items.filter((e) => e.depth > 0)).map((chunk, ci) => (
-                  <div key={ci} className="log-chunk">
-                    <div className="log-chunk-head">{chunk.actor}</div>
-                    <ul className="log-list">
-                      {chunk.items.map((e, i) => (
-                        <li key={i} className={`log-row kind-${e.kind} depth-${e.depth}`}>
-                          <span className="log-mark">{KIND_MARK[e.kind] ?? '·'}</span>
-                          <span className="log-text">{e.text}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function Conversation({ events }: { events: RunEvent[] }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
-  const groups: { key: string; label: string; items: RunEvent[] }[] = []
-  const callsById = new Map<string, RunEvent>()
-  const pendingToolsByActor = new Map<string, RunEvent[]>()
-  const messageEvents: RunEvent[] = []
-
-  // tool_call / tool_result 先配对；工具调用挂到同一 Agent 的下一条消息上，
-  // 不再用 seq 窗口猜 parent_id（否则 4 个工具会只显示 1 个）。
-  const hasStructuredMessages = events.some((ev) => Boolean(ev.payload?.message_id))
-  for (const ev of events) {
-    if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor) && ev.event_type !== 'tool_call' && ev.event_type !== 'tool_result') continue
-    if (ev.event_type === 'agent_message' && !ev.payload?.message_id) {
-      if (['transport', 'lodging', 'poi', 'weather'].includes(ev.actor)) continue
-      if (hasStructuredMessages) continue
-    }
-    if (ev.event_type === 'tool_call') {
-      const id = String(ev.payload?.tool_call_id ?? ev.event_id)
-      callsById.set(id, ev)
-      const pending = pendingToolsByActor.get(ev.actor) ?? []
-      pending.push(ev)
-      pendingToolsByActor.set(ev.actor, pending)
-      continue
-    }
-    if (ev.event_type === 'tool_result') {
-      const id = String(ev.payload?.tool_call_id ?? '')
-      const call = callsById.get(id)
-      if (call) {
-        call.payload = { ...call.payload, _result: ev.payload, _resultEventId: ev.event_id }
-      }
-      continue
-    }
-    if (ev.event_type === 'tool_exchange') continue
-    if (['agent_message', 'route_decision', 'validation_result', 'user_question', 'user_answer', 'agent_resumed'].includes(ev.event_type)) {
-      const pending = pendingToolsByActor.get(ev.actor)
-      if (pending?.length) {
-        ev.payload = { ...ev.payload, _tools: pending }
-        pendingToolsByActor.set(ev.actor, [])
-      }
-      messageEvents.push(ev)
-    }
-  }
-  // 没有后续消息的工具调用仍然保留，避免失败回合的证据消失。
-  for (const pending of pendingToolsByActor.values()) {
-    messageEvents.push(...pending)
-  }
-
-  for (const ev of messageEvents) {
-    const key = ev.stage || 'misc'
-    const last = groups[groups.length - 1]
-    if (last?.key === key) last.items.push(ev)
-    else groups.push({ key, label: GROUP_LABEL[key] ?? key, items: [ev] })
-  }
-
-  const actorLabel = (actor: string) => ACTOR_LABEL[actor] ?? actor
-  const actorClass = (actor: string) => actor.replace(/[^a-zA-Z0-9_-]/g, '-')
-  const messageText = (ev: RunEvent) => {
-    const p = ev.payload ?? {}
-    if (ev.event_type === 'tool_call') {
-      return `工具调用：${String(p.tool_name ?? '查询工具')}`
-    }
-    if (ev.event_type === 'validation_result') {
-      const issues = Array.isArray(p.issues) ? p.issues : []
-      const blockers = issues.filter((i: any) => i?.severity === 'blocker').length
-      return p.passed ? `检查通过${issues.length ? `，有 ${issues.length} 条提醒` : ''}` : `检查未通过，需要处理 ${blockers} 个问题`
-    }
-    if (ev.event_type === 'agent_resumed') return '我已经从中断处继续处理。'
-    return String(p.text ?? p.message ?? p.summary ?? '')
-  }
-  const messageKind = (ev: RunEvent) => {
-    if (ev.event_type === 'tool_call') return 'tool'
-    if (ev.event_type === 'user_question') return 'question'
-    if (ev.event_type === 'user_answer') return 'answer'
-    if (ev.event_type === 'validation_result' || ev.event_type === 'route_decision') return 'decision'
-    return 'speech'
-  }
-
-  return (
-    <div className="conversation">
-      {groups.map((group, gi) => {
-        const groupId = `${group.key}-${gi}`
-        const isCollapsed = collapsed[groupId]
-        return (
-          <section key={groupId} className={`conversation-group ${isCollapsed ? 'collapsed' : ''}`}>
-            <button
-              className="conversation-stage"
-              onClick={() => setCollapsed((current) => ({ ...current, [groupId]: !current[groupId] }))}
-            >
-              <span>{isCollapsed ? '▶' : '▼'}</span>
-              <strong>{group.label}</strong>
-              <span className="conversation-count">{group.items.length} 条消息</span>
-            </button>
-            {!isCollapsed && (
-              <div className="conversation-messages">
-                {group.items.map((ev) => {
-                  const attached = Array.isArray(ev.payload?._tools) ? ev.payload._tools as RunEvent[] : []
-                  const evidence = ev.event_type === 'tool_call' ? [ev] : attached
-                  const evidenceKey = `${ev.event_id}-evidence`
-                  const evidenceOpen = collapsed[evidenceKey]
-                  return (
-                    <article key={ev.event_id} className={`conversation-message ${actorClass(ev.actor)} kind-${messageKind(ev)}`}>
-                      <div className="message-avatar">{actorLabel(ev.actor).slice(0, 1)}</div>
-                      <div className="message-main">
-                        <div className="message-meta">
-                          <strong>{actorLabel(ev.actor)}</strong>
-                          <span>{fmtClock(ev.occurred_at)}</span>
-                          {(() => {
-                            const recipients = Array.isArray(ev.payload?.recipients)
-                              ? ev.payload.recipients
-                              : ev.payload?.receiver ? [ev.payload.receiver] : []
-                            const names = recipients.filter((recipient: unknown): recipient is string => typeof recipient === 'string')
-                            return names.length > 0 && <span className="message-route">→ {names.map(actorLabel).join('、')}</span>
-                          })()}
-                          {ev.event_type === 'route_decision' && <em>做了决定</em>}
-                        </div>
-                        {(() => {
-                          const text = messageText(ev) || '已完成这一项处理。'
-                          const bubbleKey = `${ev.event_id}-bubble`
-                          const long = text.length > BUBBLE_PREVIEW
-                          const open = collapsed[bubbleKey]
-                          return (
-                            <>
-                              <div className="message-bubble">
-                                {long && !open ? `${text.slice(0, BUBBLE_PREVIEW)}…` : text}
-                              </div>
-                              {long && (
-                                <button
-                                  className="bubble-toggle"
-                                  onClick={() => setCollapsed((current) => ({ ...current, [bubbleKey]: !current[bubbleKey] }))}
-                                >
-                                  {open ? '收起' : `展开全文 · ${text.length} 字`}
-                                </button>
-                              )}
-                            </>
-                          )
-                        })()}
-                        {ev.payload?.reason && <div className="message-reason">依据：{String(ev.payload.reason)}</div>}
-                        {evidence.length > 0 && (
-                          <div className="evidence">
-                            <button
-                              className="evidence-toggle"
-                              onClick={() => setCollapsed((current) => ({ ...current, [evidenceKey]: !current[evidenceKey] }))}
-                            >
-                              {evidenceOpen ? '收起依据' : '查看依据'} · {evidence.length} 次工具调用
-                            </button>
-                            {evidenceOpen && (
-                              <div className="evidence-body">
-                                {evidence.map((tool) => {
-                                  const result = tool.payload?._result
-                                  return (
-                                    <div key={tool.event_id} className="evidence-row">
-                                      <span className="evidence-tool">{String(tool.payload?.tool_name ?? '工具')}</span>
-                                      <span>{result?.summary ?? result?.status ?? '已执行'}</span>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </article>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-        )
-      })}
-    </div>
-  )
-}
-
-function ActivityLog({ entries, events }: { entries: LogEntry[]; events: RunEvent[] }) {
-  if ((!entries || entries.length === 0) && (!events || events.length === 0)) return null
-  return (
-    <section className="activity">
-      <div className="section-head">
-        <h2>Agent 对话</h2>
-        <span className="hint">{events.length || entries.length} 条 · 可展开查看依据</span>
-      </div>
-      {events.length > 0 ? <Conversation events={events} /> : <LogGroups entries={entries} />}
-    </section>
-  )
+function dayCount(form: Form) {
+  const a = new Date(form.start_date + 'T00:00:00').getTime()
+  const b = new Date(form.end_date + 'T00:00:00').getTime()
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return 1
+  return Math.round((b - a) / 86400000) + 1
 }
 
 const TEAM_ROLES = ['orchestrator', 'logistics', 'local_expert', 'critic_agent', 'writer']
 
-// 消息气泡预览长度：超过就折叠，避免一条长结论撑满整个轨迹抽屉。
-const BUBBLE_PREVIEW = 160
-
 const ACTOR_LABEL: Record<string, string> = {
-  system: '系统',
-  clarify: '需求澄清',
-  transport: '航班查询工具',
-  lodging: '酒店查询工具',
-  poi: '景点查询工具',
-  weather: '天气查询工具',
-  planner: '规划 Agent',
-  critic: '硬约束校验 Workflow',
-  budget_review: '预算评审 Agent',
-  experience_review: '体验评审 Agent',
-  budget_reviewer: '预算评审 Agent',
-  experience_reviewer: '体验评审 Agent',
-  intake: '需求分析 Agent',
-  flight_scout: '航班侦察 Agent',
-  hotel_scout: '酒店侦察 Agent',
-  sight_scout: '景点侦察 Agent',
-  weather_scout: '天气侦察 Agent',
-  budget_critic: '预算评审 Agent',
-  experience_critic: '体验评审 Agent',
-  orchestrator: '团队统筹',
-  logistics: '交通住宿专家',
-  local_expert: '当地体验专家',
-  critic_agent: '方案评审',
-  writer: '行程撰稿',
-  team_protocol: '协作协议',
-  peer_run: '专业团队协作',
-  peer_ask: '请示你',
-  peer_finalize: '硬约束校验',
-  negotiation: '预算与体验协商',
-  budget_officer: '预算评审 Agent',
-  experience_officer: '体验评审 Agent',
-  mediator: '规则裁决',
-  confirm: '等待确认',
-  ask: '等待确认',
+  orchestrator: '主控',
+  logistics: '交通住宿',
+  local_expert: '本地体验',
+  critic_agent: '独立评审',
+  writer: '文案',
   user: '你',
+  system: '系统',
 }
 
-function fmtArgs(args: unknown): string {
-  if (!args || typeof args !== 'object') return ''
-  const entries = Object.entries(args as Record<string, unknown>)
-  if (entries.length === 0) return ''
-  return entries.map(([k, v]) => `${k}=${String(v)}`).join(', ')
+const ROLE_INITIAL: Record<string, string> = {
+  orchestrator: '主',
+  logistics: '交',
+  local_expert: '本',
+  critic_agent: '审',
+  writer: '文',
 }
 
-function fmtClock(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleTimeString('zh-CN', { hour12: false })
+const ROLE_COLOR: Record<string, string> = {
+  orchestrator: '#8b9cff',
+  logistics: '#f0b872',
+  local_expert: '#6fe3c0',
+  critic_agent: '#c0a8ff',
+  writer: '#9ec5fe',
 }
 
-/** 把统一事件投影成展示行；只影响渲染，不改变存储与回放的原事件。 */
-function eventToLogEntry(ev: RunEvent): LogEntry | null {
-  const p = ev.payload ?? {}
-  const base: Omit<LogEntry, 'kind' | 'text' | 'depth'> = {
-    event_id: ev.event_id,
-    ts: (p.ts as string) ?? fmtClock(ev.occurred_at),
-    actor: ACTOR_LABEL[ev.actor] ?? ev.actor,
-    group: ev.stage,
-    detail: '',
-    tool: '',
-  }
-  switch (ev.event_type) {
-    case 'stage_started':
-      return { ...base, kind: 'stage', text: p.text ?? `阶段: ${GROUP_LABEL[ev.stage] ?? ev.stage}`, depth: 0 }
-    case 'agent_started':
-      // 每个 agent 的动作行已经说明了它在做什么，单独一条"开始"是噪音
-      return null
-    case 'agent_resumed':
-      // 恢复是值得看见的：同一个节点在中断后继续跑
-      return { ...base, kind: 'action', text: `${base.actor}继续执行（中断后恢复）`, depth: 1 }
-    case 'agent_message':
-    case 'route_decision':
-      return {
-        ...base,
-        kind: (p.kind as string) ?? (ev.event_type === 'route_decision' ? 'decision' : 'action'),
-        text: p.text ?? '',
-        depth: (p.depth as number) ?? 1,
-      }
-    case 'user_question':
-      return { ...base, kind: 'question', text: p.text ?? '', depth: 1 }
-    case 'user_answer':
-      return { ...base, kind: 'answer', text: p.text ?? '', depth: 1 }
-    case 'tool_call':
-      return {
-        ...base,
-        kind: 'tool',
-        text: `${p.tool_name}(${fmtArgs(p.arguments)})`,
-        depth: 2,
-        tool: String(p.tool_name ?? ''),
-      }
-    case 'tool_result':
-      return {
-        ...base,
-        kind: 'tool',
-        text: `→ ${p.summary ?? p.status ?? ''}`,
-        depth: 2,
-        tool: String(p.tool_name ?? ''),
-      }
-    case 'tool_exchange':
-      return { ...base, kind: 'tool', text: p.text ?? '', depth: 2, tool: String(p.tool ?? '') }
-    case 'agent_completed':
-      // 节点的具体动作已由日志行记录，这里不再重复一条摘要
-      return null
-    case 'validation_result': {
-      const issues = Array.isArray(p.issues) ? p.issues : []
-      const blockers = issues.filter((i: any) => i?.severity === 'blocker')
-      return {
-        ...base,
-        kind: 'decision',
-        text: p.passed ? `校验通过（${issues.length} 条提醒）` : `校验未通过，${blockers.length} 个阻断项`,
-        depth: 1,
-      }
-    }
-    default:
-      return null
-  }
+const TYPE_LABEL: Record<string, string> = {
+  transport: '交通',
+  transfer: '接驳',
+  sight: '景点',
+  meal: '餐食',
+  hotel: '住宿',
+  rest: '休息',
+  free: '自由时间',
 }
 
-function projectEvents(events: RunEvent[]): LogEntry[] {
-  const rows: LogEntry[] = []
-  for (const ev of events) {
-    const row = eventToLogEntry(ev)
-    if (row) rows.push(row)
-  }
-  return rows
+const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
+const PACE = ['轻松', '适中', '紧凑'] as const
+
+const DEFAULT_FORM: Form = {
+  origin: '上海',
+  destination: '成都',
+  start_date: '2026-11-20',
+  end_date: '2026-11-24',
+  travelers: 2,
+  budget_total: 8000,
+  elder: true,
+  child: false,
+  preferences: ['美食', '人文'],
+  pace: '适中',
 }
 
-/** 历史记录只有 activity 投影；这里把它还原成同一套事件，保证回放视图一致。 */
-function activityToEvent(row: LogEntry, seq: number): RunEvent {
-  const type =
-    row.kind === 'stage'
-      ? 'stage_started'
-      : row.kind === 'tool'
-        ? 'tool_exchange'
-        : row.kind === 'question'
-          ? 'user_question'
-          : row.kind === 'answer'
-            ? 'user_answer'
-            : row.kind === 'decision'
-              ? 'route_decision'
-              : 'agent_message'
-  return {
-    schema_version: 1,
-    run_id: 'legacy',
-    plan_version: 1,
-    event_id: `legacy-${seq}-${row.ts}-${row.text.slice(0, 8)}`,
-    seq,
-    occurred_at: new Date().toISOString(),
-    event_type: type,
-    stage: row.group,
-    actor: row.actor,
-    parent_id: null,
-    payload: { ts: row.ts, text: row.text, detail: row.detail, kind: row.kind, depth: row.depth, tool: row.tool },
-  }
+/** ---------------- 小组件 ---------------- */
+
+function Station({ role, state }: { role: string; state: 'idle' | 'running' | 'done' }) {
+  return (
+    <div className={`v1-station ${state}`}>
+      <span className="v1-station-idx">{String(TEAM_ROLES.indexOf(role) + 1).padStart(2, '0')}</span>
+      <span className="v1-station-dot" style={{ background: ROLE_COLOR[role] }}>
+        {ROLE_INITIAL[role]}
+      </span>
+      <span className="v1-station-role">{ACTOR_LABEL[role] ?? role}</span>
+      <span className="v1-station-state">
+        {state === 'done' ? '已交付' : state === 'running' ? '进行中' : '待命'}
+      </span>
+    </div>
+  )
 }
 
-function activityToEvents(activity: LogEntry[]): RunEvent[] {
-  return activity.map((row, i) => activityToEvent(row, i + 1))
+function Bar({ value, tone = 'indigo' }: { value: number; tone?: 'indigo' | 'mint' | 'amber' | 'rose' }) {
+  return (
+    <div className="v1-bar">
+      <i className={`v1-bar-fill ${tone}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+    </div>
+  )
 }
 
-type InterruptOption = { value: string; label: string }
-
-type InterruptInfo = {
-  type: string
-  message?: string
-  question?: string
-  from?: string
-  total?: number
-  budget?: number
-  over?: number
-  ratio?: number
-  options: InterruptOption[]
-  plan_id: string
-  max_calls?: number
-  suggested_max_calls?: number
-  negotiation?: Negotiation | null
-  events?: RunEvent[]
-  activity?: LogEntry[]
-}
+/** ---------------- 主应用 ---------------- */
 
 export default function App() {
+  const [screen, setScreen] = useState<Screen>('home')
+  const [phase, setPhase] = useState<Phase>('form')
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
-  const [phase, setPhase] = useState<'form' | 'running' | 'interrupt' | 'done' | 'error' | 'stopped'>('form')
+  const [choice, setChoice] = useState({ rv: 'noon' as 'early' | 'noon' | 'late', stay: 'same' as 'same' | 'switch' })
+  const [briefText, setBriefText] = useState('')
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
@@ -885,11 +301,12 @@ export default function App() {
   const [versions, setVersions] = useState<VersionInfo[]>([])
   const [needToken, setNeedToken] = useState(false)
   const [tokenDraft, setTokenDraft] = useState('')
-  // 运行中的 plan_id：取消接口需要它；run_started 事件到达后才有值。
   const [activePlanId, setActivePlanId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const [tab, setTab] = useState<'tt' | 'budget' | 'change'>('tt')
+  const [dayFilter, setDayFilter] = useState<string | null>(null)
+  const [selected, setSelected] = useState<{ date: string; index: number } | null>(null)
   const drawerRef = useRef<HTMLDivElement>(null)
-  const liveLogs = useMemo(() => projectEvents(liveEvents), [liveEvents])
 
   useEffect(() => {
     onAuthRequired = () => setNeedToken(true)
@@ -902,7 +319,6 @@ export default function App() {
     const params = new URLSearchParams(location.search)
     const id = params.get('plan')
     if (!id) return
-    // 分享链接带签名，外部访问时不需要总口令
     const share = params.get('share')
     const url = share ? `/api/plan/${id}?share=${encodeURIComponent(share)}` : `/api/plan/${id}`
     apiFetch(url)
@@ -912,25 +328,26 @@ export default function App() {
         return apiFetch(`/api/run/${id}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error('not found'))))
       })
       .then((rec) => {
-        if (rec?.status === 'interrupted' || rec?.status === 'failed' || rec?.status === 'failed_non_resumable' || rec?.status === 'checkpoint_lost' || rec?.status === 'needs_input' || rec?.status === 'cancelled') {
+        if (['interrupted', 'failed', 'failed_non_resumable', 'checkpoint_lost', 'needs_input', 'cancelled'].includes(rec?.status)) {
           const payload = rec.payload ?? {}
           setErrorStats(payload.llm_stats as LlmStats | undefined)
           setRecoveryStatus(payload.recovery_status)
           if (rec.status === 'interrupted') {
-            const info = { ...(payload.interrupt ?? {}), plan_id: rec.run_id } as InterruptInfo
-            setInterruptInfo(info)
+            setInterruptInfo({ ...(payload.interrupt ?? {}), plan_id: rec.run_id } as InterruptInfo)
             setPhase('interrupt')
-            if (Array.isArray(info.activity)) setLiveEvents(activityToEvents(info.activity))
           } else {
-            const text = [
-              String(payload.message ?? '规划失败'),
-              ...(Array.isArray(payload.blockers) ? payload.blockers : []),
-              ...(Array.isArray(payload.reasons) ? payload.reasons : []),
-              ...(Array.isArray(payload.issues) ? payload.issues.map((i: any) => i?.message ?? '') : []),
-            ].filter(Boolean).join('\n')
-            setError(text)
+            setError(
+              [
+                String(payload.message ?? '规划失败'),
+                ...(Array.isArray(payload.blockers) ? payload.blockers : []),
+                ...(Array.isArray(payload.reasons) ? payload.reasons : []),
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            )
             setPhase(['needs_input', 'cancelled'].includes(rec.status) ? 'stopped' : 'error')
           }
+          setScreen('running')
           return
         }
         setResult({
@@ -940,31 +357,42 @@ export default function App() {
           critique: rec.critique,
           revision: rec.revision ?? 0,
           errors: [],
-          negotiation: rec.negotiation ?? null,
           version: rec.version,
           share: share ?? undefined,
           document: rec.document,
           team_tasks: rec.team_tasks,
+          issue_ledger: rec.issue_ledger,
           approved_version: rec.approved_version,
+          team_state: rec.team_state,
           llm_stats: rec.llm_stats,
+          summary: rec.summary,
         })
-        // 新数据走统一事件；旧记录回落到 activity 投影，保证分享链接仍可打开。
-        if (Array.isArray(rec.events) && rec.events.length > 0) {
-          setLiveEvents(rec.events)
-        } else if (Array.isArray(rec.activity)) {
-          setLiveEvents(activityToEvents(rec.activity))
-        }
+        if (Array.isArray(rec.events)) setLiveEvents(rec.events)
         setPhase('done')
+        setScreen('plan')
         void loadVersions(rec.id)
       })
-      .catch(() => setError('该规划不存在或已失效'))
+      .catch(() => {
+        setError('该规划不存在或已失效')
+        setPhase('error')
+        setScreen('running')
+      })
   }, [])
 
-  // 轨迹面板跟随最新一条自动滚动
+  useEffect(() => {
+    window.scrollTo({ top: 0 })
+  }, [screen])
+
+  useEffect(() => {
+    if (phase === 'done' && result) setScreen('plan')
+    if (phase === 'interrupt') setScreen('running')
+    if (phase === 'error' || phase === 'stopped') setScreen('running')
+  }, [phase, result])
+
   useEffect(() => {
     if (!drawerOpen) return
-    drawerRef.current?.scrollTo({ top: drawerRef.current.scrollHeight, behavior: 'smooth' })
-  }, [liveLogs, drawerOpen])
+    drawerRef.current?.scrollTo({ top: drawerRef.current.scrollHeight })
+  }, [liveEvents, drawerOpen])
 
   function appendEvent(ev: RunEvent) {
     setLiveEvents((prev) => (prev.some((e) => e.event_id === ev.event_id) ? prev : [...prev, ev]))
@@ -991,135 +419,60 @@ export default function App() {
         }
       } else if (ev.event_type === 'run_interrupted') {
         setInterruptInfo((ev.payload?.interrupt ?? null) as InterruptInfo | null)
-        setErrorStats((ev.payload?.interrupt?.llm_stats ?? undefined) as LlmStats | undefined)
         setRecoveryStatus('resumable')
         setPhase('interrupt')
-        const pid = ev.payload?.plan_id ?? ev.payload?.interrupt?.plan_id
-        if (pid) {
-          const url = new URL(location.href)
-          url.searchParams.set('plan', pid)
-          history.replaceState(null, '', url)
-        }
       } else if (ev.event_type === 'run_needs_input') {
-        setErrorStats(ev.payload?.llm_stats as LlmStats | undefined)
         setRecoveryStatus('stopped')
-        const reason = [
-          String(ev.payload?.message ?? '本次运行未完成'),
-          ...(Array.isArray(ev.payload?.issues) ? ev.payload.issues.map((i: any) => i?.message ?? '') : []),
-        ].filter(Boolean).join('\n')
-        setError(reason)
+        setError(
+          [String(ev.payload?.message ?? '本次运行未完成'), ...(Array.isArray(ev.payload?.issues) ? ev.payload.issues.map((i: any) => i?.message ?? '') : [])]
+            .filter(Boolean)
+            .join('\n'),
+        )
         setPhase('stopped')
-        const pid = ev.payload?.plan_id
-        if (pid) {
-          const url = new URL(location.href)
-          url.searchParams.set('plan', pid)
-          history.replaceState(null, '', url)
-        }
       } else if (ev.event_type === 'run_failed') {
-        setErrorStats(ev.payload?.llm_stats as LlmStats | undefined)
         setRecoveryStatus(ev.payload?.recovery_status)
-        const reason = [
-          String(ev.payload?.message ?? '规划失败'),
-          ...(Array.isArray(ev.payload?.blockers) ? ev.payload.blockers : []),
-          ...(Array.isArray(ev.payload?.reasons) ? ev.payload.reasons : []),
-        ].filter(Boolean).join('\n')
-        setError(reason)
+        setError(
+          [String(ev.payload?.message ?? '规划失败'), ...(Array.isArray(ev.payload?.blockers) ? ev.payload.blockers : [])]
+            .filter(Boolean)
+            .join('\n'),
+        )
         setPhase('error')
-        const pid = ev.payload?.plan_id
-        if (pid) {
-          const url = new URL(location.href)
-          url.searchParams.set('plan', pid)
-          history.replaceState(null, '', url)
-        }
       }
       if (['run_completed', 'run_interrupted', 'run_needs_input', 'run_failed'].includes(ev.event_type)) {
-        // 运行已结束：没有可取消的对象，取消按钮随之隐藏。
         setActivePlanId(null)
         setCancelling(false)
       }
       return
     }
-
-    // 兼容旧服务端（trace/done/interrupt/error）
-    if (name === 'trace') {
-      if (data.phase === 'log' && data.entry) {
-        setLiveEvents((prev) => [...prev, activityToEvent(data.entry, prev.length + 1)])
-      }
-    } else if (name === 'done') {
+    if (name === 'done') {
       setResult(data)
       setPhase('done')
       setInterruptInfo(null)
-      if (Array.isArray(data.activity)) setLiveEvents(activityToEvents(data.activity))
       const url = new URL(location.href)
       url.searchParams.set('plan', data.plan_id)
       history.replaceState(null, '', url)
     } else if (name === 'interrupt') {
       setInterruptInfo(data)
       setPhase('interrupt')
-      if (Array.isArray(data.activity)) setLiveEvents(activityToEvents(data.activity))
     } else if (name === 'error') {
-      setError(data.message)
-      setPhase('error')
-    }
-  }
-
-  async function cancelPlan() {
-    // run_started 事件之前、或页面从 URL 恢复时，activePlanId 可能还没赋值，用 URL 里的 plan 兜底。
-    const pid = activePlanId ?? new URLSearchParams(location.search).get('plan')
-    if (!pid || cancelling) return
-    setCancelling(true)
-    try {
-      const res = await apiFetch(`/api/plan/${pid}/cancel`, { method: 'POST' })
-      if (!res.ok) {
-        const detail = await res.json().catch(() => null)
-        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
-      }
-      // 取消是协作式的：真正的终态由随后到达的 run_needs_input 事件决定。
-    } catch (e) {
-      setCancelling(false)
-      setError(describeError(e))
-    }
-  }
-
-  async function resumePlan(decision: string, maxModelCalls?: number) {
-    const pid = interruptInfo?.plan_id
-    if (!pid) return
-    setInterruptInfo(null)
-    setActivePlanId(pid)
-    setPhase('running')
-    try {
-      const res = await apiFetch(`/api/plan/${pid}/resume`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          decision,
-          kind: interruptInfo?.type === 'peer_escalation' ? 'peer_review_risk' : interruptInfo?.type,
-          accepted_issue_codes: decision === 'accept_risk' ? ['REVIEW_RISK_ACCEPTED'] : [],
-          note: decision === 'accept_risk' ? '用户确认接受当前评审风险' : '',
-          // 额度耗尽时把建议上限随恢复请求一起提交，后端会写回设置。
-          ...(maxModelCalls ? { max_model_calls: maxModelCalls } : {}),
-        }),
-      })
-      if (!res.ok) {
-        const detail = await res.json().catch(() => null)
-        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
-      }
-      await consume(res, handleEvent)
-      setPhase((p) => (p === 'running' ? 'done' : p))
-    } catch (e) {
-      setError(describeError(e))
+      setError(String(data.message ?? '规划失败'))
       setPhase('error')
     }
   }
 
   async function runPlan() {
     setPhase('running')
+    setScreen('running')
     setResult(null)
     setInterruptInfo(null)
     setLiveEvents([])
     setError('')
     setActivePlanId(null)
     setCancelling(false)
+    const notes = [
+      choice.rv === 'early' ? '尽量早回' : choice.rv === 'late' ? '傍晚返程' : '中午返程',
+      choice.stay === 'switch' ? '最后一晚住机场附近' : `${nights} 晚同一家`,
+    ]
     const body = {
       origin: form.origin,
       destination: form.destination,
@@ -1127,10 +480,11 @@ export default function App() {
       end_date: form.end_date,
       travelers: form.travelers,
       budget_total: form.budget_total,
-      companions: form.elder || form.child
-        ? [...(form.elder ? ['老人'] : []), ...(form.child ? ['儿童'] : [])]
-        : ['无'],
-      preferences: form.preferences,
+      companions:
+        form.elder || form.child
+          ? [...(form.elder ? ['老人'] : []), ...(form.child ? ['儿童'] : [])]
+          : ['无'],
+      preferences: [...form.preferences, ...notes],
       pace: form.pace,
     }
     try {
@@ -1151,6 +505,53 @@ export default function App() {
     }
   }
 
+  async function resumePlan(decision: string, maxModelCalls?: number) {
+    const pid = interruptInfo?.plan_id
+    if (!pid) return
+    setInterruptInfo(null)
+    setActivePlanId(pid)
+    setPhase('running')
+    setScreen('running')
+    try {
+      const res = await apiFetch(`/api/plan/${pid}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          kind: interruptInfo?.type === 'peer_escalation' ? 'peer_review_risk' : interruptInfo?.type,
+          accepted_issue_codes: decision === 'accept_risk' ? ['REVIEW_RISK_ACCEPTED'] : [],
+          note: decision === 'accept_risk' ? '用户确认接受当前评审风险' : '',
+          ...(maxModelCalls ? { max_model_calls: maxModelCalls } : {}),
+        }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
+      await consume(res, handleEvent)
+      setPhase((p) => (p === 'running' ? 'done' : p))
+    } catch (e) {
+      setError(describeError(e))
+      setPhase('error')
+    }
+  }
+
+  async function cancelPlan() {
+    const pid = activePlanId ?? new URLSearchParams(location.search).get('plan')
+    if (!pid || cancelling) return
+    setCancelling(true)
+    try {
+      const res = await apiFetch(`/api/plan/${pid}/cancel`, { method: 'POST' })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
+    } catch (e) {
+      setCancelling(false)
+      setError(describeError(e))
+    }
+  }
+
   async function refine(day: string) {
     if (!result) return
     setRefining(day)
@@ -1165,20 +566,12 @@ export default function App() {
         throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
       }
       const data = await res.json()
-      const sightsOf = (it: any, d: string) =>
-        (it.days.find((x: any) => x.date === d)?.items ?? [])
-          .filter((i: any) => i.type === 'sight')
-          .map((i: any) => i.title)
-      const before = sightsOf(result.itinerary, day)
-      const after = sightsOf(data.itinerary, day)
-      const changed = JSON.stringify(before) !== JSON.stringify(after)
       setResult({
         ...result,
         itinerary: data.itinerary,
         critique: data.critique,
         revision: data.revision ?? result.revision,
         version: data.version ?? result.version,
-        // 团队返工会重新评审并重写计划书：把服务端返回的交付视图一并更新。
         document: data.document ?? null,
         team_tasks: data.team_tasks ?? {},
         issue_ledger: data.issue_ledger ?? [],
@@ -1190,13 +583,12 @@ export default function App() {
       setFeedback((f) => ({ ...f, [day]: '' }))
       setRefineNote((n) => ({
         ...n,
-        [day]: changed
-          ? data.refine_source === 'team'
-            ? `已由团队返工复核（第 ${data.version ?? '—'} 版，重写了计划书）`
+        [day]:
+          data.refine_source === 'team'
+            ? `已由团队返工复核（第 ${data.version ?? '—'} 版）`
             : data.refine_source === 'model'
               ? '已由模型理解意见后重排'
-              : '已按规则重排'
-          : '没有改动：当前安排已符合你的意见',
+              : '已按规则重排',
       }))
     } catch (e) {
       setError(describeError(e))
@@ -1212,7 +604,7 @@ export default function App() {
       const data = await r.json()
       setVersions(data.versions ?? [])
     } catch {
-      // 版本面板拿不到不影响主流程
+      /* 版本面板失败不影响主流程 */
     }
   }
 
@@ -1231,7 +623,6 @@ export default function App() {
         itinerary: data.itinerary,
         critique: data.critique,
         version: data.version,
-        // 回滚到某版本时，该版本的团队交付视图也要一起回退，不能留着旧计划书。
         document: data.document ?? null,
         team_tasks: data.team_tasks ?? {},
         issue_ledger: data.issue_ledger ?? [],
@@ -1244,52 +635,46 @@ export default function App() {
     }
   }
 
-  const lastStageKey = useMemo(() => {
-    for (let i = liveEvents.length - 1; i >= 0; i--) {
-      if (liveEvents[i].stage) return liveEvents[i].stage
-    }
-    return ''
-  }, [liveEvents])
-  const runningStage = lastStageKey ? `正在${GROUP_LABEL[lastStageKey] ?? lastStageKey}` : '正在启动'
-  const stageReached = (key: string) => liveEvents.some((e) => e.stage === key)
-
-  const doneCount = new Set(
-    liveEvents.filter((e) => e.event_type === 'agent_completed').map((e) => e.actor),
-  ).size
-
-  // 角色进度取自 agent_message.actor：图节点级 agent_started 用的是 peer_run 这类节点名，
-  // 不能代表具体角色出场。
   const roleStates = useMemo(() => {
     const appeared = new Set(
-      liveEvents
-        .filter((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor))
-        .map((e) => e.actor),
+      liveEvents.filter((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor)).map((e) => e.actor),
     )
-    const last = [...liveEvents]
-      .reverse()
-      .find((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor))
+    const last = [...liveEvents].reverse().find((e) => e.event_type === 'agent_message' && TEAM_ROLES.includes(e.actor))
     const states: Record<string, 'idle' | 'running' | 'done'> = {}
     for (const role of TEAM_ROLES) {
-      states[role] = role === last?.actor && phase === 'running'
-        ? 'running'
-        : appeared.has(role) ? 'done' : 'idle'
+      states[role] = role === last?.actor && phase === 'running' ? 'running' : appeared.has(role) ? 'done' : 'idle'
     }
     return states
   }, [liveEvents, phase])
 
+  const nights = Math.max(1, dayCount(form) - 1)
+  const days = result?.itinerary.days ?? []
+  const total = result?.itinerary.total_cost ?? 0
+  const budget = result?.itinerary.budget_total ?? form.budget_total
+  const percent = budget > 0 ? (total / budget) * 100 : 0
+
+  const selectedItem = useMemo(() => {
+    if (!selected || !result) return null
+    const day = result.itinerary.days.find((d) => d.date === selected.date)
+    return day?.items.filter((i) => i.type !== 'rest')[selected.index] ?? null
+  }, [selected, result])
+
+  const trace = useMemo(() => {
+    return liveEvents.slice(-120).map((e) => ({
+      id: e.event_id,
+      time: new Date(e.occurred_at).toLocaleTimeString('zh-CN', { hour12: false }),
+      actor: ACTOR_LABEL[e.actor] ?? e.actor,
+      text: String(e.payload?.text ?? e.payload?.message ?? e.payload?.summary ?? e.event_type),
+    }))
+  }, [liveEvents])
+
   return (
-    <div className="shell">
+    <div className="v1">
       {needToken && (
-        <div className="token-bar">
-          <span>这个服务需要访问口令才能使用。</span>
-          <input
-            type="password"
-            placeholder="粘贴访问口令"
-            value={tokenDraft}
-            onChange={(e) => setTokenDraft(e.target.value)}
-          />
+        <div className="v1-tokenbar">
+          <span>这个服务需要访问口令。</span>
+          <input type="password" placeholder="粘贴访问口令" value={tokenDraft} onChange={(e) => setTokenDraft(e.target.value)} />
           <button
-            className="ghost"
             onClick={() => {
               localStorage.setItem(TOKEN_KEY, tokenDraft.trim())
               setNeedToken(false)
@@ -1301,593 +686,891 @@ export default function App() {
           </button>
         </div>
       )}
-      <header className="topbar">
-        <div>
-          <h1>旅行规划多 Agent 编排</h1>
-          <p className="sub">LangGraph 编排 · 四路并行检索 · 校验回退 · 单日重排</p>
+
+      <header className="v1-nav">
+        <div className="v1-brand">
+          <i />
+          行程协作 <small>PLANNER</small>
         </div>
-        <div className="topbar-right">
-          <span className="mode-pill">深度团队 · 单模式</span>
-          <div className="status-pill">
-            {phase === 'form' && '待提交'}
-            {phase === 'running' && `执行中 ${doneCount}/7`}
-            {phase === 'interrupt' && '等待你的决定'}
-            {phase === 'done' && (result?.critique.passed ? '已完成' : '已完成 · 有未解项')}
-            {phase === 'stopped' && '未完成 · 待调整需求'}
-            {phase === 'error' && '失败'}
-          </div>
-          <button
-            className={`ghost ${drawerOpen ? 'active' : ''}`}
-            onClick={() => setDrawerOpen((v) => !v)}
-            disabled={liveLogs.length === 0 && phase === 'form'}
-          >
-            执行轨迹{liveLogs.length > 0 ? ` · ${liveLogs.length}` : ''}
+        <nav className="v1-steps">
+          {(
+            [
+              ['home', '01 入口'],
+              ['demand', '02 需求'],
+              ['brief', '03 取舍'],
+              ['run', '04 运行'],
+              ['plan', '05 方案'],
+              ['share', '06 交付'],
+            ] as const
+          ).map(([key, label]) => {
+            const active =
+              (key === 'home' && screen === 'home') ||
+              (key === 'demand' && screen === 'demand') ||
+              (key === 'brief' && screen === 'brief') ||
+              (key === 'run' && screen === 'running') ||
+              (key === 'plan' && screen === 'plan') ||
+              (key === 'share' && screen === 'share')
+            const disabled = key === 'plan' && !result
+            return (
+              <button
+                key={key}
+                className={active ? 'on' : ''}
+                disabled={disabled}
+                onClick={() => {
+                  if (key === 'home') setScreen('home')
+                  if (key === 'demand') setScreen('demand')
+                  if (key === 'brief') setScreen('brief')
+                  if (key === 'run') setScreen('running')
+                  if (key === 'plan' && result) setScreen('plan')
+                  if (key === 'share' && result) setScreen('share')
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </nav>
+        <div className="v1-nav-right">
+          <span className="v1-tag">{phase === 'running' ? '运行中' : phase === 'done' ? '已交付' : phase === 'error' ? '失败' : '演示数据'}</span>
+          <button className="v1-ghost sm" onClick={() => setDrawerOpen(true)} disabled={trace.length === 0}>
+            轨迹{trace.length > 0 ? ` ${trace.length}` : ''}
           </button>
-          {phase === 'running' && (
-            <button className="ghost" onClick={cancelPlan} disabled={cancelling}>
-              {cancelling ? '正在取消…' : '停止运行'}
-            </button>
-          )}
-          <button className="ghost" onClick={() => setSettingsOpen(true)}>
+          <button className="v1-ghost sm" onClick={() => setSettingsOpen(true)}>
             设置
           </button>
         </div>
       </header>
 
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} onSaved={() => undefined} />}
+
       {drawerOpen && (
-        <aside className="drawer">
-          <div className="drawer-head">
-            <div>
-              <h2>执行轨迹</h2>
-              <span className="drawer-sub">
-                {phase === 'running' ? '实时' : '已完成'} · {liveLogs.length} 步
+        <div className="v1-drawer-mask" onClick={() => setDrawerOpen(false)}>
+          <aside className="v1-drawer" ref={drawerRef} onClick={(e) => e.stopPropagation()}>
+            <div className="v1-drawer-head">
+              <b>执行轨迹</b>
+              <span>{liveEvents.length} 条</span>
+              <button className="v1-ghost sm" onClick={() => setDrawerOpen(false)}>
+                收起
+              </button>
+            </div>
+            <div className="v1-trace">
+              {trace.length === 0 && <p className="v1-muted">提交需求后，各角色的动作会实时出现在这里。</p>}
+              {trace.map((t) => (
+                <div key={t.id} className="v1-trace-row">
+                  <time>{t.time}</time>
+                  <b>{t.actor}</b>
+                  <span>{t.text}</span>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* ---------------- 01 入口 ---------------- */}
+      {screen === 'home' && (
+        <section className="v1-home">
+          <div className="v1-home-left">
+            <div className="v1-eyebrow">
+              <i />
+              <span>multi-agent travel planning</span>
+            </div>
+            <h1>
+              旅行规划，
+              <br />
+              <span>应该经得起审阅。</span>
+            </h1>
+            <p className="v1-lede">
+              主控拆任务，交通住宿与本地体验各自交付，独立评审做硬约束校验，文案整合成稿。每一处改动都有理由、有版本、可回滚。
+            </p>
+            <div className="v1-cta-row">
+              <button className="v1-primary" onClick={() => setScreen('demand')}>
+                开始规划
+              </button>
+              <button className="v1-ghost" onClick={() => setScreen('demand')}>
+                填入示例
+              </button>
+            </div>
+            <div className="v1-meta">
+              <span>
+                <b>5</b> 个角色
+              </span>
+              <span>
+                <b>15</b> 次请求
+              </span>
+              <span>
+                <b>2′02″</b> 平均耗时
+              </span>
+              <span>
+                <b>真实</b> 模型
               </span>
             </div>
-            <button className="ghost" onClick={() => setDrawerOpen(false)}>
-              收起
-            </button>
           </div>
-          <div className="drawer-body" ref={drawerRef}>
-            {liveEvents.length > 0 && (
-              <div className="role-board" aria-label="团队进度">
-                {TEAM_ROLES.map((role) => {
-                  const state = roleStates[role] ?? 'idle'
-                  return (
-                    <span key={role} className={`role-chip ${role} ${state}`}>
-                      <i className="role-dot" />
-                      {ACTOR_LABEL[role] ?? role}
-                      <em>{state === 'done' ? '已出场' : state === 'running' ? '进行中' : '待命'}</em>
-                    </span>
-                  )
-                })}
+
+          <div className="v1-deck" aria-hidden="true">
+            <div className="v1-deck-n">05</div>
+            {[
+              ['D1', '抵达 · 安顿', '机场 → 酒店 · 2 处', '08:05'],
+              ['D2', '老城 · 步行', '一条巷子走到晚 · 2 处', '09:00'],
+              ['D3', '近郊 · 半日', '午后有雨，已改室内 · 1 处', '10:30'],
+              ['D4', '雨天预案 · 室内', '两馆，均免费 · 2 处', '09:00'],
+              ['D5', '返程 · 留足时间', '提前 150 分钟到机场 · 0 处', '09:20'],
+            ].map(([d, t, s, c], i) => (
+              <div key={d} className={`v1-card ${i === 2 ? 'hot' : ''}`}>
+                <span className="v1-card-d">{d}</span>
+                <span>
+                  <b>{t}</b>
+                  <small>{s}</small>
+                </span>
+                <span className="v1-card-c">{c}</span>
               </div>
-            )}
-            {liveLogs.length === 0 ? (
-              <p className="muted">提交需求后，各 agent 的讨论与工具调用会实时出现在这里。</p>
-            ) : (
-              <Conversation events={liveEvents} />
-            )}
+            ))}
+            <div className="v1-deck-cap">示例 · 5 天 4 晚 · 2 人含老人 · 预算 8,000</div>
           </div>
-        </aside>
+
+          <div className="v1-features">
+            <div>
+              <span>01 / SPLIT</span>
+              <b>分工，而不是一个模型硬编</b>
+              <p>五个角色各做一件事，交付物独立可检查。</p>
+            </div>
+            <div>
+              <span>02 / VERIFY</span>
+              <b>硬约束校验</b>
+              <p>预算、闭馆、赶机、体力；不过就退回重排。</p>
+            </div>
+            <div>
+              <span>03 / EDIT</span>
+              <b>改一处，只动一天</b>
+              <p>下指令改某一天，其余不动；版本可回滚。</p>
+            </div>
+          </div>
+        </section>
       )}
 
-      {settingsOpen && (
-        <SettingsPanel
-          onClose={() => setSettingsOpen(false)}
-          onSaved={() => undefined}
-        />
+      {/* ---------------- 02 需求 ---------------- */}
+      {screen === 'demand' && (
+        <section className="v1-page">
+          <div className="v1-topbar">
+            <button className="v1-back" onClick={() => setScreen('home')}>
+              ← 返回
+            </button>
+            <span className="v1-step">STEP 02 / 06</span>
+            <span className="v1-pill">NEW TRIP</span>
+          </div>
+          <h2>先说说这趟旅行。</h2>
+          <p className="v1-sub">一句话就够，字段可以补充。没说的部分，下一步团队会问你。</p>
+
+          <div className="v1-two">
+            <div className="v1-panel">
+              <textarea
+                placeholder="例如：成都 5 天，2 人，带一位老人，预算 8000，想看人文、吃点好的，节奏别太赶"
+                value={`${form.origin} 到 ${form.destination}，${form.start_date} 到 ${form.end_date}，${form.travelers} 人，预算 ${form.budget_total}，${form.elder ? '带老人，' : ''}${form.preferences.join('、')}，节奏${form.pace}`}
+                onChange={(e) => {
+                  const text = e.target.value
+                  setBriefText(text)
+                  const m = text.match(/(\d+)\s*人/)
+                  const b = text.match(/预算\s*(\d+)/)
+                  if (m || b) {
+                    setForm((f) => ({
+                      ...f,
+                      travelers: m ? Number(m[1]) : f.travelers,
+                      budget_total: b ? Number(b[1]) : f.budget_total,
+                    }))
+                  }
+                }}
+              />
+              <div className="v1-fields">
+                <label>
+                  出发
+                  <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
+                </label>
+                <label>
+                  到达
+                  <input value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
+                </label>
+                <label>
+                  开始
+                  <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+                </label>
+                <label>
+                  结束
+                  <input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
+                </label>
+                <label>
+                  人数
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={form.travelers}
+                    onChange={(e) => setForm({ ...form, travelers: Number(e.target.value) })}
+                  />
+                </label>
+                <label>
+                  预算
+                  <input
+                    type="number"
+                    min={1000}
+                    step={500}
+                    value={form.budget_total}
+                    onChange={(e) => setForm({ ...form, budget_total: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <div className="v1-chips">
+                <span>同行</span>
+                <button className={form.elder ? 'on' : ''} onClick={() => setForm({ ...form, elder: !form.elder })}>
+                  老人
+                </button>
+                <button className={form.child ? 'on' : ''} onClick={() => setForm({ ...form, child: !form.child })}>
+                  儿童
+                </button>
+              </div>
+              <div className="v1-chips">
+                <span>偏好</span>
+                {PREFERENCES.map((p) => (
+                  <button
+                    key={p}
+                    className={form.preferences.includes(p) ? 'on' : ''}
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        preferences: form.preferences.includes(p)
+                          ? form.preferences.filter((x) => x !== p)
+                          : [...form.preferences, p],
+                      })
+                    }
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+              <div className="v1-chips">
+                <span>节奏</span>
+                {PACE.map((p) => (
+                  <button key={p} className={form.pace === p ? 'on' : ''} onClick={() => setForm({ ...form, pace: p })}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <aside className="v1-side-panel">
+              <div className="v1-label">解析预览</div>
+              <div className="v1-kv">
+                <span>目的地</span>
+                <b>{form.destination || '—'}</b>
+              </div>
+              <div className="v1-kv">
+                <span>天数</span>
+                <b>{dayCount(form)} 天</b>
+              </div>
+              <div className="v1-kv">
+                <span>人数</span>
+                <b>{form.travelers} 人</b>
+              </div>
+              <div className="v1-kv">
+                <span>预算</span>
+                <b>{money(form.budget_total)}</b>
+              </div>
+              <div className="v1-kv">
+                <span>偏好</span>
+                <b>{form.preferences.join(' / ') || '—'}</b>
+              </div>
+              <p className="v1-note">填写后，团队会：① 解析需求 → ② 问你两个取舍 → ③ 开工。</p>
+            </aside>
+          </div>
+
+          <div className="v1-actions">
+            <button className="v1-primary" onClick={() => setScreen('brief')} disabled={!form.destination}>
+              继续，确认取舍 →
+            </button>
+            <span className="v1-hint">下一步只问两个问题</span>
+          </div>
+        </section>
       )}
 
-      <div className="layout">
-        <aside className="panel">
-          <h2>需求</h2>
-          <label>
-            出发地
-            <input
-              value={form.origin}
-              disabled={phase === 'running'}
-              onChange={(e) => setForm({ ...form, origin: e.target.value })}
-            />
-          </label>
-          <label>
-            目的地
-            <input
-              value={form.destination}
-              disabled={phase === 'running'}
-              onChange={(e) => setForm({ ...form, destination: e.target.value })}
-            />
-          </label>
-          <div className="row">
-            <label>
-              出发
-              <input
-                type="date"
-                value={form.start_date}
-                disabled={phase === 'running'}
-                onChange={(e) => setForm({ ...form, start_date: e.target.value })}
-              />
-            </label>
-            <label>
-              返回
-              <input
-                type="date"
-                value={form.end_date}
-                disabled={phase === 'running'}
-                onChange={(e) => setForm({ ...form, end_date: e.target.value })}
-              />
-            </label>
-          </div>
-          <div className="row">
-            <label>
-              人数
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={form.travelers}
-                disabled={phase === 'running'}
-                onChange={(e) => setForm({ ...form, travelers: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              总预算
-              <input
-                type="number"
-                min={1000}
-                step={500}
-                value={form.budget_total}
-                disabled={phase === 'running'}
-                onChange={(e) => setForm({ ...form, budget_total: Number(e.target.value) })}
-              />
-            </label>
-          </div>
-
-          <div className="chips">
-            <span className="chip-label">同行</span>
-            <button
-              className={`chip ${form.elder ? 'on' : ''}`}
-              onClick={() => setForm({ ...form, elder: !form.elder })}
-              disabled={phase === 'running'}
-            >
-              老人
+      {/* ---------------- 03 取舍 ---------------- */}
+      {screen === 'brief' && (
+        <section className="v1-page">
+          <div className="v1-topbar">
+            <button className="v1-back" onClick={() => setScreen('demand')}>
+              ← 改需求
             </button>
-            <button
-              className={`chip ${form.child ? 'on' : ''}`}
-              onClick={() => setForm({ ...form, child: !form.child })}
-              disabled={phase === 'running'}
-            >
-              儿童
+            <span className="v1-step">STEP 03 / 06</span>
+            <span className="v1-pill">PREVIEW</span>
+          </div>
+          <h2>每选一次，骨架就变一次。</h2>
+          <p className="v1-sub">只有你能定的两件事。选完之后，右边会立刻写出代价——不是形容词。</p>
+
+          <div className="v1-brief">
+            <div className="v1-decisions">
+              <div className="v1-panel">
+                <div className="v1-q">
+                  <span>01</span>
+                  <div>
+                    <b>返程怎么走</b>
+                    <small>最后一天有两班可选</small>
+                  </div>
+                </div>
+                {[
+                  ['early', '尽量早回', '05:50 起床，前一晚 21:30 前必须睡'],
+                  ['noon', '中午前后，别太赶', '到家接近晚高峰'],
+                  ['late', '傍晚再走', '到家约 22:10，老人较累'],
+                ].map(([key, label, cons]) => (
+                  <label key={key} className={`v1-opt ${choice.rv === key ? 'on' : ''}`}>
+                    <input type="radio" name="rv" checked={choice.rv === key} onChange={() => setChoice({ ...choice, rv: key as any })} />
+                    <span>
+                      <i />
+                      {label}
+                    </span>
+                    <small>代价：{cons}</small>
+                  </label>
+                ))}
+              </div>
+
+              <div className="v1-panel">
+                <div className="v1-q">
+                  <span>02</span>
+                  <div>
+                    <b>住宿怎么住</b>
+                    <small>四晚同店省心，换一次更近机场</small>
+                  </div>
+                </div>
+                {[
+                  ['same', `${nights} 晚同一家`, '最后一天去机场约 80 分钟'],
+                  ['switch', '最后一晚换机场附近', '多搬一次行李，预算 +300'],
+                ].map(([key, label, cons]) => (
+                  <label key={key} className={`v1-opt ${choice.stay === key ? 'on' : ''}`}>
+                    <input type="radio" name="stay" checked={choice.stay === key} onChange={() => setChoice({ ...choice, stay: key as any })} />
+                    <span>
+                      <i />
+                      {label}
+                    </span>
+                    <small>代价：{cons}</small>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <aside className="v1-skeleton">
+              <div className="v1-sk-head">
+                <b>行程骨架</b>
+                <em>实时</em>
+              </div>
+              <div className="v1-kv">
+                <span>返程航班</span>
+                <b>{choice.rv === 'early' ? '08:00' : choice.rv === 'late' ? '18:40' : '13:00'}</b>
+              </div>
+              <div className="v1-kv">
+                <span>到家时间</span>
+                <b>{choice.rv === 'early' ? '12:30' : choice.rv === 'late' ? '22:10' : '18:30'}</b>
+              </div>
+              <div className="v1-kv">
+                <span>住宿</span>
+                <b>{choice.stay === 'switch' ? `2 家 · ${nights - 1}+1` : `1 家 · ${nights} 晚`}</b>
+              </div>
+              <div className="v1-kv">
+                <span>预计花费</span>
+                <b className={choice.stay === 'switch' ? 'v1-warn' : ''}>
+                  {money(form.budget_total + (choice.stay === 'switch' ? 300 : 0))}
+                </b>
+              </div>
+              <div className="v1-kv">
+                <span>体力消耗</span>
+                <b>{choice.rv === 'early' ? '偏紧' : choice.rv === 'late' ? '偏松' : '适中'}</b>
+              </div>
+              <div className="v1-sk-strip">
+                <span className="v1-label">最后一天</span>
+                <div>
+                  {choice.rv === 'early' && (
+                    <>
+                      <b>05:50</b> 起床 <i /> <b>08:00</b> 起飞 <i /> <b>12:30</b> 到家
+                    </>
+                  )}
+                  {choice.rv === 'noon' && (
+                    <>
+                      <b>09:20</b> 出发 <i /> <b>13:00</b> 起飞 <i /> <b>18:30</b> 到家
+                    </>
+                  )}
+                  {choice.rv === 'late' && (
+                    <>
+                      <b>12:00</b> 退房 <i /> <b>18:40</b> 起飞 <i /> <b>22:10</b> 到家
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className={`v1-judge ${choice.rv === 'noon' ? 'ok' : ''}`}>
+                {choice.rv === 'noon'
+                  ? '✓ 节奏在可接受范围，评审不会拦'
+                  : choice.rv === 'early'
+                    ? '⚠ 05:50 起床会被评审标记为体力风险'
+                    : '⚠ 22:10 到家会被标记为疲劳风险'}
+              </div>
+            </aside>
+          </div>
+
+          <div className="v1-actions">
+            <button className="v1-primary" onClick={runPlan} disabled={phase === 'running'}>
+              确认，团队开工 →
             </button>
+            <span className="v1-hint">约 2 分钟 · 15 次模型请求</span>
           </div>
+        </section>
+      )}
 
-          <div className="chips">
-            <span className="chip-label">偏好</span>
-            {PREFERENCES.map((p) => (
-              <button
-                key={p}
-                className={`chip ${form.preferences.includes(p) ? 'on' : ''}`}
-                disabled={phase === 'running'}
-                onClick={() =>
-                  setForm({
-                    ...form,
-                    preferences: form.preferences.includes(p)
-                      ? form.preferences.filter((x) => x !== p)
-                      : [...form.preferences, p],
-                  })
-                }
-              >
-                {p}
-              </button>
-            ))}
+      {/* ---------------- 04 运行 / 错误 ---------------- */}
+      {screen === 'running' && (
+        <section className="v1-page">
+          <div className="v1-topbar">
+            <button className="v1-back" onClick={() => setScreen('brief')}>
+              ← 改取舍
+            </button>
+            <span className="v1-step">STEP 04 / 06</span>
+            <span className="v1-pill">{phase === 'running' ? 'RUNNING' : 'RESULT'}</span>
           </div>
+          <h2>{phase === 'running' ? '五个角色，把方案接力装出来。' : phase === 'interrupt' ? '有一个决定，需要你拍板。' : '这次运行没有完成。'}</h2>
+          <p className="v1-sub">
+            {phase === 'running'
+              ? '每个角色交付一个可检查的中间产物，评审不过就退回重排。'
+              : phase === 'interrupt'
+                ? '团队停下来等你，不会替你决定。'
+                : '下面是失败原因；可以调整需求后重试。'}
+          </p>
 
-          <div className="chips">
-            <span className="chip-label">节奏</span>
-            {PACE.map((p) => (
-              <button
-                key={p}
-                className={`chip ${form.pace === p ? 'on' : ''}`}
-                disabled={phase === 'running'}
-                onClick={() => setForm({ ...form, pace: p })}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-
-          <button className="primary" onClick={runPlan} disabled={phase === 'running' || needToken}>
-            {needToken ? '先输入访问口令' : phase === 'running' ? '规划中…' : phase === 'form' ? '开始规划' : '重新规划'}
-          </button>
-        </aside>
-
-        <main className="main">
-          {error && (
-            <div className="alert">
-              <span>{error}</span>
-              {phase === 'stopped' ? (
-                <button
-                  className="ghost"
-                  onClick={() => {
-                    setPhase('form')
-                    setError('')
-                    setErrorStats(undefined)
-                    setRecoveryStatus(undefined)
-                    setInterruptInfo(null)
-                  }}
-                >
-                  调整需求后重新规划
+          {(error || phase === 'error' || phase === 'stopped') && (
+            <div className="v1-alert">
+              <b>{phase === 'stopped' ? '未完成' : '失败'}</b>
+              <p>{error || '未知错误'}</p>
+              <div className="v1-actions">
+                <button className="v1-primary" onClick={() => setScreen('demand')}>
+                  调整需求
                 </button>
-              ) : recoveryStatus !== 'resumable' ? (
-                <button className="ghost" onClick={runPlan} disabled={phase === 'running'}>
-                  用同样的需求重试
+                <button className="v1-ghost" onClick={runPlan}>
+                  用同样需求重试
                 </button>
-              ) : (
-                <span>当前运行仍可从检查点恢复。</span>
-              )}
-              <RunUsage stats={errorStats} />
+              </div>
             </div>
           )}
 
-          {phase === 'running' && !result && !interruptInfo && (
-            <section className="running">
-              <div className="running-head">
-                <span className="spinner" />
-                <strong>{runningStage}</strong>
-              </div>
-              <p className="muted">
-                已产出 {liveLogs.length} 条执行记录，可以随时打开右侧「执行轨迹」查看细节。
-              </p>
-              <div className="running-steps">
-                {STAGE_STEPS.map((step) => (
-                  <span key={step.key} className={`running-step ${stageReached(step.key) ? 'done' : ''}`}>
-                    {step.label}
-                  </span>
+          {phase !== 'error' && phase !== 'stopped' && (
+            <div className="v1-line">
+              <div className="v1-rail">
+                {TEAM_ROLES.map((role) => (
+                  <Station key={role} role={role} state={roleStates[role] ?? 'idle'} />
                 ))}
               </div>
-              <button className="ghost" onClick={cancelPlan} disabled={!activePlanId || cancelling}>
-                {cancelling ? '正在取消…' : '取消本次运行'}
-              </button>
-            </section>
+
+              <div className="v1-run-body">
+                <div className="v1-assembly">
+                  <div className="v1-asm-head">
+                    <span>正在装配</span>
+                    <em>{liveEvents.length} 事件</em>
+                  </div>
+                  {[
+                    ['clarify', '澄清需求'],
+                    ['retrieval', '并行检索'],
+                    ['peer', '专业团队'],
+                    ['plan', '排行程'],
+                    ['check', '硬约束校验'],
+                    ['confirm', '整合文稿'],
+                  ].map(([key, label], i) => {
+                    const reached = liveEvents.some((e) => e.stage === key)
+                    return (
+                      <div key={key} className={`v1-asm-row ${reached ? 'on' : ''}`}>
+                        <span>{String(i + 1).padStart(2, '0')}</span>
+                        <i />
+                        <b>{label}</b>
+                        <em>{reached ? '完成' : '等待'}</em>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="v1-issues">
+                  <div className="v1-asm-head">
+                    <span>问题清单</span>
+                    <em>{result?.critique.issues.length ?? 0}</em>
+                  </div>
+                  {(result?.critique.issues ?? []).slice(0, 4).map((issue) => (
+                    <div key={issue.code} className="v1-issue">
+                      <span className={issue.severity === 'blocker' ? 'bad' : 'warn'}>{issue.code}</span>
+                      <p>{issue.message}</p>
+                    </div>
+                  ))}
+                  {(!result || result.critique.issues.length === 0) && <p className="v1-muted">评审结束后，问题会出现在这里。</p>}
+                </div>
+              </div>
+
+              <div className="v1-actions">
+                {phase === 'running' && (
+                  <>
+                    <button className="v1-ghost" onClick={cancelPlan} disabled={!activePlanId || cancelling}>
+                      {cancelling ? '正在取消…' : '停止运行'}
+                    </button>
+                    <span className="v1-hint">已产生 {liveEvents.length} 条执行记录</span>
+                  </>
+                )}
+                {result && (
+                  <button className="v1-primary" onClick={() => setScreen('plan')}>
+                    查看完整方案 →
+                  </button>
+                )}
+              </div>
+            </div>
           )}
 
           {interruptInfo && (
-            <section className="interrupt">
-              <div className="interrupt-head">
-                <h3>
-                  {interruptInfo.type === 'agent_turn_failed'
-                    ? 'Agent 回合需要重试'
-                    : interruptInfo.type === 'model_call_budget_exhausted'
-                      ? '模型请求额度已用尽'
-                      : interruptInfo.type === 'hard_constraint_unresolved'
-                        ? '硬约束尚未解决'
-                        : interruptInfo.type === 'peer_escalation'
-                          ? 'Agent 团队需要你确认'
-                          : interruptInfo.type === 'negotiation_deadlock'
-                            ? '预算和体验谈不拢，需要你定方向'
-                            : '预算超支，需要你决定'}
-                </h3>
-                {typeof interruptInfo.ratio === 'number' && (
-                  <span className="interrupt-ratio">超出 {Math.round(interruptInfo.ratio * 100)}%</span>
-                )}
-              </div>
-              {['peer_escalation', 'agent_turn_failed', 'model_call_budget_exhausted', 'hard_constraint_unresolved'].includes(interruptInfo.type) && (
-                <p className="interrupt-body">
-                  <strong>{interruptInfo.question ?? 'Agent 团队遇到需要你决定的问题'}</strong>
-                  {interruptInfo.from && (
-                    <>
-                      <br />
-                      提出方：{ACTOR_LABEL[interruptInfo.from] ?? interruptInfo.from}
-                    </>
-                  )}
+            <div className="v1-interrupt">
+              <b>{interruptInfo.question ?? interruptInfo.message ?? '需要你决定'}</b>
+              {typeof interruptInfo.total === 'number' && (
+                <p>
+                  当前花费 {money(interruptInfo.total)}，预算 {money(interruptInfo.budget ?? 0)}
+                  {typeof interruptInfo.over === 'number' && interruptInfo.over > 0 ? `，超出 ${money(interruptInfo.over)}` : ''}
                 </p>
               )}
-              {interruptInfo.type === 'negotiation_deadlock' && interruptInfo.message && (
-                <p className="interrupt-body">
-                  <strong>{interruptInfo.message}</strong>
-                  <br />
-                  当前方案总花费 <strong>{(interruptInfo.total ?? 0).toFixed(0)}</strong> 元，
-                  预算 <strong>{(interruptInfo.budget ?? 0).toFixed(0)}</strong> 元。
-                  你给个倾向，两位会带着这个倾向再谈一轮：
-                </p>
-              )}
-              {!['negotiation_deadlock', 'peer_escalation', 'agent_turn_failed', 'model_call_budget_exhausted', 'hard_constraint_unresolved'].includes(interruptInfo.type) && (
-                <p className="interrupt-body">
-                  当前方案总花费 <strong>{(interruptInfo.total ?? 0).toFixed(0)}</strong> 元，
-                  预算 <strong>{(interruptInfo.budget ?? 0).toFixed(0)}</strong> 元，
-                  超出 <strong>{(interruptInfo.over ?? 0).toFixed(0)}</strong> 元。
-                  系统没有替你决定，请选择：
-                </p>
-              )}
-              <div className="interrupt-actions">
-                {(interruptInfo.options ?? []).map((o) => {
-                  const bump =
-                    interruptInfo.type === 'model_call_budget_exhausted' &&
-                    o.value === 'continue' &&
-                    interruptInfo.suggested_max_calls
-                      ? interruptInfo.suggested_max_calls
-                      : undefined
-                  return (
-                    <button
-                      key={o.value}
-                      onClick={() => resumePlan(o.value, bump)}
-                      title={bump ? `本次继续会把模型请求上限提高到 ${bump} 次并写入设置` : undefined}
-                    >
-                      {bump ? `提高到 ${bump} 次并继续` : o.label}
-                    </button>
-                  )
-                })}
-              </div>
-              {liveLogs.length > 0 && (
-                <button className="ghost" onClick={() => setDrawerOpen(true)}>
-                  查看执行轨迹（{liveLogs.length} 步）
-                </button>
-              )}
-              {interruptInfo.negotiation && <NegotiationTrail neg={interruptInfo.negotiation} />}
-            </section>
-          )}
-
-          {result?.negotiation && <NegotiationTrail neg={result.negotiation} />}
-
-          {result && (
-            <section className="result">
-              {result.document && (
-                <section className="team-document">
-                  <div className="section-head">
-                    <h2>{typeof result.document.title === 'string' ? result.document.title : '旅行方案'}</h2>
-                    {(result.document.approved_version ?? result.approved_version) != null && (
-                      <span className="hint">审核版本 v{result.document.approved_version ?? result.approved_version}</span>
-                    )}
-                  </div>
-                  {typeof result.document.overview === 'string' && <p>{result.document.overview}</p>}
-                  {Array.isArray(result.document.days) && result.document.days.map((day, index) => (
-                    <div key={index}>
-                      {typeof day?.date === 'string' && <h3>{day.date}</h3>}
-                      {typeof day?.summary === 'string' && <p>{day.summary}</p>}
-                    </div>
-                  ))}
-                  {Array.isArray(result.document.practical_notes) ? (
-                    <ul>{result.document.practical_notes.filter((note) => typeof note === 'string').map((note, index) => <li key={index}>{note}</li>)}</ul>
-                  ) : typeof result.document.practical_notes === 'string' && <p>{result.document.practical_notes}</p>}
-                </section>
-              )}
-              {result.team_state === 'detached' && (
-                <p className="team-detached-notice">
-                  该版本未关联团队评审（旧版单日重排或直接编辑产生）：计划书与问题清单不可用，建议整轮重新规划或对单日发起团队返工。
-                </p>
-              )}
-              {result.team_tasks && Object.keys(result.team_tasks).length > 0 && (
-                <section className="team-tasks">
-                  <h2>团队任务</h2>
-                  <table>
-                    <thead><tr><th scope="col">任务</th><th scope="col">负责人</th><th scope="col">状态</th><th scope="col">返工次数</th><th scope="col">最近变更</th></tr></thead>
-                    <tbody>
-                      {Object.entries(result.team_tasks).map(([id, task]) => {
-                        const latest = Array.isArray(task?.changes) ? task.changes[task.changes.length - 1] : undefined
-                        return (
-                          <tr key={id}>
-                            <th scope="row">{id}</th>
-                            <td>{typeof task?.owner === 'string' ? ACTOR_LABEL[task.owner] ?? task.owner : '—'}</td>
-                            <td>{typeof task?.status === 'string' ? ({ pending: '待处理', running: '处理中', delivered: '已交付' } as Record<string, string>)[task.status] ?? task.status : '—'}</td>
-                            <td>{Array.isArray(task?.rework) ? task.rework.length : 0}</td>
-                            <td>{latest ? changeText(latest) : '—'}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </section>
-              )}
-              {Array.isArray(result.issue_ledger) && result.issue_ledger.length > 0 && (
-                <section className="issue-ledger">
-                  <h2>问题清单</h2>
-                  <p className="muted">
-                    每条问题都有固定代码与验收条件；只有硬校验中不再出现才算关闭。
-                  </p>
-                  <ul>
-                    {result.issue_ledger.map((issue) => (
-                      <li key={issue.code + (issue.first_seen_version ?? '')} className={issue.status === 'closed' ? 'closed' : 'open'}>
-                        <div className="ledger-head">
-                          <span className={issue.status === 'closed' ? 'tag ok' : 'tag blocker'}>
-                            {issue.status === 'closed' ? '已关闭' : '待处理'}
-                          </span>
-                          <code>{issue.code}</code>
-                          <span className="muted">{OWNER_LABEL[issue.owner ?? ''] ?? issue.owner ?? '责任方未定'}</span>
-                        </div>
-                        {issue.acceptance && <div className="ledger-acceptance">验收：{issue.acceptance}</div>}
-                        <div className="ledger-meta muted">
-                          首次出现 v{issue.first_seen_version ?? '—'}
-                          {issue.status === 'closed' ? ` · 关闭于 v${issue.fixed_in_version ?? '—'}` : ''}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-                      <RunUsage stats={result.llm_stats} />
-              <div className="stats">
-                <div className="stat">
-                  <span className="stat-label">总花费</span>
-                  <strong>{result.itinerary.total_cost.toFixed(0)} 元</strong>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">预算</span>
-                  <strong>{result.itinerary.budget_total.toFixed(0)} 元</strong>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">使用率</span>
-                  <strong>{((result.itinerary.total_cost / result.itinerary.budget_total) * 100).toFixed(0)}%</strong>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">校验</span>
-                  <strong className={result.critique.passed ? 'ok' : 'warn'}>
-                    {result.critique.passed ? '通过' : `${result.critique.issues.filter((i) => i.severity === 'blocker').length} 项未解决`}
-                  </strong>
-                </div>
-                <div className="stat">
-                  <span className="stat-label">重排</span>
-                  <strong>{Math.max(0, result.revision - 1)} 次</strong>
-                </div>
-                <button
-                  className="ghost"
-                  onClick={() => {
-                    const url = result.share
-                      ? `${location.origin}/?plan=${result.plan_id}&share=${encodeURIComponent(result.share)}`
-                      : location.href
-                    navigator.clipboard.writeText(url)
-                  }}
-                  title="复制只读分享链接（不需要访问口令）"
-                >
-                  复制链接
-                </button>
-              </div>
-
-              {result.summary && result.summary.source && (
-                <p className="source-line">
-                  <span className={`source-pill ${result.summary.source.kind}`}>
-                    {result.summary.source.label}
-                  </span>
-                  {result.summary.source.note}
-                </p>
-              )}
-
-              {result.summary?.cost && <CostBreakdown summary={result.summary} />}
-
-              {result.summary && result.summary.warning_groups.length > 0 ? (
-                <section className="notice-groups">
-                  {result.summary.warning_groups.map((g) => (
-                    <div key={g.category} className="notice-group">
-                      <span className="notice-tag">{g.label}</span>
-                      <ul>
-                        {g.items.map((item, i) => (
-                          <li key={i}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </section>
-              ) : (
-                result.itinerary.warnings.length > 0 && (
-                  <ul className="warnings">
-                    {result.itinerary.warnings.map((w, i) => (
-                      <li key={i}>{w}</li>
-                    ))}
-                  </ul>
-                )
-              )}
-
-              {versions.length > 0 && (
-                <section className="versions">
-                  <div className="section-head">
-                    <h2>版本</h2>
-                    <span className="hint">
-                      当前 v{result.version ?? versions[versions.length - 1].version} · 共 {versions.length} 个
-                    </span>
-                  </div>
-                  <ul className="version-list">
-                    {versions.map((v) => {
-                      const isCurrent = v.version === (result.version ?? -1)
-                      return (
-                        <li key={v.version} className={`version-row ${isCurrent ? 'current' : ''}`}>
-                          <span className="version-tag">v{v.version}</span>
-                          <span className="version-source">{VERSION_SOURCE[v.source] ?? v.source}</span>
-                          <span className="version-note">{v.note || '—'}</span>
-                          <span className="version-cost">{v.total_cost.toFixed(0)} 元</span>
-                          {isCurrent ? (
-                            <span className="version-current">当前</span>
-                          ) : (
-                            <button className="ghost" onClick={() => rollback(v.version)}>
-                              回到这一版
-                            </button>
-                          )}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
-              )}
-
-              <div className="days">
-                {result.itinerary.days.map((day) => (
-                  <article key={day.date} className="day">
-                    <header className="day-head">
-                      <div>
-                        <h3>
-                          {day.date} 周{weekday(day.date)}
-                        </h3>
-                        <span className="muted">{day.items.filter((i) => i.type === 'sight').length} 个安排</span>
-                      </div>
-                      <span className="day-cost">{day.day_cost.toFixed(0)} 元</span>
-                    </header>
-
-                    <ul className="items">
-                      {day.items
-                        .filter((i) => i.type !== 'rest')
-                        .map((item, i) => (
-                          <li key={i} className={`item ${item.type}`}>
-                            <span className="time">
-                              {hhmm(item.start_time)}
-                              {item.end_time !== item.start_time ? `–${hhmm(item.end_time)}` : ''}
-                            </span>
-                            <span className="slot">{item.slot}</span>
-                            <span className="title">{item.title}</span>
-                            {item.cost > 0 && <span className="cost">{item.cost.toFixed(0)}</span>}
-                            {item.note && <span className="note">{item.note}</span>}
-                          </li>
-                        ))}
-                    </ul>
-
-                    {day.notes.length > 0 && (
-                      <ul className="day-notes">
-                        {day.notes.map((n, i) => (
-                          <li key={i}>{n}</li>
-                        ))}
-                      </ul>
-                    )}
-
-                    <div className="refine">
-                      <input
-                        placeholder="对这天提意见，例如：太赶了，想轻松点"
-                        value={feedback[day.date] ?? ''}
-                        onChange={(e) => setFeedback({ ...feedback, [day.date]: e.target.value })}
-                      />
-                      <button onClick={() => refine(day.date)} disabled={refining === day.date}>
-                        {refining === day.date ? '重排中…' : '重排这一天'}
-                      </button>
-                    </div>
-                    {refineNote[day.date] && <p className="refine-note">{refineNote[day.date]}</p>}
-                  </article>
+              <div className="v1-actions">
+                {(interruptInfo.options ?? []).map((o) => (
+                  <button key={o.value} className="v1-primary" onClick={() => resumePlan(o.value, o.value === 'continue' ? interruptInfo.suggested_max_calls : undefined)}>
+                    {o.label}
+                  </button>
                 ))}
               </div>
-
-              {result.critique.issues.length > 0 && (
-                <section className="issues">
-                  <h2>校验明细</h2>
-                  <ul>
-                    {result.critique.issues.map((issue, i) => (
-                      <li key={i} className={issue.severity}>
-                        <span className="tag">{issue.severity === 'blocker' ? '阻断' : '提醒'}</span>
-                        {issue.message}
-                      </li>
-                    ))}
-                  </ul>
-                  {result.critique.suggestions.length > 0 && (
-                    <p className="muted">建议：{result.critique.suggestions.join('；')}</p>
-                  )}
-                </section>
-              )}
-            </section>
-          )}
-
-          {phase === 'form' && liveEvents.length === 0 && (
-            <div className="empty">
-              <p>填写左侧需求后开始规划。</p>
-              <p className="muted">
-                系统会并行查询交通、住宿、景点与天气，生成草稿后由校验 agent 检查预算与时间冲突，
-                不通过则回退重排，最多 2 轮。
-              </p>
             </div>
           )}
-        </main>
+        </section>
+      )}
+
+      {/* ---------------- 05 方案 ---------------- */}
+      {screen === 'plan' && result && (
+        <section className="v1-page wide">
+          <div className="v1-plan-head">
+            <div>
+              <div className="v1-label">STEP 05 / 06 · 方案</div>
+              <h2>{result.document?.title ?? `${result.brief.origin}—${result.brief.destination} 行程`}</h2>
+              <div className="v1-meta-line">
+                {result.itinerary.days.length} 天 · {result.itinerary.days.reduce((n, d) => n + d.items.filter((i) => i.type === 'sight').length, 0)} 处 ·{' '}
+                {money(total)} / {money(budget)}
+              </div>
+            </div>
+            <div className="v1-plan-actions">
+              <span className={`v1-vpill ${result.critique.passed ? 'ok' : 'bad'}`}>{result.critique.passed ? '已评审' : '有未解项'}</span>
+              <span className="v1-vpill">计划 v{result.version ?? '—'}</span>
+              {result.approved_version != null && result.approved_version !== result.version && (
+                <span className="v1-vpill">审核 v{result.approved_version}</span>
+              )}
+              <button className="v1-ghost sm" onClick={() => setScreen('demand')}>
+                重新提需求
+              </button>
+              <button className="v1-primary sm" onClick={() => setScreen('share')}>
+                交付 →
+              </button>
+            </div>
+          </div>
+
+          <div className="v1-tabs">
+            {(
+              [
+                ['tt', '时刻表'],
+                ['budget', '预算'],
+                ['change', '变更'],
+              ] as const
+            ).map(([key, label]) => (
+              <button key={key} className={tab === key ? 'on' : ''} onClick={() => setTab(key)}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'tt' && (
+            <div className="v1-plan-grid">
+              <aside className="v1-dayrail">
+                <span className="v1-label">五天</span>
+                <button className={dayFilter === null ? 'on' : ''} onClick={() => setDayFilter(null)}>
+                  <b>全部</b>
+                  <small>{money(total)}</small>
+                </button>
+                {days.map((d) => (
+                  <button key={d.date} className={dayFilter === d.date ? 'on' : ''} onClick={() => setDayFilter(dayFilter === d.date ? null : d.date)}>
+                    <b>{d.date.slice(5)}</b>
+                    <small>{money(d.day_cost)}</small>
+                  </button>
+                ))}
+              </aside>
+
+              <div className="v1-tt-wrap">
+                <Timetable
+                  days={days}
+                  filter={dayFilter}
+                  selected={selected}
+                  onSelect={(date, index) => setSelected({ date, index })}
+                />
+                <div className="v1-legend">
+                  <span><i className="flight" />航班</span>
+                  <span><i className="sight" />景点</span>
+                  <span><i className="meal" />餐食</span>
+                  <span><i className="hotel" />住宿</span>
+                  <span><i className="free" />自由时间</span>
+                </div>
+                <div className="v1-cmd">
+                  <span>/</span>
+                  <input
+                    placeholder="对某一天下指令，例如：11-21 下午换成室内"
+                    value={feedback[selected?.date ?? days[0]?.date ?? ''] ?? ''}
+                    onChange={(e) => setFeedback({ ...feedback, [selected?.date ?? days[0]?.date ?? '']: e.target.value })}
+                  />
+                  <button
+                    className="v1-primary sm"
+                    disabled={!days.length || refining !== null}
+                    onClick={() => refine(selected?.date ?? days[0]?.date ?? '')}
+                  >
+                    {refining ? '重排中…' : '执行'}
+                  </button>
+                </div>
+                {selected && refineNote[selected.date] && <p className="v1-refine-note">{refineNote[selected.date]}</p>}
+              </div>
+
+              <aside className="v1-inspector">
+                <div className="v1-panel">
+                  <div className="v1-label">当前选择</div>
+                  {selectedItem ? (
+                    <>
+                      <b className="v1-sel-title">{selectedItem.title}</b>
+                      <div className="v1-kv"><span>时间</span><b>{hhmm(selectedItem.start_time)}{selectedItem.end_time !== selectedItem.start_time ? `–${hhmm(selectedItem.end_time)}` : ''}</b></div>
+                      <div className="v1-kv"><span>类型</span><b>{TYPE_LABEL[selectedItem.type] ?? selectedItem.type}</b></div>
+                      <div className="v1-kv"><span>花费</span><b>{selectedItem.cost > 0 ? money(selectedItem.cost) : '免费'}</b></div>
+                      {selectedItem.note && <p className="v1-note">{selectedItem.note}</p>}
+                      <button className="v1-ghost sm" onClick={() => refine(selected?.date ?? days[0]?.date ?? '')} disabled={refining !== null}>
+                        让团队改这一天
+                      </button>
+                    </>
+                  ) : (
+                    <p className="v1-note">点时刻表里的任意一块，查看时间、花费与备注。</p>
+                  )}
+                </div>
+
+                <div className="v1-panel">
+                  <div className="v1-label">待你判断</div>
+                  <div className="v1-kv"><span>预算余量</span><b className={percent > 95 ? 'v1-warn' : ''}>{money(budget - total)}</b></div>
+                  <Bar value={percent} tone={percent > 100 ? 'rose' : percent > 95 ? 'amber' : 'indigo'} />
+                  {percent > 95 && <p className="v1-warnbox">余量不足 5%，再加任何一处都可能超支。</p>}
+                </div>
+
+                <div className="v1-panel">
+                  <div className="v1-label">团队</div>
+                  {TEAM_ROLES.map((role) => (
+                    <div key={role} className="v1-kv">
+                      <span>
+                        <i className="v1-dot" style={{ background: ROLE_COLOR[role] }} />
+                        {ACTOR_LABEL[role]}
+                      </span>
+                      <b>{result.team_state === 'approved' || roleStates[role] === 'done' ? '已交付' : roleStates[role] === 'running' ? '进行中' : '待命'}</b>
+                    </div>
+                  ))}
+                </div>
+
+                {result.critique.issues.length > 0 && (
+                  <div className="v1-panel">
+                    <div className="v1-label">评审问题</div>
+                    {result.critique.issues.map((issue) => (
+                      <div key={issue.code} className="v1-issue">
+                        <span className={issue.severity === 'blocker' ? 'bad' : 'warn'}>{issue.code}</span>
+                        <p>{issue.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </aside>
+            </div>
+          )}
+
+          {tab === 'budget' && (
+            <div className="v1-ledger">
+              <div className="v1-panel">
+                <div className="v1-big">{money(total)}</div>
+                <Bar value={percent} tone={percent > 100 ? 'rose' : percent > 95 ? 'amber' : 'indigo'} />
+                <div className="v1-kv"><span>预算</span><b>{money(budget)}</b></div>
+                <div className="v1-kv"><span>使用率</span><b>{percent.toFixed(1)}%</b></div>
+                <div className="v1-kv"><span>余量</span><b className={budget - total < 0 ? 'v1-bad' : ''}>{money(budget - total)}</b></div>
+                {result.summary?.source && <p className="v1-note">{result.summary.source.label} · {result.summary.source.note}</p>}
+              </div>
+              <div className="v1-panel">
+                <div className="v1-label">分项</div>
+                {(result.summary?.cost.items ?? []).map((c) => (
+                  <div key={c.key} className="v1-kv">
+                    <span>{c.label}</span>
+                    <b>{money(c.amount)}</b>
+                  </div>
+                ))}
+                {!result.summary && <p className="v1-note">这次结果没有返回花费构成。</p>}
+              </div>
+            </div>
+          )}
+
+          {tab === 'change' && (
+            <div className="v1-change">
+              <div className="v1-panel">
+                <div className="v1-label">版本</div>
+                {versions.length === 0 && <p className="v1-note">还没有版本记录。</p>}
+                {versions.map((v) => (
+                  <div key={v.version} className="v1-ver-row">
+                    <b>v{v.version}</b>
+                    <span>{v.source} · {v.note || '—'}</span>
+                    <em>{money(v.total_cost)}</em>
+                    {v.version === (result.version ?? -1) ? (
+                      <i>当前</i>
+                    ) : (
+                      <button className="v1-ghost sm" onClick={() => rollback(v.version)}>
+                        回到这版
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {result.issue_ledger && result.issue_ledger.length > 0 && (
+                <div className="v1-panel">
+                  <div className="v1-label">问题清单</div>
+                  {result.issue_ledger.map((issue) => (
+                    <div key={issue.code} className="v1-issue">
+                      <span className={issue.status === 'closed' ? 'ok' : 'warn'}>{issue.code}</span>
+                      <p>
+                        {issue.acceptance ?? issue.code} · {issue.status === 'closed' ? `关闭于 v${issue.fixed_in_version ?? '—'}` : '待处理'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ---------------- 06 交付 ---------------- */}
+      {screen === 'share' && result && (
+        <section className="v1-share">
+          <div className="v1-label">STEP 06 / 06 · 交付</div>
+          <h2>方案已交付。</h2>
+          <p className="v1-sub">一份可读、可改、可追溯的行程。发给同行的人，或自己带走。</p>
+
+          <div className="v1-tripcard">
+            <div className="v1-tc-head">
+              <div>
+                <h3>{result.document?.title ?? '旅行方案'}</h3>
+                <div className="v1-meta-line">
+                  {form.start_date} — {form.end_date} · {form.travelers} 人 · {money(total)} / {money(budget)}
+                </div>
+              </div>
+              <span className="v1-vpill ok">已评审</span>
+            </div>
+            {days.map((d) => {
+              const first = d.items.find((i) => i.type === 'sight') ?? d.items[0]
+              return (
+                <div key={d.date} className="v1-tc-day">
+                  <span>{d.date.slice(5)}</span>
+                  <b>{first?.title ?? '自由安排'}</b>
+                  <em>{hhmm(first?.start_time ?? '')}</em>
+                </div>
+              )
+            })}
+            <div className="v1-tc-foot">
+              <span>{days.length} 天 · {money(total)}</span>
+              {result.llm_stats?.calls != null && <span>{result.llm_stats.calls} 次请求</span>}
+            </div>
+          </div>
+
+          <div className="v1-recap">
+            <div><span>角色</span><b>5</b><small>全部交付</small></div>
+            <div><span>问题</span><b>{result.critique.issues.length}</b><small>{result.critique.passed ? '已通过' : '待处理'}</small></div>
+            <div><span>版本</span><b>v{result.version ?? '—'}</b><small>可回滚</small></div>
+          </div>
+
+          <div className="v1-actions center">
+            <button className="v1-primary" onClick={() => setScreen('plan')}>回到方案</button>
+            <button
+              className="v1-ghost"
+              onClick={() => {
+                const url = result.share
+                  ? `${location.origin}/?plan=${result.plan_id}&share=${encodeURIComponent(result.share)}`
+                  : location.href
+                void navigator.clipboard.writeText(url)
+              }}
+            >
+              复制链接
+            </button>
+            <button className="v1-ghost" onClick={() => window.print()}>打印</button>
+            <button className="v1-ghost" onClick={() => setScreen('home')}>重新规划</button>
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+/** ---------------- 时刻表 ---------------- */
+
+function Timetable({
+  days,
+  filter,
+  selected,
+  onSelect,
+}: {
+  days: Day[]
+  filter: string | null
+  selected: { date: string; index: number } | null
+  onSelect: (date: string, index: number) => void
+}) {
+  const START = 8 * 60
+  const END = 22 * 60
+  const PX = 52
+  const all = days.flatMap((d) => d.items)
+  const min = Math.max(START, Math.min(...all.map((i) => minutesOf(i.start_time)).filter((n) => n > 0), START))
+  const max = Math.min(END, Math.max(...all.map((i) => minutesOf(i.end_time)).filter((n) => n > 0), END))
+  const top = (m: number) => ((m - min) / 60) * PX
+  const height = (a: number, b: number) => Math.max(18, ((Math.max(b, a + 30) - a) / 60) * PX)
+
+  if (days.length === 0) return <div className="v1-empty">还没有行程数据。</div>
+
+  return (
+    <div className="v1-tt">
+      <div className="v1-tt-grid" style={{ gridTemplateColumns: `38px repeat(${days.length}, minmax(0,1fr))` }}>
+        <div className="v1-tt-corner" />
+        {days.map((d) => (
+          <div key={d.date} className="v1-tt-dh">
+            <b>{d.date.slice(5)} 周{weekday(d.date)}</b>
+            <small>{money(d.day_cost)}</small>
+          </div>
+        ))}
+        <div className="v1-tt-axis" style={{ height: ((max - min) / 60) * PX }}>
+          {Array.from({ length: Math.floor((max - min) / 60) + 1 }, (_, i) => (
+            <span key={i} style={{ top: i * PX }}>
+              {String(Math.floor(min / 60) + i).padStart(2, '0')}
+            </span>
+          ))}
+        </div>
+        {days.map((d) => (
+          <div key={d.date} className={`v1-tt-col ${filter && filter !== d.date ? 'dim' : ''}`} style={{ height: ((max - min) / 60) * PX }}>
+            {d.items
+              .filter((i) => i.type !== 'rest')
+              .map((item, index) => {
+                const a = Math.max(min, minutesOf(item.start_time))
+                const b = Math.min(max, minutesOf(item.end_time) || a + 60)
+                const isSel = selected?.date === d.date && selected.index === index
+                return (
+                  <button
+                    key={index}
+                    className={`v1-blk ${item.type} ${isSel ? 'sel' : ''}`}
+                    style={{ top: top(a), height: height(a, b) }}
+                    onClick={() => onSelect(d.date, index)}
+                  >
+                    <span className="v1-blk-t">{hhmm(item.start_time)}</span>
+                    <span className="v1-blk-n">{item.title}</span>
+                    {item.cost > 0 && <span className="v1-blk-c">{money(item.cost)}</span>}
+                  </button>
+                )
+              })}
+          </div>
+        ))}
       </div>
     </div>
   )
