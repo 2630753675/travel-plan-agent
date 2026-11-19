@@ -432,6 +432,26 @@ async def main() -> int:
     check("评审退回后重新评审可收敛", retried.converged, str(retried.escalation)[:200])
     check("Critic 恰好重试一次", retry_team.critic_turns == 2, str(retry_team.critic_turns))
 
+    class NoVersionCritic(ScriptedTeam):
+        def __init__(self):
+            super().__init__()
+            self.critic_turns = 0
+
+        async def chat_tools(self, messages, tools):
+            if role_of(messages[0]["content"]) == "critic_agent":
+                self.critic_turns += 1
+                # 不填 approved_version：版本由服务端决定，不应因此退回。
+                return say("accept", None, to=["writer"], wake=["writer"], say="按评审包核对通过")
+            return await super().chat_tools(messages, tools)
+
+    no_version_team = NoVersionCritic()
+    no_version = await hub.run_session(
+        brief=brief(), source=MockSource(), client=no_version_team,
+        emit=lambda *a, **k: None, max_turns=20, max_rounds=2,
+    )
+    check("Critic 不填版本也能通过", no_version.converged, str(no_version.escalation)[:200])
+    check("没有多余重试", no_version_team.critic_turns == 1, str(no_version_team.critic_turns))
+
     print("\n[7] 评审上限后升级")
     ok, escalation = await unresolved_conflict_reaches_user(result.session)
     check("评审上限后升级给用户", ok, str(escalation)[:240])

@@ -518,6 +518,24 @@ def _expected_delivery(agent: str, ctx: ToolContext) -> dict:
     ]}
 
 
+def _effective_delivery(agent: str, delivery: object, ctx: ToolContext, brief: TripBrief) -> tuple[dict, bool]:
+    """返回（可信交付, 是否被代码修正）。
+
+    交付字段（航班号、酒店、逐日景点）在服务端是确定事实：写没写入由工具状态决定。
+    模型复述错了不该退回重跑——直接按工具状态生成交付，模型只负责 rationale。
+    """
+    if _delivery_valid(agent, delivery, ctx, brief):
+        return delivery, False
+    rationale = delivery.get("rationale") if isinstance(delivery, dict) else ""
+    derived = {**_expected_delivery(agent, ctx), "rationale": rationale or "按工具事实交付"}
+    if _delivery_valid(agent, derived, ctx, brief):
+        return derived, True
+    raise ValueError(
+        "专业交付与工具状态不一致，且工具状态本身不完整（航班/酒店/逐日安排或落定版本缺失）；"
+        "请先用工具把方案写完再交付"
+    )
+
+
 def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripBrief) -> bool:
     if not isinstance(delivery, dict) or not delivery.get("rationale"):
         return False
@@ -971,11 +989,11 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                     next_agent, active_task = "orchestrator", None
                     continue
                 delivery = _merge_delivery(tasks[active_task], decision) if active_task else None
-                if not active_task or kind != "proposal" or not _delivery_valid(agent, delivery, ctx, brief):
-                    raise ValueError(
-                        "专业交付必须用 proposal，并且 delivery 与实际工具选择/完整日期一致；"
-                        f"按当前工具状态，delivery 应为 {json.dumps(_expected_delivery(agent, ctx), ensure_ascii=False)}"
-                    )
+                if not active_task or kind != "proposal":
+                    raise ValueError("专业交付必须用 proposal，并说明 rationale")
+                delivery, corrected = _effective_delivery(agent, delivery, ctx, brief)
+                if corrected:
+                    warnings.append(f"{agent} 的 delivery 与工具状态不一致，已按工具状态修正")
                 # 把专业交付引用的工具证据转交主控，主控提交评审时据此引用，避免无工具角色凭空造证据。
                 delivered_evidence = [
                     item["id"] for item in decision.get("evidence") or []
@@ -1021,6 +1039,9 @@ async def run_session(*, brief: TripBrief, source: TravelSource, client: LLMClie
                 # Ledger closure is computed from this packet's deterministic issue list before Critic runs.
                 pending_issue_codes = make_issue_ledger(review_packet, [], pending_issue_codes)
                 if kind == "accept":
+                    # 版本号由服务端决定：模型没填就按待审版本补，不因此退回重跑。
+                    if decision.get("approved_version") is None:
+                        decision["approved_version"] = review_version
                     # 分开报错：笼统一句话会让模型只能猜哪里不对，白白多跑几轮。
                     if decision.get("changes"):
                         raise ValueError("接受时 changes 必须为空；如有问题请用 objection")

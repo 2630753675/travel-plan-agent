@@ -235,7 +235,31 @@ def main() -> int:
           str([a for a, _ in repair_events]))
     check("自愈后历史合法", runtime._validate_history_messages(repaired_turn.history[1:]) is None)
 
-    print("[7] stop 终态")
+    print("[7] 交付字段由工具状态生成")
+    deliver_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    from app.agents.tools_spec import execute as run_tool
+    run_tool(deliver_ctx, "search_flights", {})
+    run_tool(deliver_ctx, "set_flights", {
+        "outbound_flight_no": "CA4516", "inbound_flight_no": "MU5402"})
+    run_tool(deliver_ctx, "search_hotels", {})
+    run_tool(deliver_ctx, "set_hotel", {"hotel_id": "春熙路亚朵酒店"})
+    wrong = {"outbound_flight_no": "XX0001", "inbound_flight_no": "YY0002",
+             "hotel_id": "不存在的酒店", "rationale": "按预算选择"}
+    fixed_delivery, corrected = hub._effective_delivery("logistics", wrong, deliver_ctx, brief())
+    check("错误交付被按工具状态修正", corrected
+          and fixed_delivery["outbound_flight_no"] == "CA4516"
+          and fixed_delivery["hotel_id"] == "春熙路亚朵酒店", str(fixed_delivery))
+    check("修正后保留模型给的 rationale", fixed_delivery["rationale"] == "按预算选择")
+
+    empty_ctx = hub.ToolContext(brief=brief(), source=MockSource())
+    try:
+        hub._effective_delivery("logistics", {"rationale": "还没选"}, empty_ctx, brief())
+    except ValueError as exc:
+        check("工具状态不完整时仍然拒绝", "工具状态本身不完整" in str(exc), str(exc))
+    else:
+        check("工具状态不完整时仍然拒绝", False)
+
+    print("[8] stop 终态")
     resume = {
         "architecture": "professional_team", "bus": {}, "context": {}, "tasks": {},
         "histories": {}, "trace": [], "turns": 1, "reviews": 0,
