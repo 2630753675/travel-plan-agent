@@ -20,6 +20,9 @@ TARGETS = [
     ("04-map-first.html", "d-map-first", 1440, 1000),
     ("05-timetable.html", "e-timetable", 1440, 1200),
     ("06-travel-kit.html", "f-travel-kit", 1440, 1200),
+    ("07-radio-briefing.html", "g-radio", 1440, 1000),
+    ("08-tradeoff-sandbox.html", "h-sandbox", 1440, 1100),
+    ("09-change-log.html", "i-changelog", 1440, 1200),
 ]
 
 with sync_playwright() as p:

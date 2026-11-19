@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 I · 变更档案</title>
+<style>
+  :root{
+    --bg:#f7f7f5; --card:#fff; --ink:#1c1c1a; --sub:#54544f; --muted:#8b8b84;
+    --line:#e4e4de; --navy:#26374a;
+    --add:#e7f3ea; --add-ink:#1f5b37; --del:#fae9e6; --del-ink:#8c3325;
+    --amber:#8a5a12; --amber-soft:#fbf2dd;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .shell{max-width:1120px;margin:0 auto;padding:34px 26px 70px}
+
+  .head{display:flex;align-items:center;gap:14px;border-bottom:2px solid var(--ink);padding-bottom:12px}
+  .head h1{font-size:22px;margin:0;font-weight:650;letter-spacing:-.01em}
+  .head .sub{color:var(--muted);font-size:12.5px}
+  .head .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+  .seg button{font:inherit;font-size:12px;padding:5px 10px;background:none;border:none;color:var(--muted);cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--navy);color:#fff}
+
+ .meta{display:flex;gap:24px;margin:16px 0 6px;font-size:12px;color:var(--muted)}
+  .meta b{color:var(--ink);font-family:var(--mono);font-weight:600}
+
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0 22px}
+  .sum{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .sum .k{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .sum .v{font-family:var(--mono);font-size:19px;margin-top:4px}
+  .sum .v.green{color:var(--add-ink)} .sum .v.amber{color:var(--amber)}
+
+  .doc{display:grid;grid-template-columns:1fr 320px;gap:22px;align-items:start}
+  .changes{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .changes .head-row{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:#fbfbf9}
+  .changes .head-row h2{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0}
+  .changes .head-row .legend{margin-left:auto;display:flex;gap:12px;font-size:11.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+  .legend i.a{background:var(--add-ink)} .legend i.d{background:var(--del-ink)}
+
+  .entry{display:grid;grid-template-columns:126px 1fr;gap:0;border-bottom:1px solid var(--line)}
+  .entry:last-child{border-bottom:none}
+  .entry .side{padding:14px 14px 14px 16px;border-right:1px solid var(--line);background:#fcfcfa}
+  .entry .side .d{font-family:var(--mono);font-size:12px;color:var(--navy)}
+  .entry .side .who{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .entry .side .who b{color:var(--sub);font-weight:600}
+  .entry .main{padding:14px 16px}
+  .entry .title{font-size:14px;font-weight:600}
+  .entry .why{font-size:12.5px;color:var(--sub);margin-top:3px}
+  .entry .why code{font-family:var(--mono);font-size:11px;background:#f1f1ec;border:1px solid var(--line);padding:0 4px;border-radius:3px;color:var(--muted)}
+
+  .diff{margin-top:10px;border:1px solid var(--line);border-radius:9px;overflow:hidden;font-family:var(--mono);font-size:12px}
+  .diff div{display:grid;grid-template-columns:22px 1fr;gap:0}
+  .diff .ln{padding:5px 6px;text-align:center;color:var(--muted);background:#f7f7f2;border-right:1px solid var(--line)}
+  .diff .tx{padding:5px 10px}
+  .diff .del .tx{background:var(--del);color:var(--del-ink);text-decoration:line-through;text-decoration-thickness:1px}
+  .diff .add .tx{background:var(--add);color:var(--add-ink)}
+  .diff .same .tx{color:var(--muted)}
+
+  .closed{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .issue{font-size:11.5px;border-radius:99px;padding:2px 9px;background:#f1f6f2;color:#2c5f40;border:1px solid #d6e6db;font-family:var(--mono)}
+  .issue.open{background:var(--amber-soft);color:var(--amber);border-color:#ecd9ac}
+
+  aside{display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .panel h3{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  .ver{list-style:none;margin:0;padding:0}
+  .ver li{display:grid;grid-template-columns:40px 1fr auto;gap:8px;align-items:baseline;padding:7px 0;border-bottom:1px dashed #eceae4;font-size:12.5px}
+  .ver li:last-child{border-bottom:none}
+  .ver .v{font-family:var(--mono);color:var(--navy)}
+  .ver .w{color:var(--sub)}
+  .ver .t{color:var(--muted);font-family:var(--mono);font-size:11px}
+  .ver li.now .v{color:var(--add-ink);font-weight:700}
+
+  .trace{font-size:12.5px;color:var(--sub);line-height:1.9}
+  .trace b{color:var(--ink)}
+  .stamp{margin-top:8px;display:inline-block;transform:rotate(-4deg);border:1.5px solid var(--add-ink);color:var(--add-ink);
+    border-radius:8px;padding:5px 10px;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+
+  .foot{margin-top:26px;border-top:1px solid var(--line);padding-top:12px;display:flex;gap:16px;color:var(--muted);font-size:11.5px}
+  .foot .spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="head">
+    <div>
+      <h1>变更档案</h1>
+      <div class="sub">成都 5 天 · v1 → v8 · 谁改的、为什么改、改完关了哪些问题</div>
+    </div>
+    <div class="right">
+      <div class="seg" role="group">
+        <button aria-pressed="false">只看自动</button>
+        <button aria-pressed="true">全部变更</button>
+      </div>
+      <div class="seg" role="group">
+        <button aria-pressed="true">v1 → v8</button>
+        <button aria-pressed="false">v7 → v8</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="meta">
+    <span>已评审 <b>v8</b></span>
+    <span>2 次评审 · 2 条问题关闭 · 0 条遗留</span>
+    <span>15 次请求 · 136,307 tokens</span>
+    <span>总花费 <b>¥7,960</b></span>
+  </div>
+
+  <div class="summary">
+    <div class="sum"><div class="k">改动的日期</div><div class="v">2 天</div></div>
+    <div class="sum"><div class="k">关闭的问题</div><div class="v green">2</div></div>
+    <div class="sum"><div class="k">花费变化</div><div class="v">+¥1,880</div></div>
+    <div class="sum"><div class="k">遗留提醒</div><div class="v amber">1</div></div>
+  </div>
+
+  <div class="doc">
+    <section class="changes">
+      <div class="head-row">
+        <h2>逐条变更</h2>
+        <div class="legend"><span><i class="a"></i>新增</span><span><i class="d"></i>移除</span></div>
+      </div>
+
+      <article class="entry">
+        <div class="side">
+          <div class="d">11-22 周日</div>
+          <div class="who">由 <b>本地体验</b> 改</div>
+        </div>
+        <div class="main">
+          <div class="title">下雨：把户外行程换成两座博物馆</div>
+          <div class="why">当天小雨，评审提示“室内优先”。替换后免费、不增加预算。</div>
+          <div class="diff">
+            <div class="del"><span class="ln">−</span><span class="tx">09:00 人民公园（户外）</span></div>
+            <div class="del"><span class="ln">−</span><span class="tx">13:00 浣花溪公园（户外）</span></div>
+            <div class="add"><span class="ln">+</span><span class="tx">09:00 成都博物馆（室内 · 免费）</span></div>
+            <div class="add"><span class="ln">+</span><span class="tx">13:00 四川博物院（室内 · 免费）</span></div>
+          </div>
+          <div class="closed"><span class="issue">RAIN_OUTDOOR · 已关闭</span><span class="issue">OUTSIDE_OPEN_HOURS · 已关闭</span></div>
+        </div>
+      </article>
+
+      <article class="entry">
+        <div class="side">
+          <div class="d">11-24 周二</div>
+          <div class="who">由 <b>本地体验</b> 改</div>
+        </div>
+        <div class="main">
+          <div class="title">两条送机合并为一条，避免重复接驳</div>
+          <div class="why">硬校验判定重复送机：酒店 → 机场出现两次，第二次无意义。</div>
+          <div class="diff">
+            <div class="del"><span class="ln">−</span><span class="tx">09:00 酒店 → 机场（送机 A）</span></div>
+            <div class="del"><span class="ln">−</span><span class="tx">10:30 酒店 → 机场（送机 B）</span></div>
+            <div class="add"><span class="ln">+</span><span class="tx">09:20 酒店 → 天府机场（提前 150 分钟）</span></div>
+          </div>
+          <div class="closed"><span class="issue">AIRPORT_TRANSFER_DUPLICATE · 已关闭</span></div>
+        </div>
+      </article>
+
+      <article class="entry">
+        <div class="side">
+          <div class="d">全程</div>
+          <div class="who">由 <b>交通住宿</b> 改</div>
+        </div>
+        <div class="main">
+          <div class="title">航班改为直飞，酒店锁定同区四晚</div>
+          <div class="why">去程避开 05:40 早班（老人），返程不早于中午；住宿同店四晚减少搬动。</div>
+          <div class="diff">
+            <div class="del"><span class="ln">−</span><span class="tx">去程 MU5401 05:40（需 03:50 起床）</span></div>
+            <div class="add"><span class="ln">+</span><span class="tx">去程 MU5401 08:05 → 11:20（¥1,120/人）</span></div>
+            <div class="same"><span class="ln"> </span><span class="tx">住宿：春熙路亚朵 ×4 晚，¥520/晚（未变）</span></div>
+          </div>
+          <div class="closed"><span class="issue open">CLOSED_DAY · 未触发</span><span class="issue">ELDER_UNFIT · 已关闭</span></div>
+        </div>
+      </article>
+
+      <article class="entry">
+        <div class="side">
+          <div class="d">未改动</div>
+          <div class="who">评审提醒</div>
+        </div>
+        <div class="main">
+          <div class="title">预算已用 99.5%，保留为提醒而非阻塞</div>
+          <div class="why">硬校验认为“不超支”即可交付；余量不足属于体验风险，标为提醒。</div>
+          <div class="closed"><span class="issue open">BUDGET_NEAR · 仍打开</span></div>
+        </div>
+      </article>
+    </section>
+
+    <aside>
+      <div class="panel">
+        <h3>版本</h3>
+        <ul class="ver">
+          <li class="now"><span class="v">v8</span><span class="w">评审通过，文案整合</span><span class="t">12:28</span></li>
+          <li><span class="v">v7</span><span class="w">合并送机</span><span class="t">12:27</span></li>
+          <li><span class="v">v6</span><span class="w">雨天换室内</span><span class="t">12:27</span></li>
+          <li><span class="v">v1</span><span class="w">初次成稿</span><span class="t">12:26</span></li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h3>谁动了这份方案</h3>
+        <div class="trace">
+          <b>交通住宿</b>：航班与酒店（1 次交付）<br>
+          <b>本地体验</b>：逐日安排（2 次返工）<br>
+          <b>独立评审</b>：提出 2 条、关闭 2 条<br>
+          <b>文案</b>：按 v8 整合成稿
+        </div>
+        <span class="stamp">reviewed · v8</span>
+      </div>
+
+      <div class="panel">
+        <h3>为什么值得看这一页</h3>
+        <div class="trace">
+          方案不是一次生成出来的：两次返工都是被确定性检查逼出来的。
+          这一页把“多 Agent 到底做了什么”变成可核对的事实，而不是一句“已优化”。
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="foot">
+    <span>变更条目为示意：结构取自 Issue Ledger 与版本快照，具体数字为示例</span>
+    <span class="spacer"></span>
+    <span>价格为估算，未预订</span>
+  </div>
+</div>
+</body>
+</html>

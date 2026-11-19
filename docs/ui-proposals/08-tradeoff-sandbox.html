@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 H · 取舍沙盘</title>
+<style>
+  :root{
+    --bg:#f2f0ea; --card:#fff; --ink:#1d1b17; --sub:#55504a; --muted:#8a8378;
+    --line:#e0dbd1; --navy:#233a52; --green:#2f6b4f; --green-soft:#e4efe8;
+    --amber:#8a5a12; --amber-soft:#fbf0d8; --red:#a33a2a; --red-soft:#f8e6e1;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+    --serif:Georgia,"Songti SC",serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .shell{max-width:1140px;margin:0 auto;padding:34px 26px 70px}
+
+  .head{display:flex;align-items:flex-end;gap:24px;border-bottom:1px solid var(--line);padding-bottom:14px}
+  .head .k{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+  .head h1{font-family:var(--serif);font-size:30px;margin:6px 0 0;line-height:1.2}
+  .head .right{margin-left:auto;display:flex;gap:26px;text-align:right}
+  .st .k2{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .st .v{font-family:var(--mono);font-size:20px}
+  .st .v.ok{color:var(--green)} .st .v.warn{color:var(--amber)} .st .v.bad{color:var(--red)}
+
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:24px;margin-top:24px;align-items:start}
+
+  .board{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+  .board h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 14px}
+  .gauge{display:flex;align-items:baseline;gap:10px}
+  .gauge .big{font-family:var(--serif);font-size:44px;line-height:1}
+  .gauge .of{color:var(--muted);font-family:var(--mono);font-size:13px}
+  .bar{height:12px;border-radius:99px;background:#ecefe9;margin:16px 0 8px;overflow:hidden;position:relative}
+  .bar i{display:block;height:100%;width:99.5%;background:linear-gradient(90deg,#c58a2b,#a33a2a);transition:width .25s}
+  .bar .mark{position:absolute;top:-4px;bottom:-4px;width:2px;background:#233a52;left:100%}
+  .bar-meta{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+
+  .delta{margin-top:14px;font-size:13px;padding:10px 12px;border-radius:10px;background:var(--green-soft);color:#1d4a35}
+  .delta.over{background:var(--red-soft);color:#7a2a1c}
+
+  .scenarios{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+  .sc{border:1px solid var(--line);border-radius:12px;padding:12px;cursor:pointer;background:#fdfcf9}
+  .sc:hover{border-color:#cfc8b8}
+  .sc.on{border-color:var(--navy);box-shadow:inset 0 0 0 1px var(--navy)}
+  .sc .t{font-size:13px;font-weight:600}
+  .sc .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .sc .m{font-family:var(--mono);font-size:12px;margin-top:8px;color:var(--green)}
+  .sc .m.plus{color:var(--red)}
+
+  .controls2{margin-top:22px;border-top:1px solid var(--line);padding-top:16px}
+  .ctl{display:grid;grid-template-columns:150px 1fr 74px;gap:14px;align-items:center;padding:9px 0}
+  .ctl .n{font-size:13px}
+  .ctl .n small{display:block;color:var(--muted);font-size:11.5px}
+  input[type=range]{width:100%;accent-color:var(--navy)}
+  .ctl .v{font-family:var(--mono);font-size:12.5px;text-align:right}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .chip{font:inherit;font-size:12.5px;padding:6px 11px;border-radius:99px;border:1px solid var(--line);
+    background:#fff;color:var(--sub);cursor:pointer}
+  .chip.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  .chip .x{opacity:.65;margin-left:6px;font-family:var(--mono)}
+
+  .apply{display:flex;gap:10px;margin-top:20px}
+  .btn{font:inherit;font-size:13px;padding:9px 16px;border-radius:10px;cursor:pointer;border:1px solid var(--line);background:#fff}
+  .btn.primary{background:var(--navy);border-color:var(--navy);color:#fff;font-weight:600}
+  .btn.ghost{background:transparent}
+
+  aside{display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+  .panel h3{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  .line{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px dashed #ece7dc}
+  .line:last-child{border-bottom:none}
+  .line .k{color:var(--sub)} .line .v{font-family:var(--mono);font-size:12.5px}
+  .line .v.up{color:var(--red)} .line .v.down{color:var(--green)}
+
+  .note{background:var(--amber-soft);border:1px solid #ecd9ac;border-radius:12px;padding:12px 14px;font-size:12.5px;color:#6b4a10}
+  .note b{display:block;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:4px}
+
+  .history{font-size:12px;color:var(--muted);line-height:1.8}
+  .history b{color:var(--ink);font-weight:600}
+
+  .foot{margin-top:26px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:11.5px;display:flex;gap:16px}
+  .foot .spacer{flex:1}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="head">
+    <div>
+      <div class="k">What-if Sandbox · 先算再改</div>
+      <h1>改哪一处，代价是多少</h1>
+    </div>
+    <div class="right">
+      <div class="st"><div class="k2">当前方案</div><div class="v">¥7,960</div></div>
+      <div class="st"><div class="k2">剩余</div><div class="v warn" id="remainTop">¥40</div></div>
+      <div class="st"><div class="k2">状态</div><div class="v ok" id="stateTop">可交付</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <main>
+      <section class="board">
+        <h2>如果把方案当作可调参数</h2>
+        <div class="gauge"><span class="big" id="total">¥7,960</span><span class="of">/ 预算 ¥8,000</span></div>
+        <div class="bar"><i id="barFill"></i><div class="mark"></div></div>
+        <div class="bar-meta"><span id="pct">已用 99.5%</span><span id="remain">剩余 ¥40</span></div>
+        <div class="delta" id="delta">当前没有任何余量：任何加项都会触发评审拦截。</div>
+
+        <div class="scenarios">
+          <div class="sc on" data-delta="0" data-name="保持当前">
+            <div class="t">保持当前</div><div class="d">不加不减，直接出发</div><div class="m">±0</div>
+          </div>
+          <div class="sc" data-delta="-300" data-name="换便宜酒店">
+            <div class="t">换便宜酒店</div><div class="d">同区 3 星，约 -75/晚</div><div class="m">-300</div>
+          </div>
+          <div class="sc" data-delta="-1900" data-name="减一天">
+            <div class="t">减一天</div><div class="d">11-24 改高铁返程，少一晚</div><div class="m">-1,900</div>
+          </div>
+        </div>
+
+        <div class="controls2">
+          <div class="ctl">
+            <div class="n">酒店单价<small>4 晚，含早</small></div>
+            <input id="hotel" type="range" min="380" max="680" step="10" value="520" />
+            <div class="v" id="hotelV">¥520/晚</div>
+          </div>
+          <div class="ctl">
+            <div class="n">每日门票预算<small>两人合计</small></div>
+            <input id="ticket" type="range" min="0" max="400" step="20" value="120" />
+            <div class="v" id="ticketV">¥120/天</div>
+          </div>
+          <div class="ctl">
+            <div class="n">返程改高铁<small>约 7 小时，省机票</small></div>
+            <input id="train" type="range" min="0" max="1" step="1" value="0" />
+            <div class="v" id="trainV">否</div>
+          </div>
+        </div>
+
+        <div class="chips">
+          <button class="chip" data-add="-120">去掉 1 顿正餐<span class="x">-120</span></button>
+          <button class="chip" data-add="200">加一场演出<span class="x">+200</span></button>
+          <button class="chip" data-add="-280">机场改地铁<span class="x">-280</span></button>
+          <button class="chip" data-add="160">酒店升房型<span class="x">+160</span></button>
+        </div>
+
+        <div class="apply">
+          <button class="btn primary">把这套取舍交给团队重排</button>
+          <button class="btn ghost">恢复当前方案</button>
+        </div>
+      </section>
+    </main>
+
+    <aside>
+      <div class="panel">
+        <h3>拆开看</h3>
+        <div class="line"><span class="k">交通（往返 2 人）</span><span class="v" id="vTransport">3,880</span></div>
+        <div class="line"><span class="k">住宿（4 晚）</span><span class="v" id="vHotel">2,080</span></div>
+        <div class="line"><span class="k">餐饮</span><span class="v" id="vMeal">1,120</span></div>
+        <div class="line"><span class="k">门票</span><span class="v" id="vTicket">600</span></div>
+        <div class="line"><span class="k">市内交通</span><span class="v" id="vLocal">280</span></div>
+      </div>
+
+      <div class="note">
+        <b>为什么不能随便改</b>
+        评审只保证“不超预算、不排闭馆、不误机”。你在这里调出的组合如果超支，提交后会先被拦下，而不是悄悄给你一份做不到的方案。
+      </div>
+
+      <div class="panel">
+        <h3>最近一次改动</h3>
+        <div class="history">
+          <b>11-22</b> 户外 → 成都博物馆<br>
+          原因：当天小雨，评审提示室内优先<br>
+          <b>11-24</b> 两条送机 → 合并为一条<br>
+          原因：硬校验判定重复接驳
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="foot">
+    <span>拖动的数字只是估算；提交后由团队重新排程并复核</span>
+    <span class="spacer"></span>
+    <span>基准：已批准 v8 · 15 次请求 · 136,307 tokens</span>
+  </div>
+</div>
+
+<script>
+  const base = { transport: 3880, hotel: 520 * 4, meal: 1120, ticket: 600, local: 280 };
+  const budget = 8000;
+  let scenarioDelta = 0;
+  let chipDelta = 0;
+
+  const hotel = document.getElementById('hotel');
+  const ticket = document.getElementById('ticket');
+  const train = document.getElementById('train');
+
+  const fmt = (n) => '¥' + Math.round(n).toLocaleString('zh-CN');
+
+  function render() {
+    const hotelCost = Number(hotel.value) * 4;
+    const tickets = Number(ticket.value) * 5;
+    const trainOn = Number(train.value) === 1;
+    const transport = trainOn ? base.transport - 1200 : base.transport;
+    const total = transport + hotelCost + base.meal + tickets + base.local + scenarioDelta + chipDelta;
+    const remain = budget - total;
+
+    document.getElementById('total').textContent = fmt(total);
+    document.getElementById('hotelV').textContent = '¥' + hotel.value + '/晚';
+    document.getElementById('ticketV').textContent = '¥' + ticket.value + '/天';
+    document.getElementById('trainV').textContent = trainOn ? '是' : '否';
+
+    document.getElementById('vTransport').textContent = Math.round(transport).toLocaleString('zh-CN');
+    document.getElementById('vHotel').textContent = Math.round(hotelCost).toLocaleString('zh-CN');
+    document.getElementById('vTicket').textContent = Math.round(tickets).toLocaleString('zh-CN');
+
+    const pct = Math.min(100, (total / budget) * 100);
+    document.getElementById('barFill').style.width = pct + '%';
+    document.getElementById('pct').textContent = '已用 ' + pct.toFixed(1) + '%';
+    document.getElementById('remain').textContent = remain >= 0 ? '剩余 ' + fmt(remain) : '超支 ' + fmt(-remain);
+
+    const delta = document.getElementById('delta');
+    const state = document.getElementById('stateTop');
+    const remainTop = document.getElementById('remainTop');
+    if (remain < 0) {
+      delta.className = 'delta over';
+      delta.textContent = '这套组合会超预算 ' + fmt(-remain) + '：提交后会被评审拦下，需要再减项。';
+      state.textContent = '会超支';
+      state.className = 'v bad';
+      remainTop.textContent = '-' + fmt(-remain);
+      remainTop.className = 'v bad';
+    } else if (remain < 300) {
+      delta.className = 'delta';
+      delta.textContent = '仍然可行，但只剩 ' + fmt(remain) + ' 余量，改任何一天都可能超支。';
+      state.textContent = '可交付';
+      state.className = 'v warn';
+      remainTop.textContent = fmt(remain);
+      remainTop.className = 'v warn';
+    } else {
+      delta.className = 'delta';
+      delta.textContent = '有 ' + fmt(remain) + ' 余量，可以考虑加一处体验或升一档住宿。';
+      state.textContent = '有余量';
+      state.className = 'v ok';
+      remainTop.textContent = fmt(remain);
+      remainTop.className = 'v ok';
+    }
+  }
+
+  [hotel, ticket, train].forEach((el) => el.addEventListener('input', render));
+
+  document.querySelectorAll('.sc').forEach((el) => {
+    el.addEventListener('click', () => {
+      document.querySelectorAll('.sc').forEach((x) => x.classList.remove('on'));
+      el.classList.add('on');
+      scenarioDelta = Number(el.dataset.delta);
+      render();
+    });
+  });
+
+  document.querySelectorAll('.chip').forEach((el) => {
+    el.addEventListener('click', () => {
+      const add = Number(el.dataset.add);
+      el.classList.toggle('on');
+      chipDelta += el.classList.contains('on') ? add : -add;
+      render();
+    });
+  });
+
+  render();
+</script>
+</body>
+</html>
