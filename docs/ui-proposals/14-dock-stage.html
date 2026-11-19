@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 N · 应用坞</title>
+<style>
+  :root{
+    --stage-bg:#0c0e12; --chrome:rgba(18,21,27,.86); --line:#262b35;
+    --ink:#e9edf3; --muted:#94a1b0; --dim:#65717f;
+    --trip:#58a6ff; --time:#818cf8; --map:#2dd4bf; --money:#f0b429;
+    --risk:#f87171; --diff:#4ade80; --radio:#c084fc; --kit:#d9c7a3;
+    --paper:#fbf8f1; --paper-ink:#201d18; --paper-sub:#5f594d; --paper-line:#e5ded0;
+    --serif:Georgia,"Songti SC",serif; --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--stage-bg);color:var(--ink);font:13.5px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+
+  .screen{display:grid;grid-template-rows:52px 1fr 76px;height:100vh;position:relative}
+  .screen::before{content:"";position:absolute;inset:0;background:
+    radial-gradient(900px 420px at 20% 0%,#1b2433 0%,transparent 55%),
+    radial-gradient(800px 380px at 90% 10%,#231a30 0%,transparent 55%);pointer-events:none}
+
+  .chrome{display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid rgba(255,255,255,.06);position:relative;z-index:2}
+  .dotset{display:flex;gap:6px;margin-right:6px}
+  .dotset i{width:9px;height:9px;border-radius:50%;background:#2b3240;display:block}
+  .plan{display:flex;align-items:baseline;gap:10px}
+  .plan b{font-size:14.5px}
+  .plan span{color:var(--dim);font-size:11.5px}
+  .pill{font-size:10.5px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .pill.ok{color:#4ade80;border-color:#1f3d29;background:#0f2218}
+  .pill.warn{color:var(--money);border-color:#3f3115;background:#221b0b}
+  .chrome .spacer{flex:1}
+  .cmd{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);
+    border:1px solid var(--line);border-radius:7px;padding:4px 9px;background:rgba(255,255,255,.02)}
+  .cmd kbd{font-family:var(--mono);font-size:10px;border:1px solid #333b49;border-bottom-width:2px;border-radius:3px;padding:0 4px;color:var(--muted)}
+
+  .stage{position:relative;z-index:2;padding:18px 22px 0;overflow:hidden;display:grid;grid-template-columns:1fr 268px;gap:18px}
+  .app{
+    background:var(--paper);color:var(--paper-ink);border-radius:14px 14px 0 0;
+    box-shadow:0 -1px 0 rgba(255,255,255,.08),0 30px 60px -40px #000;
+    overflow:hidden;display:flex;flex-direction:column;min-height:0;
+  }
+  .app-chrome{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--paper-line);flex:none}
+  .app-chrome .name{font-family:var(--serif);font-size:15px}
+  .app-chrome .meta{color:#8b8270;font-size:11.5px}
+  .app-chrome .right{margin-left:auto;display:flex;gap:8px}
+  .ghost{font:inherit;font-size:11.5px;padding:4px 10px;border-radius:7px;border:1px solid var(--paper-line);background:#fff;color:#544e42;cursor:pointer}
+
+  .app-body{overflow:auto;padding:16px 18px 24px}
+  .day{display:grid;grid-template-columns:86px 1fr;gap:16px;padding:12px 0;border-bottom:1px solid var(--paper-line)}
+  .day:last-child{border-bottom:none}
+  .day .d{font-family:var(--mono);font-size:12px;color:#a8462a}
+  .day .w{font-size:11px;color:#8b8270;margin-top:2px}
+  .day .c{font-family:var(--mono);font-size:11.5px;color:#8b8270;margin-top:6px}
+  .day h4{font-family:var(--serif);font-size:16px;margin:0 0 6px;font-weight:600}
+  .legs{list-style:none;margin:0;padding:0}
+  .legs li{display:grid;grid-template-columns:58px 1fr;gap:10px;padding:4px 0;font-size:12.5px}
+  .legs .t{font-family:var(--mono);font-size:11px;color:#8b8270;padding-top:2px}
+  .legs b{font-weight:600}
+  .legs small{color:#8b8270;display:block;font-size:11px}
+
+  .ctx{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .ctxcard{background:var(--chrome);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:12px 14px;backdrop-filter:blur(8px)}
+  .ctxcard h3{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin:0 0 8px}
+  .next{display:flex;gap:10px;align-items:flex-start}
+  .next .t{font-family:var(--mono);font-size:16px;color:var(--trip)}
+  .next .n{font-size:12.5px}
+  .next small{display:block;color:var(--dim);font-size:11px}
+  .bar{height:6px;border-radius:99px;background:#202733;overflow:hidden;margin:8px 0 5px}
+  .bar i{display:block;height:100%;width:99.5%;background:linear-gradient(90deg,#f0b429,#f87171)}
+  .rowline{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:3px 0}
+  .rowline b{font-family:var(--mono);color:var(--ink);font-weight:500}
+
+  /* 应用坞 */
+  .dock-wrap{position:relative;z-index:3;display:flex;justify-content:center;align-items:flex-end;padding-bottom:12px}
+  .dock{
+    display:flex;align-items:flex-end;gap:6px;padding:8px 10px;border-radius:18px;
+    background:rgba(22,26,33,.72);border:1px solid rgba(255,255,255,.08);
+    backdrop-filter:blur(14px);box-shadow:0 20px 50px -30px #000;
+  }
+  .app-icon{
+    width:54px;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;
+    padding:5px 3px;border-radius:11px;transition:transform .14s,background .14s;position:relative;
+  }
+  .app-icon:hover{transform:translateY(-6px);background:rgba(255,255,255,.05)}
+  .app-icon .glyph{
+    width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:15px;
+    background:linear-gradient(150deg,color-mix(in srgb,var(--c) 55%,#151a21),color-mix(in srgb,var(--c) 22%,#0d1014));
+    border:1px solid color-mix(in srgb,var(--c) 45%,transparent);color:#fff;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.18);
+  }
+  .app-icon span{font-size:9.5px;color:var(--muted);letter-spacing:.02em}
+  .app-icon.on::after{content:"";position:absolute;bottom:-4px;width:4px;height:4px;border-radius:50%;background:var(--ink)}
+  .app-icon.on .glyph{outline:2px solid color-mix(in srgb,var(--c) 60%,transparent);outline-offset:2px}
+
+  .divider{width:1px;align-self:stretch;background:rgba(255,255,255,.08);margin:4px 4px}
+
+  /* Mission Control 预览（第二屏状态） */
+  .mc{margin-top:26px;border-top:1px solid var(--line);padding:22px;background:#0a0c10}
+  .mc h2{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:0 0 12px}
+  .mc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .mc-tile{background:#12161d;border:1px solid var(--line);border-radius:12px;padding:12px;min-height:92px;position:relative}
+  .mc-tile .k{font-size:10px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase}
+  .mc-tile .t{font-size:13.5px;margin-top:4px}
+  .mc-tile .d{font-size:11.5px;color:var(--muted);margin-top:4px}
+  .mc-tile::after{content:"";position:absolute;left:12px;right:12px;top:0;height:2px;background:var(--c);opacity:.8;border-radius:2px}
+  .app-foot{flex:none;border-top:1px solid var(--paper-line);padding:12px 18px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;background:#f7f3ea}
+  .app-foot .k{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8b8270}
+  .app-foot .v{font-family:var(--mono);font-size:13px;color:#201d18;margin-top:3px}
+  .app-foot .n{font-size:11px;color:#8b8270;margin-top:2px}
+  @media (max-width:920px){.stage{grid-template-columns:1fr}.ctx{display:none}}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="chrome">
+    <div class="dotset"><i></i><i></i><i></i></div>
+    <div class="plan"><b>成都 · 5 天</b><span>11-20 → 11-24 · 2 人含老人</span></div>
+    <span class="pill ok">v8 已评审</span>
+    <span class="pill warn">预算余 ¥40</span>
+    <div class="spacer"></div>
+    <span class="cmd">切换应用 <kbd>⌘</kbd><kbd>K</kbd></span>
+  </div>
+
+  <main class="stage">
+    <section class="app">
+      <div class="app-chrome">
+        <span class="name">行程手册</span>
+        <span class="meta">5 天 4 晚 · 已批准 v8</span>
+        <div class="right">
+          <button class="ghost">打印</button>
+          <button class="ghost">分享</button>
+        </div>
+      </div>
+      <div class="app-body">
+        <div class="day">
+          <div><div class="d">11-20</div><div class="w">周五 · 抵达</div><div class="c">¥2,860</div></div>
+          <div>
+            <h4>落地当天只做三件事</h4>
+            <ul class="legs">
+              <li><span class="t">08:05</span><div><b>MU5401 上海 → 成都</b><small>11:20 落地 · 2 人 ¥1,960</small></div></li>
+              <li><span class="t">12:50</span><div><b>春熙路太古里</b><small>免费 · 距酒店 0.5km · 可回房</small></div></li>
+            </ul>
+          </div>
+        </div>
+        <div class="day">
+          <div><div class="d">11-21</div><div class="w">周六 · 人文</div><div class="c">¥1,000</div></div>
+          <div>
+            <h4>草堂的院子适合慢慢走</h4>
+            <ul class="legs">
+              <li><span class="t">09:00</span><div><b>杜甫草堂</b><small>50 元/人 · 地势平缓</small></div></li>
+              <li><span class="t">12:00</span><div><b>回酒店午休</b><small>留 1 小时</small></div></li>
+              <li><span class="t">13:00</span><div><b>宽窄巷子</b><small>免费 · 打车 20 分钟</small></div></li>
+            </ul>
+          </div>
+        </div>
+        <div class="day">
+          <div><div class="d">11-22</div><div class="w">周日 · 雨天</div><div class="c">¥900</div></div>
+          <div>
+            <h4>下雨就在博物馆里</h4>
+            <ul class="legs">
+              <li><span class="t">09:00</span><div><b>成都博物馆</b><small>免费 · 室内 · 需预约</small></div></li>
+              <li><span class="t">13:00</span><div><b>四川博物院</b><small>免费 · 车程 15 分钟</small></div></li>
+            </ul>
+          </div>
+        </div>
+        <div class="day">
+          <div><div class="d">11-23</div><div class="w">周一 · 老城</div><div class="c">¥1,000</div></div>
+          <div>
+            <h4>武侯祠与锦里，一条路走完</h4>
+            <ul class="legs">
+              <li><span class="t">08:30</span><div><b>武侯祠</b><small>50 元/人 · 早到避人流</small></div></li>
+              <li><span class="t">10:30</span><div><b>锦里古街</b><small>免费 · 与祠相邻 · 午餐就地</small></div></li>
+            </ul>
+          </div>
+        </div>
+        <div class="day">
+          <div><div class="d">11-24</div><div class="w">周二 · 返程</div><div class="c">¥2,200</div></div>
+          <div>
+            <h4>上午只做一件事：准时到机场</h4>
+            <ul class="legs">
+              <li><span class="t">09:20</span><div><b>酒店 → 天府机场</b><small>提前 150 分钟 · 中雨 +20 分钟</small></div></li>
+              <li><span class="t">13:00</span><div><b>MU5402 成都 → 上海</b><small>16:05 抵达 · 2 人 ¥1,920</small></div></li>
+            </ul>
+          </div>
+        </div>
+      <div class=app-foot>
+        <div><div class=k>预算</div><div class=v>¥7,960 / 8,000</div><div class=n>余 40 元 · 未预订</div></div>
+        <div><div class=k>交通</div><div class=v>MU5401 · MU5402</div><div class=n>去程 08:05 · 返程 13:00</div></div>
+        <div><div class=k>住宿</div><div class=v>春熙路亚朵 ×4</div><div class=n>房型与早餐未核实</div></div>
+      </div>
+    </section>
+
+    <aside class="ctx">
+      <div class="ctxcard">
+        <h3>下一件事</h3>
+        <div class="next"><span class="t">09:00</span><div class="n">杜甫草堂<small>门票 50/人 · 晴 10–19℃</small></div></div>
+      </div>
+      <div class="ctxcard">
+        <h3>预算</h3>
+        <div class="rowline"><span>已用</span><b>¥7,960</b></div>
+        <div class="bar"><i></i></div>
+        <div class="rowline"><span>剩余</span><b style="color:#f0b429">¥40</b></div>
+      </div>
+      <div class="ctxcard">
+        <h3>团队</h3>
+        <div class="rowline"><span>交通住宿</span><b>已交付</b></div>
+        <div class="rowline"><span>本地体验</span><b>已交付</b></div>
+        <div class="rowline"><span>独立评审</span><b>通过 v8</b></div>
+      </div>
+      <div class="ctxcard">
+        <h3>这一屏是“手册”</h3>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.75">
+          点应用坞里的图标切换；也可按 ⌘K 打开全部应用。<br>窗口里的每个应用都能单独全屏。
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="dock-wrap">
+    <div class="dock">
+      <div class="app-icon on" style="--c:var(--trip)"><span class="glyph">程</span><span>行程</span></div>
+      <div class="app-icon" style="--c:var(--time)"><span class="glyph">时</span><span>时刻表</span></div>
+      <div class="app-icon" style="--c:var(--map)"><span class="glyph">图</span><span>地图</span></div>
+      <div class="app-icon" style="--c:var(--money)"><span class="glyph">钱</span><span>预算</span></div>
+      <div class="app-icon" style="--c:var(--risk)"><span class="glyph">险</span><span>待判断</span></div>
+      <div class="app-icon" style="--c:var(--diff)"><span class="glyph">档</span><span>变更</span></div>
+      <div class="divider"></div>
+      <div class="app-icon" style="--c:var(--radio)"><span class="glyph">播</span><span>电台</span></div>
+      <div class="app-icon" style="--c:var(--kit)"><span class="glyph">包</span><span>出行包</span></div>
+    </div>
+  </div>
+</div>
+
+<section class="mc">
+  <h2>状态二 · 切换台（⌘K）</h2>
+  <div class="mc-grid">
+    <div class="mc-tile" style="--c:var(--trip)"><div class="k">01</div><div class="t">行程</div><div class="d">逐日安排与花费</div></div>
+    <div class="mc-tile" style="--c:var(--time)"><div class="k">02</div><div class="t">时刻表</div><div class="d">五天 × 小时，查冲突</div></div>
+    <div class="mc-tile" style="--c:var(--map)"><div class="k">03</div><div class="t">地图</div><div class="d">点位与路线</div></div>
+    <div class="mc-tile" style="--c:var(--money)"><div class="k">04</div><div class="t">预算沙盘</div><div class="d">拖参数看超支</div></div>
+    <div class="mc-tile" style="--c:var(--risk)"><div class="k">05</div><div class="t">待判断</div><div class="d">2 条提醒</div></div>
+    <div class="mc-tile" style="--c:var(--diff)"><div class="k">06</div><div class="t">变更档案</div><div class="d">v1 → v8 差异</div></div>
+    <div class="mc-tile" style="--c:var(--radio)"><div class="k">07</div><div class="t">电台</div><div class="d">2:40 语音简报</div></div>
+    <div class="mc-tile" style="--c:var(--kit)"><div class="k">08</div><div class="t">出行包</div><div class="d">登机牌 / 房卡 / 票根</div></div>
+  </div>
+</section>
+</body>
+</html>

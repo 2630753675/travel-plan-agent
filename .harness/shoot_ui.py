@@ -27,6 +27,10 @@ TARGETS = [
     ("10-handscroll.html", "j-handscroll-full", 2600, 900),
     ("11-fatigue-curve.html", "k-fatigue", 1440, 1100),
     ("12-departure-board.html", "l-board", 1440, 1000),
+    ("13-widget-desktop.html", "m-widgets", 1440, 1100),
+    ("14-dock-stage.html", "n-dock", 1440, 1000),
+    ("14-dock-stage.html", "n-dock-mc", 1440, 1400),
+    ("15-workspace-tabs.html", "o-workspace", 1440, 900),
 ]
 
 with sync_playwright() as p:

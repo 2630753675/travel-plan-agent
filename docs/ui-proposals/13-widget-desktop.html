@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 M · 小组件桌面</title>
+<style>
+  :root{
+    --bg:#0d1014; --w:#151a21; --w2:#1b212a; --line:#242c37;
+    --ink:#e8edf3; --muted:#93a0af; --dim:#65717f;
+    --trip:#58a6ff; --time:#818cf8; --map:#2dd4bf; --money:#f0b429;
+    --risk:#f87171; --diff:#4ade80; --radio:#c084fc; --kit:#d9c7a3;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+      radial-gradient(1000px 500px at 15% -10%,#1a2230 0%,transparent 55%),var(--bg);
+    color:var(--ink);font:13.5px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .shell{max-width:1320px;margin:0 auto;padding:20px 22px 40px}
+
+  .top{display:flex;align-items:center;gap:14px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .plan{display:flex;align-items:baseline;gap:10px}
+  .plan b{font-size:16px;font-weight:650}
+  .plan span{color:var(--dim);font-size:12px}
+  .pill{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+  .pill.ok{color:#4ade80;border-color:#1f3d29;background:#0f2218}
+  .pill.warn{color:var(--money);border-color:#3f3115;background:#221b0b}
+  .top .spacer{flex:1}
+  .btn{font:inherit;font-size:12.5px;padding:6px 12px;border-radius:9px;cursor:pointer;
+    border:1px solid var(--line);background:var(--w);color:var(--ink)}
+  .btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+
+  .board{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:18px}
+
+  .widget{
+    background:var(--w);border:1px solid var(--line);border-radius:14px;padding:14px;
+    display:flex;flex-direction:column;gap:10px;position:relative;overflow:hidden;
+    transition:transform .16s,border-color .16s,box-shadow .16s;cursor:pointer;
+  }
+  .widget:hover{transform:translateY(-2px);border-color:#33404f;box-shadow:0 18px 40px -30px rgba(0,0,0,.9)}
+  .widget::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent,var(--line));opacity:.9}
+  .w-head{display:flex;align-items:center;gap:8px}
+  .ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:11px;
+    background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+  .w-head h3{font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin:0;color:var(--muted);font-weight:600}
+  .w-head .open{margin-left:auto;color:var(--dim);font-size:12px}
+  .widget:hover .open{color:var(--accent)}
+
+  .span6{grid-column:span 6}.span4{grid-column:span 4}.span3{grid-column:span 3}
+  .row2{grid-row:span 2}
+
+  /* 行程小卡 */
+  .day-mini{display:grid;grid-template-columns:48px 1fr auto;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px dashed #202833}
+  .day-mini:last-child{border-bottom:none}
+  .day-mini .d{font-family:var(--mono);font-size:11.5px;color:var(--trip)}
+  .day-mini .t{font-size:12.5px;color:#cbd5e1}
+  .day-mini .t small{display:block;color:var(--dim);font-size:11px}
+  .day-mini .c{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right}
+
+  /* 时刻表小卡 */
+  .mini-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;flex:1;min-height:96px}
+  .mini-col{background:#10151b;border:1px solid #1d242e;border-radius:5px;position:relative;overflow:hidden}
+  .mini-col .b{position:absolute;left:2px;right:2px;border-radius:2px;opacity:.9}
+  .mini-col .b.f{background:#2c4a7a}.mini-col .b.s{background:#1e4b3a}
+  .mini-col .b.t{background:#2a3340}.mini-col .b.m{background:#3d2f16}
+  .mini-legend{display:flex;gap:10px;font-size:10.5px;color:var(--dim)}
+  .mini-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+
+  /* 地图小卡 */
+  .mini-map{position:relative;height:118px;border-radius:8px;overflow:hidden;background:#0b1416;border:1px solid #1c2a2d}
+  .mini-map svg{position:absolute;inset:0;width:100%;height:100%}
+  .pin{position:absolute;width:7px;height:7px;border-radius:50%;transform:translate(-50%,-50%)}
+  .pin.h{width:9px;height:9px;background:var(--money);box-shadow:0 0 0 4px rgba(240,180,41,.15)}
+
+  /* 预算 */
+  .money-big{font-family:var(--mono);font-size:26px;letter-spacing:-.02em}
+  .track{height:7px;border-radius:99px;background:#1f2732;overflow:hidden;margin:8px 0 6px}
+  .track i{display:block;height:100%;width:99.5%;background:linear-gradient(90deg,#f0b429,#f87171)}
+  .money-meta{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim)}
+
+  /* 问题 / 变更 */
+  .issue{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#d7c9a5}
+  .issue .dot{width:7px;height:7px;border-radius:50%;background:var(--risk);margin-top:6px;flex:none}
+  .diff-line{display:flex;gap:8px;align-items:center;font-size:12px;font-family:var(--mono)}
+  .diff-line .del{color:#f87171;opacity:.85;text-decoration:line-through}
+  .diff-line .add{color:#4ade80}
+  .diff-line .when{color:var(--dim);width:52px;flex:none}
+
+  /* 电台 */
+  .radio-row{display:flex;align-items:center;gap:10px}
+  .radio-play{width:34px;height:34px;border-radius:50%;border:1px solid #4a3a6b;background:#2a1f3d;color:#d8b4fe;
+    display:grid;place-items:center;font-size:12px;flex:none}
+  .bars{display:flex;align-items:center;gap:2px;height:26px;flex:1}
+  .bars i{flex:1;background:#3b2f56;border-radius:1px;height:30%}
+  .bars i:nth-child(3n){height:70%}.bars i:nth-child(4n){height:45%}.bars i:nth-child(5n){height:90%}
+
+  /* 出行包 */
+  .bp{background:linear-gradient(150deg,#1d2c44,#152033);border:1px solid #26374f;border-radius:8px;padding:10px 11px}
+  .bp .r{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono)}
+  .bp .big{font-size:17px;letter-spacing:.02em}
+  .bp .sm{font-size:10.5px;color:#8fa3bd}
+  .bp .dash{height:1px;background:repeating-linear-gradient(90deg,#31445f 0 4px,transparent 4px 8px);margin:8px 0}
+
+  .hint{margin-top:18px;display:flex;align-items:center;gap:14px;color:var(--dim);font-size:11.5px}
+  .hint .spacer{flex:1}
+  .hint kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:4px;padding:1px 5px;color:var(--muted);background:var(--w)}
+
+  @media (max-width:1100px){
+    .span6,.span4,.span3{grid-column:span 12}.row2{grid-row:auto}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div class="plan"><b>成都 · 5 天</b><span>上海往返 · 2 人含老人 · 11-20 → 11-24</span></div>
+    <span class="pill ok">已评审 v8</span>
+    <span class="pill warn">预算 99.5%</span>
+    <span class="pill">15 次请求</span>
+    <div class="spacer"></div>
+    <button class="btn">全部应用</button>
+    <button class="btn">分享</button>
+    <button class="btn primary">重新规划</button>
+  </div>
+
+  <div class="board">
+    <!-- 行程 -->
+    <section class="widget span6 row2" style="--accent:var(--trip)">
+      <div class="w-head"><span class="ico">程</span><h3>行程</h3><span class="open">展开 ↗</span></div>
+      <div>
+        <div class="day-mini"><span class="d">11-20</span><span class="t">抵达 · 太古里<small>MU5401 11:20 落地 · 21:00 入住</small></span><span class="c">2,860</span></div>
+        <div class="day-mini"><span class="d">11-21</span><span class="t">草堂 · 宽窄巷子<small>09:00 / 13:00 · 午休 1 小时</small></span><span class="c">1,000</span></div>
+        <div class="day-mini"><span class="d">11-22</span><span class="t">雨天 · 两座博物馆<small>免费 · 室内 · 需预约</small></span><span class="c">900</span></div>
+        <div class="day-mini"><span class="d">11-23</span><span class="t">武侯祠 · 锦里<small>相邻 · 午餐就地</small></span><span class="c">1,000</span></div>
+        <div class="day-mini"><span class="d">11-24</span><span class="t">返程<small>09:20 出发 · 13:00 起飞</small></span><span class="c">2,200</span></div>
+      </div>
+    </section>
+
+    <!-- 时刻表 -->
+    <section class="widget span6 row2" style="--accent:var(--time)">
+      <div class="w-head"><span class="ico">时</span><h3>时刻表</h3><span class="open">打开 ↗</span></div>
+      <div class="mini-grid">
+        <div class="mini-col">
+          <span style="position:absolute;left:3px;top:2px;font-size:8px;color:#6b7c93;font-family:var(--mono)">08</span>
+          <div class="b f" style="top:4%;height:34%"></div>
+          <div class="b t" style="top:39%;height:12%"></div>
+          <div class="b s" style="top:56%;height:18%"></div>
+          <div class="b m" style="top:84%;height:10%"></div>
+        </div>
+        <div class="mini-col">
+          <div class="b s" style="top:14%;height:14%"></div>
+          <div class="b m" style="top:38%;height:9%"></div>
+          <div class="b s" style="top:50%;height:19%"></div>
+          <div class="b m" style="top:84%;height:10%"></div>
+        </div>
+        <div class="mini-col">
+          <div class="b s" style="top:14%;height:19%"></div>
+          <div class="b m" style="top:38%;height:9%"></div>
+          <div class="b s" style="top:50%;height:19%"></div>
+          <div class="b m" style="top:84%;height:10%"></div>
+        </div>
+        <div class="mini-col">
+          <div class="b s" style="top:7%;height:14%"></div>
+          <div class="b s" style="top:23%;height:14%"></div>
+          <div class="b m" style="top:40%;height:9%"></div>
+          <div class="b m" style="top:84%;height:10%"></div>
+        </div>
+        <div class="mini-col">
+          <div class="b t" style="top:17%;height:12%"></div>
+          <div class="b f" style="top:50%;height:30%"></div>
+        </div>
+      </div>
+      <div class="mini-legend">
+        <span><i style="background:#2c4a7a"></i>航班</span>
+        <span><i style="background:#1e4b3a"></i>景点</span>
+        <span><i style="background:#2a3340"></i>接驳</span>
+        <span><i style="background:#3d2f16"></i>餐食</span>
+      </div>
+    </section>
+
+    <!-- 地图 -->
+    <section class="widget span4" style="--accent:var(--map)">
+      <div class="w-head"><span class="ico">图</span><h3>地图</h3><span class="open">打开 ↗</span></div>
+      <div class="mini-map">
+        <svg viewBox="0 0 300 118" preserveAspectRatio="none">
+          <path d="M0 78 C 60 66, 100 84, 150 76 S 240 62, 300 72 L300 118 L0 118Z" fill="#123035" opacity=".8"/>
+          <path d="M20 96 C 80 88, 110 70, 150 62 S 230 40, 268 30" fill="none" stroke="#2dd4bf" stroke-width="1.2" stroke-dasharray="4 4" opacity=".8"/>
+          <circle cx="150" cy="62" r="3" fill="#2dd4bf"/>
+          <circle cx="86" cy="70" r="2.5" fill="#7dd3fc"/>
+          <circle cx="214" cy="46" r="2.5" fill="#7dd3fc"/>
+        </svg>
+        <span class="pin h" style="left:50%;top:52%"></span>
+        <span class="pin" style="left:28%;top:60%;background:#7dd3fc"></span>
+        <span class="pin" style="left:72%;top:39%;background:#7dd3fc"></span>
+      </div>
+      <div class="mini-legend"><span>酒店大本营</span><span style="margin-left:auto">5 处点位</span></div>
+    </section>
+
+    <!-- 预算 -->
+    <section class="widget span4" style="--accent:var(--money)">
+      <div class="w-head"><span class="ico">钱</span><h3>预算</h3><span class="open">沙盘 ↗</span></div>
+      <div class="money-big">¥7,960</div>
+      <div class="track"><i></i></div>
+      <div class="money-meta"><span>已用 99.5%</span><span>余 ¥40</span></div>
+    </section>
+
+    <!-- 问题 -->
+    <section class="widget span4" style="--accent:var(--risk)">
+      <div class="w-head"><span class="ico">险</span><h3>待判断</h3><span class="open">明细 ↗</span></div>
+      <div class="issue"><span class="dot"></span><div>预算只剩 40 元：换酒店或加景点都会超支。</div></div>
+      <div class="issue" style="color:var(--muted)"><span class="dot" style="background:var(--dim)"></span><div>返程 09:20 出发，中雨，建议提前 30 分钟。</div></div>
+    </section>
+
+    <!-- 变更 -->
+    <section class="widget span4" style="--accent:var(--diff)">
+      <div class="w-head"><span class="ico">档</span><h3>变更</h3><span class="open">档案 ↗</span></div>
+      <div class="diff-line"><span class="when">11-22</span><span class="del">人民公园</span><span class="add">成都博物馆</span></div>
+      <div class="diff-line"><span class="when">11-24</span><span class="del">两条送机</span><span class="add">合并一条</span></div>
+      <div class="mini-legend"><span>2 条已关闭</span><span style="margin-left:auto">v1 → v8</span></div>
+    </section>
+
+    <!-- 电台 -->
+    <section class="widget span4" style="--accent:var(--radio)">
+      <div class="w-head"><span class="ico">播</span><h3>电台</h3><span class="open">收听 ↗</span></div>
+      <div class="radio-row">
+        <span class="radio-play">▶</span>
+        <div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <div class="mini-legend"><span>出发前听一遍 · 2:40</span></div>
+    </section>
+
+    <!-- 出行包 -->
+    <section class="widget span4" style="--accent:var(--kit)">
+      <div class="w-head"><span class="ico">包</span><h3>出行包</h3><span class="open">导出 ↗</span></div>
+      <div class="bp">
+        <div class="r"><span class="big">SHA</span><span class="sm">MU5401</span><span class="big">CTU</span></div>
+        <div class="r"><span class="sm">08:05</span><span class="sm">11:20</span></div>
+        <div class="dash"></div>
+        <div class="r"><span class="sm">春熙路亚朵 ×4</span><span class="sm">11-20 → 11-24</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="hint">
+    <span>每个方块都是一个可进入的小应用；桌面只负责“扫一眼”和“进对地方”。</span>
+    <span class="spacer"></span>
+    <span>快速切换 <kbd>⌘</kbd><kbd>K</kbd></span>
+  </div>
+</div>
+</body>
+</html>
