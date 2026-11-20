@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import SettingsPanel from './Settings'
 
 /** ---------------- 类型 ---------------- */
@@ -115,7 +116,18 @@ type VersionInfo = {
 }
 
 type Phase = 'form' | 'running' | 'interrupt' | 'done' | 'error' | 'stopped'
-type Screen = 'home' | 'demand' | 'brief' | 'running' | 'plan' | 'share'
+type Screen = 'home' | 'demand' | 'followup' | 'running' | 'plan' | 'share'
+
+type FollowUpOption = { label: string; value: string; note?: string }
+type FollowUpQuestion = {
+  kind: 'infer' | 'ask'
+  title: string
+  why: string
+  confidence: '高' | '中' | '低'
+  options: FollowUpOption[]
+  allow_custom: boolean
+}
+type FollowAnswer = { title: string; label: string }
 
 type Form = {
   origin: string
@@ -238,6 +250,14 @@ const TYPE_LABEL: Record<string, string> = {
   free: '自由时间',
 }
 
+const ENTRY_ROLES = [
+  { initial: '主', color: '#8b9cff', job: '拆解任务' },
+  { initial: '交', color: '#f0b872', job: '选航班与酒店' },
+  { initial: '本', color: '#6fe3c0', job: '排逐日行程' },
+  { initial: '审', color: '#c0a8ff', job: '复核硬约束' },
+  { initial: '文', color: '#9ec5fe', job: '整合成稿' },
+]
+
 const PREFERENCES = ['美食', '人文', '自然', '购物', '慢节奏', '夜景']
 const PACE = ['轻松', '适中', '紧凑'] as const
 
@@ -281,12 +301,147 @@ function Bar({ value, tone = 'indigo' }: { value: number; tone?: 'indigo' | 'min
 
 /** ---------------- 主应用 ---------------- */
 
+
+function ParticleField() {
+  const ref = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches
+    const pointer = { x: -9999, y: -9999 }
+    let w = 0
+    let h = 0
+    let parts: { x: number; y: number; vx: number; vy: number; r: number; a: number }[] = []
+    let raf = 0
+    let running = true
+
+    const build = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      w = window.innerWidth
+      h = window.innerHeight
+      canvas.width = Math.round(w * dpr)
+      canvas.height = Math.round(h * dpr)
+      canvas.style.width = w + 'px'
+      canvas.style.height = h + 'px'
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const count = Math.min(110, Math.round((w * h) / 16000))
+      parts = Array.from({ length: count }, () => ({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.16,
+        vy: (Math.random() - 0.5) * 0.16,
+        r: Math.random() * 1.1 + 0.4,
+        a: Math.random() * 0.35 + 0.18,
+      }))
+      if (reduce) drawOnce()
+    }
+
+    const drawOnce = () => {
+      ctx.clearRect(0, 0, w, h)
+      for (const part of parts) {
+        ctx.beginPath()
+        ctx.arc(part.x, part.y, part.r, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(196,208,238,' + part.a + ')'
+        ctx.fill()
+      }
+    }
+
+    const frame = () => {
+      if (!running) return
+      ctx.clearRect(0, 0, w, h)
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i]
+        part.x += part.vx
+        part.y += part.vy
+        if (part.x < -12) part.x = w + 12
+        if (part.x > w + 12) part.x = -12
+        if (part.y < -12) part.y = h + 12
+        if (part.y > h + 12) part.y = -12
+
+        const dx = part.x - pointer.x
+        const dy = part.y - pointer.y
+        const d2 = dx * dx + dy * dy
+        if (d2 < 16000 && d2 > 1) {
+          const d = Math.sqrt(d2)
+          const f = (1 - d2 / 16000) * 0.9
+          part.x += (dx / d) * f
+          part.y += (dy / d) * f
+        }
+
+        for (let j = i + 1; j < parts.length; j++) {
+          const other = parts[j]
+          const ax = part.x - other.x
+          const ay = part.y - other.y
+          const dist2 = ax * ax + ay * ay
+          if (dist2 < 11000) {
+            const alpha = (1 - dist2 / 11000) * 0.12
+            ctx.strokeStyle = 'rgba(139,156,255,' + alpha + ')'
+            ctx.lineWidth = 0.6
+            ctx.beginPath()
+            ctx.moveTo(part.x, part.y)
+            ctx.lineTo(other.x, other.y)
+            ctx.stroke()
+          }
+        }
+
+        ctx.beginPath()
+        ctx.arc(part.x, part.y, part.r, 0, Math.PI * 2)
+        ctx.fillStyle = 'rgba(196,208,238,' + part.a + ')'
+        ctx.fill()
+      }
+      raf = requestAnimationFrame(frame)
+    }
+
+    const onResize = () => build()
+    const onMove = (e: PointerEvent) => {
+      pointer.x = e.clientX
+      pointer.y = e.clientY
+    }
+    const onLeave = () => {
+      pointer.x = -9999
+      pointer.y = -9999
+    }
+    const onVisibility = () => {
+      running = !document.hidden
+      if (running && !reduce) {
+        cancelAnimationFrame(raf)
+        raf = requestAnimationFrame(frame)
+      }
+    }
+
+    window.addEventListener('resize', onResize)
+    window.addEventListener('pointermove', onMove)
+    document.addEventListener('mouseleave', onLeave)
+    document.addEventListener('visibilitychange', onVisibility)
+    build()
+    if (!reduce) raf = requestAnimationFrame(frame)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('pointermove', onMove)
+      document.removeEventListener('mouseleave', onLeave)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
+  return <canvas ref={ref} className="v1-particles" aria-hidden="true" />
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home')
+  const [bound, setBound] = useState(false)
   const [phase, setPhase] = useState<Phase>('form')
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
-  const [choice, setChoice] = useState({ rv: 'noon' as 'early' | 'noon' | 'late', stay: 'same' as 'same' | 'switch' })
   const [briefText, setBriefText] = useState('')
+  const [followups, setFollowups] = useState<FollowUpQuestion[]>([])
+  const [followIndex, setFollowIndex] = useState(0)
+  const [followAnswers, setFollowAnswers] = useState<Record<number, FollowAnswer>>({})
+  const [followDrafts, setFollowDrafts] = useState<Record<number, string>>({})
+  const [preparing, setPreparing] = useState(false)
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
@@ -460,20 +615,8 @@ export default function App() {
     }
   }
 
-  async function runPlan() {
-    setPhase('running')
-    setScreen('running')
-    setResult(null)
-    setInterruptInfo(null)
-    setLiveEvents([])
-    setError('')
-    setActivePlanId(null)
-    setCancelling(false)
-    const notes = [
-      choice.rv === 'early' ? '尽量早回' : choice.rv === 'late' ? '傍晚返程' : '中午返程',
-      choice.stay === 'switch' ? '最后一晚住机场附近' : `${nights} 晚同一家`,
-    ]
-    const body = {
+  function briefPayload() {
+    return {
       origin: form.origin,
       destination: form.destination,
       start_date: form.start_date,
@@ -484,8 +627,62 @@ export default function App() {
         form.elder || form.child
           ? [...(form.elder ? ['老人'] : []), ...(form.child ? ['儿童'] : [])]
           : ['无'],
-      preferences: [...form.preferences, ...notes],
+      preferences: form.preferences,
       pace: form.pace,
+    }
+  }
+
+  async function preparePlan() {
+    if (!form.destination || preparing) return
+    setPreparing(true)
+    setError('')
+    try {
+      const res = await apiFetch('/api/plan/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: briefPayload(), raw_text: briefText }),
+      })
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      const questions: FollowUpQuestion[] = Array.isArray(data?.questions) ? data.questions : []
+      if (questions.length === 0) {
+        await runPlan()
+        return
+      }
+      setFollowups(questions)
+      setFollowAnswers({})
+      setFollowDrafts({})
+      setFollowIndex(0)
+      setScreen('followup')
+    } catch {
+      await runPlan()
+    } finally {
+      setPreparing(false)
+    }
+  }
+
+  async function runPlan() {
+    setPhase('running')
+    setScreen('running')
+    setResult(null)
+    setInterruptInfo(null)
+    setLiveEvents([])
+    setError('')
+    setActivePlanId(null)
+    setCancelling(false)
+    const confirmed = Object.values(followAnswers).map(
+      (a) => `确认：${a.title.slice(0, 30)}=${a.label.slice(0, 40)}`,
+    )
+    const body = {
+      ...briefPayload(),
+      preferences: [
+        ...form.preferences,
+        ...(briefText.trim() ? [`补充：${briefText.trim()}`] : []),
+        ...confirmed,
+      ],
     }
     try {
       const res = await apiFetch('/api/plan', {
@@ -697,16 +894,14 @@ export default function App() {
             [
               ['home', '01 入口'],
               ['demand', '02 需求'],
-              ['brief', '03 取舍'],
-              ['run', '04 运行'],
-              ['plan', '05 方案'],
-              ['share', '06 交付'],
+              ['run', '03 运行'],
+              ['plan', '04 方案'],
+              ['share', '05 交付'],
             ] as const
           ).map(([key, label]) => {
             const active =
               (key === 'home' && screen === 'home') ||
-              (key === 'demand' && screen === 'demand') ||
-              (key === 'brief' && screen === 'brief') ||
+              (key === 'demand' && (screen === 'demand' || screen === 'followup')) ||
               (key === 'run' && screen === 'running') ||
               (key === 'plan' && screen === 'plan') ||
               (key === 'share' && screen === 'share')
@@ -719,7 +914,6 @@ export default function App() {
                 onClick={() => {
                   if (key === 'home') setScreen('home')
                   if (key === 'demand') setScreen('demand')
-                  if (key === 'brief') setScreen('brief')
                   if (key === 'run') setScreen('running')
                   if (key === 'plan' && result) setScreen('plan')
                   if (key === 'share' && result) setScreen('share')
@@ -769,136 +963,143 @@ export default function App() {
 
       {/* ---------------- 01 入口 ---------------- */}
       {screen === 'home' && (
-        <section className="v1-home">
-          <div className="v1-home-left">
-            <div className="v1-eyebrow">
-              <i />
-              <span>multi-agent travel planning</span>
-            </div>
-            <h1>
-              旅行规划，
-              <br />
-              <span>应该经得起审阅。</span>
-            </h1>
-            <p className="v1-lede">
-              主控拆任务，交通住宿与本地体验各自交付，独立评审做硬约束校验，文案整合成稿。每一处改动都有理由、有版本、可回滚。
-            </p>
-            <div className="v1-cta-row">
-              <button className="v1-primary" onClick={() => setScreen('demand')}>
-                开始规划
-              </button>
-              <button className="v1-ghost" onClick={() => setScreen('demand')}>
-                填入示例
-              </button>
-            </div>
-            <div className="v1-meta">
-              <span>
-                <b>5</b> 个角色
-              </span>
-              <span>
-                <b>15</b> 次请求
-              </span>
-              <span>
-                <b>2′02″</b> 平均耗时
-              </span>
-              <span>
-                <b>真实</b> 模型
-              </span>
-            </div>
+        <section className="v1-entry">
+          <div className="v1-scene" aria-hidden="true">
+            <div className="v1-horizon" />
+            <div className="v1-floor" />
+            <div className="v1-rings"><i /><i /><i /></div>
+            <i className="v1-node n1" /><i className="v1-node n2" /><i className="v1-node n3" />
+            <div className="v1-light" />
+            <svg className="v1-threads" viewBox="0 0 1440 960" preserveAspectRatio="none">
+              <path d="M1440 70 C 1180 110, 930 230, 806 348" />
+              <path d="M1440 900 C 1180 850, 930 720, 806 628" />
+              <path d="M650 960 C 720 840, 780 720, 806 628" />
+              <path d="M650 0 C 720 120, 780 240, 806 348" />
+              <circle r="2.2" fill="rgba(196,208,238,.8)">
+                <animateMotion dur="11s" repeatCount="indefinite" path="M1440 70 C 1180 110, 930 230, 806 348" />
+              </circle>
+              <circle r="2" fill="rgba(111,227,192,.75)">
+                <animateMotion dur="14s" repeatCount="indefinite" path="M650 960 C 720 840, 780 720, 806 628" />
+              </circle>
+            </svg>
+            <ParticleField />
+            <div className="v1-veil" />
           </div>
 
-          <div className="v1-deck" aria-hidden="true">
-            <div className="v1-deck-n">05</div>
-            {[
-              ['D1', '抵达 · 安顿', '机场 → 酒店 · 2 处', '08:05'],
-              ['D2', '老城 · 步行', '一条巷子走到晚 · 2 处', '09:00'],
-              ['D3', '近郊 · 半日', '午后有雨，已改室内 · 1 处', '10:30'],
-              ['D4', '雨天预案 · 室内', '两馆，均免费 · 2 处', '09:00'],
-              ['D5', '返程 · 留足时间', '提前 150 分钟到机场 · 0 处', '09:20'],
-            ].map(([d, t, s, c], i) => (
-              <div key={d} className={`v1-card ${i === 2 ? 'hot' : ''}`}>
-                <span className="v1-card-d">{d}</span>
-                <span>
-                  <b>{t}</b>
-                  <small>{s}</small>
-                </span>
-                <span className="v1-card-c">{c}</span>
+          <div className="v1-entry-stage">
+            <div className="v1-entry-copy">
+              <div className="v1-eyebrow"><i /><span>multi-agent travel planning</span></div>
+              <h1 className="v1-entry-h1">
+                <span className="v1-mask"><span>旅行规划，</span></span>
+                <span className="v1-mask"><span>应该经得起审阅。</span></span>
+              </h1>
+              <p className="v1-lede">说清需求，剩下的交给一支会分工、会复核的团队。方案可读、可改、可追溯。</p>
+              <div className="v1-cta-row">
+                <button className="v1-primary" onClick={() => setScreen('demand')}>开始规划</button>
+                <button
+                  className="v1-ghost"
+                  onClick={() => {
+                    setForm(DEFAULT_FORM)
+                    setBriefText('')
+                    setScreen('demand')
+                  }}
+                >
+                  填入示例
+                </button>
               </div>
-            ))}
-            <div className="v1-deck-cap">示例 · 5 天 4 晚 · 2 人含老人 · 预算 8,000</div>
+            </div>
+
+            <div className="v1-entry-panel">
+              <div
+                className={`v1-panel ${bound ? 'is-bound' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-pressed={bound}
+                aria-label="装订面板"
+                onClick={() => setBound((v) => !v)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setBound((v) => !v)
+                  }
+                }}
+              >
+                <div className="v1-spine" />
+                {ENTRY_ROLES.map((role, i) => (
+                  <div className="v1-strip" key={role.initial} style={{ '--i': i, '--c': role.color } as CSSProperties}>
+                    <span className="v1-strip-d">D{i + 1}</span>
+                    <span className="v1-seal" style={{ '--c': role.color } as CSSProperties}>
+                      {role.initial}
+                      <em style={{ '--j': i } as CSSProperties}><b /><b /><b /></em>
+                    </span>
+                    <span className="v1-strip-line" />
+                    <span className="v1-strip-end">—</span>
+                    <span className="v1-strip-job">{role.job}</span>
+                  </div>
+                ))}
+                <div className="v1-panel-foot">
+                  <span>5 DAYS · 5 ROLES</span>
+                  <span className={`v1-state ${bound ? 'bound' : ''}`}>{bound ? 'BOUND · AWAITING INPUT' : 'AWAITING INPUT'}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="v1-features">
-            <div>
-              <span>01 / SPLIT</span>
-              <b>分工，而不是一个模型硬编</b>
-              <p>五个角色各做一件事，交付物独立可检查。</p>
-            </div>
-            <div>
-              <span>02 / VERIFY</span>
-              <b>硬约束校验</b>
-              <p>预算、闭馆、赶机、体力；不过就退回重排。</p>
-            </div>
-            <div>
-              <span>03 / EDIT</span>
-              <b>改一处，只动一天</b>
-              <p>下指令改某一天，其余不动；版本可回滚。</p>
-            </div>
-          </div>
+          <footer className="v1-entry-foot">
+            <span>多角色协作 · 演示数据</span>
+            <span className="spacer" />
+            <span>CSS SCENE + CANVAS</span>
+          </footer>
         </section>
       )}
 
       {/* ---------------- 02 需求 ---------------- */}
       {screen === 'demand' && (
-        <section className="v1-page">
+        <section className="v1-page v1-demand-page">
           <div className="v1-topbar">
             <button className="v1-back" onClick={() => setScreen('home')}>
               ← 返回
             </button>
-            <span className="v1-step">STEP 02 / 06</span>
+            <span className="v1-step">STEP 02 / 05</span>
             <span className="v1-pill">NEW TRIP</span>
           </div>
-          <h2>先说说这趟旅行。</h2>
-          <p className="v1-sub">一句话就够，字段可以补充。没说的部分，下一步团队会问你。</p>
 
-          <div className="v1-two">
-            <div className="v1-panel">
+          <div className="v1-demand-head">
+            <h2>先说说这趟旅行。</h2>
+            <p className="v1-sub">能推断的先写出来，不确定的才问。</p>
+          </div>
+
+          <div className="v1-demand-card">
+            <div className="v1-demand-form">
+              <div className="v1-demand-top">
+                <b>你的需求</b>
+                <span>可编辑</span>
+                <em>01 / 需求</em>
+              </div>
               <textarea
                 placeholder="例如：成都 5 天，2 人，带一位老人，预算 8000，想看人文、吃点好的，节奏别太赶"
-                value={`${form.origin} 到 ${form.destination}，${form.start_date} 到 ${form.end_date}，${form.travelers} 人，预算 ${form.budget_total}，${form.elder ? '带老人，' : ''}${form.preferences.join('、')}，节奏${form.pace}`}
-                onChange={(e) => {
-                  const text = e.target.value
-                  setBriefText(text)
-                  const m = text.match(/(\d+)\s*人/)
-                  const b = text.match(/预算\s*(\d+)/)
-                  if (m || b) {
-                    setForm((f) => ({
-                      ...f,
-                      travelers: m ? Number(m[1]) : f.travelers,
-                      budget_total: b ? Number(b[1]) : f.budget_total,
-                    }))
-                  }
-                }}
+                value={briefText}
+                onChange={(e) => setBriefText(e.target.value)}
               />
-              <div className="v1-fields">
+              <div className="v1-demand-fields">
                 <label>
-                  出发
+                  <span>出发</span>
                   <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
                 </label>
                 <label>
-                  到达
+                  <span>到达</span>
                   <input value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
                 </label>
                 <label>
-                  开始
+                  <span>开始</span>
                   <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
                 </label>
                 <label>
-                  结束
+                  <span>结束</span>
                   <input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
                 </label>
                 <label>
-                  人数
+                  <span>人数</span>
                   <input
                     type="number"
                     min={1}
@@ -908,7 +1109,7 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  预算
+                  <span>预算</span>
                   <input
                     type="number"
                     min={1000}
@@ -954,169 +1155,156 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <div className="v1-demand-cta">
+                <button className="v1-primary" onClick={() => void preparePlan()} disabled={!form.destination || preparing}>
+                  {preparing ? '正在理解需求…' : '确认需求，开始规划 →'}
+                </button>
+              </div>
             </div>
 
-            <aside className="v1-side-panel">
-              <div className="v1-label">解析预览</div>
-              <div className="v1-kv">
-                <span>目的地</span>
-                <b>{form.destination || '—'}</b>
+            <div className="v1-route" aria-hidden="true">
+              <div className="v1-route-cap">
+                <b>{form.origin || '出发'}</b>
+                <b>{form.destination || '到达'}</b>
               </div>
-              <div className="v1-kv">
-                <span>天数</span>
-                <b>{dayCount(form)} 天</b>
+              <svg className="v1-route-svg" viewBox="0 0 320 300" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="v1-route-g" x1="0" y1="1" x2="1" y2="0">
+                    <stop offset="0" stopColor="rgba(139,156,255,.1)" />
+                    <stop offset=".5" stopColor="rgba(139,156,255,.9)" />
+                    <stop offset="1" stopColor="rgba(111,227,192,.6)" />
+                  </linearGradient>
+                </defs>
+                <path className="v1-route-arc" d="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58" />
+                <circle className="v1-route-port" cx="52" cy="244" r="4" />
+                <circle className="v1-route-ring" cx="52" cy="244" r="5" />
+                <circle className="v1-route-port" cx="276" cy="58" r="4" />
+                <circle className="v1-route-ring" cx="276" cy="58" r="5" />
+                <circle r="1.7" fill="#eef1f7">
+                  <animateMotion dur="7s" repeatCount="indefinite" path="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58" />
+                </circle>
+                <circle r="1.4" fill="#6fe3c0">
+                  <animateMotion dur="7s" begin="-4.5s" repeatCount="indefinite" path="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58" />
+                </circle>
+              </svg>
+              <div className="v1-route-dust">
+                {[
+                  [18, 20, 4.2, -0.4], [34, 14, 5.1, -1.6], [62, 18, 3.8, -2.2], [78, 30, 4.6, -3.1],
+                  [24, 44, 5.4, -0.9], [46, 56, 4.4, -2.8], [68, 62, 5.8, -1.2], [84, 74, 4.1, -3.6],
+                  [30, 82, 5.2, -2.4], [56, 88, 4.8, -0.2], [12, 62, 5.6, -4], [88, 50, 4.3, -1.9],
+                ].map(([x, y, dur, delay], i) => (
+                  <i key={i} style={{ left: `${x}%`, top: `${y}%`, '--t': `${dur}s`, '--d': `${delay}s` } as CSSProperties} />
+                ))}
               </div>
-              <div className="v1-kv">
-                <span>人数</span>
-                <b>{form.travelers} 人</b>
-              </div>
-              <div className="v1-kv">
-                <span>预算</span>
-                <b>{money(form.budget_total)}</b>
-              </div>
-              <div className="v1-kv">
-                <span>偏好</span>
-                <b>{form.preferences.join(' / ') || '—'}</b>
-              </div>
-              <p className="v1-note">填写后，团队会：① 解析需求 → ② 问你两个取舍 → ③ 开工。</p>
-            </aside>
-          </div>
-
-          <div className="v1-actions">
-            <button className="v1-primary" onClick={() => setScreen('brief')} disabled={!form.destination}>
-              继续，确认取舍 →
-            </button>
-            <span className="v1-hint">下一步只问两个问题</span>
+              <span className="v1-route-badge">
+                {dayCount(form)} DAYS · {form.travelers} PAX
+              </span>
+            </div>
           </div>
         </section>
       )}
 
-      {/* ---------------- 03 取舍 ---------------- */}
-      {screen === 'brief' && (
-        <section className="v1-page">
+      {/* ---------------- 03 追问 ---------------- */}
+      {screen === 'followup' && (
+        <section className="v1-page v1-fu-page">
           <div className="v1-topbar">
             <button className="v1-back" onClick={() => setScreen('demand')}>
               ← 改需求
             </button>
-            <span className="v1-step">STEP 03 / 06</span>
-            <span className="v1-pill">PREVIEW</span>
+            <span className="v1-step">STEP 02 / 05 · 确认</span>
+            <span className="v1-pill">CLARIFY</span>
           </div>
-          <h2>每选一次，骨架就变一次。</h2>
-          <p className="v1-sub">只有你能定的两件事。选完之后，右边会立刻写出代价——不是形容词。</p>
 
-          <div className="v1-brief">
-            <div className="v1-decisions">
-              <div className="v1-panel">
-                <div className="v1-q">
-                  <span>01</span>
-                  <div>
-                    <b>返程怎么走</b>
-                    <small>最后一天有两班可选</small>
-                  </div>
-                </div>
-                {[
-                  ['early', '尽量早回', '05:50 起床，前一晚 21:30 前必须睡'],
-                  ['noon', '中午前后，别太赶', '到家接近晚高峰'],
-                  ['late', '傍晚再走', '到家约 22:10，老人较累'],
-                ].map(([key, label, cons]) => (
-                  <label key={key} className={`v1-opt ${choice.rv === key ? 'on' : ''}`}>
-                    <input type="radio" name="rv" checked={choice.rv === key} onChange={() => setChoice({ ...choice, rv: key as any })} />
-                    <span>
-                      <i />
-                      {label}
-                    </span>
-                    <small>代价：{cons}</small>
-                  </label>
-                ))}
-              </div>
+          <div className="v1-demand-head">
+            <h2>开始之前，先确认几件事。</h2>
+            <p className="v1-sub">能推断的先写出来，不确定的才问。</p>
+          </div>
 
-              <div className="v1-panel">
-                <div className="v1-q">
-                  <span>02</span>
-                  <div>
-                    <b>住宿怎么住</b>
-                    <small>四晚同店省心，换一次更近机场</small>
-                  </div>
-                </div>
-                {[
-                  ['same', `${nights} 晚同一家`, '最后一天去机场约 80 分钟'],
-                  ['switch', '最后一晚换机场附近', '多搬一次行李，预算 +300'],
-                ].map(([key, label, cons]) => (
-                  <label key={key} className={`v1-opt ${choice.stay === key ? 'on' : ''}`}>
-                    <input type="radio" name="stay" checked={choice.stay === key} onChange={() => setChoice({ ...choice, stay: key as any })} />
-                    <span>
-                      <i />
-                      {label}
-                    </span>
-                    <small>代价：{cons}</small>
-                  </label>
-                ))}
-              </div>
+          <div className="v1-fu-summary">
+            <span>{form.destination} · {form.start_date.slice(5)} – {form.end_date.slice(5)}</span>
+            <span>{form.travelers} 人{form.elder ? ' · 老人' : ''}{form.child ? ' · 儿童' : ''}</span>
+            <span>{money(form.budget_total)}</span>
+            <span>{form.preferences.slice(0, 2).join(' / ') || '—'}</span>
+          </div>
+
+          <div className="v1-fu-rail">
+            {followups.map((q, i) => {
+              const answer = followAnswers[i]
+              return answer ? (
+                <button key={i} className="v1-fu-chip" onClick={() => setFollowIndex(i)}>
+                  <span>✓ {answer.label}</span>
+                  <em>改</em>
+                </button>
+              ) : null
+            })}
+          </div>
+
+          <div className="v1-fu-progress">
+            <span>{Object.keys(followAnswers).length} / {followups.length}</span>
+            <div className="v1-fu-bar">
+              <i style={{ width: `${(Object.keys(followAnswers).length / followups.length) * 100}%` }} />
             </div>
+          </div>
 
-            <aside className="v1-skeleton">
-              <div className="v1-sk-head">
-                <b>行程骨架</b>
-                <em>实时</em>
+          {followIndex < followups.length && (
+            <article className="v1-fu-card" key={followIndex}>
+              <div className="v1-fu-meta">
+                <span className={`v1-fu-tag ${followups[followIndex].kind}`}>
+                  {followups[followIndex].kind === 'infer' ? '推断' : '需要确认'}
+                </span>
+                <span className="v1-fu-conf">可信度 {followups[followIndex].confidence}</span>
               </div>
-              <div className="v1-kv">
-                <span>返程航班</span>
-                <b>{choice.rv === 'early' ? '08:00' : choice.rv === 'late' ? '18:40' : '13:00'}</b>
-              </div>
-              <div className="v1-kv">
-                <span>到家时间</span>
-                <b>{choice.rv === 'early' ? '12:30' : choice.rv === 'late' ? '22:10' : '18:30'}</b>
-              </div>
-              <div className="v1-kv">
-                <span>住宿</span>
-                <b>{choice.stay === 'switch' ? `2 家 · ${nights - 1}+1` : `1 家 · ${nights} 晚`}</b>
-              </div>
-              <div className="v1-kv">
-                <span>预计花费</span>
-                <b className={choice.stay === 'switch' ? 'v1-warn' : ''}>
-                  {money(form.budget_total + (choice.stay === 'switch' ? 300 : 0))}
-                </b>
-              </div>
-              <div className="v1-kv">
-                <span>体力消耗</span>
-                <b>{choice.rv === 'early' ? '偏紧' : choice.rv === 'late' ? '偏松' : '适中'}</b>
-              </div>
-              <div className="v1-sk-strip">
-                <span className="v1-label">最后一天</span>
-                <div>
-                  {choice.rv === 'early' && (
-                    <>
-                      <b>05:50</b> 起床 <i /> <b>08:00</b> 起飞 <i /> <b>12:30</b> 到家
-                    </>
-                  )}
-                  {choice.rv === 'noon' && (
-                    <>
-                      <b>09:20</b> 出发 <i /> <b>13:00</b> 起飞 <i /> <b>18:30</b> 到家
-                    </>
-                  )}
-                  {choice.rv === 'late' && (
-                    <>
-                      <b>12:00</b> 退房 <i /> <b>18:40</b> 起飞 <i /> <b>22:10</b> 到家
-                    </>
-                  )}
+              <h3>{followups[followIndex].title}</h3>
+              <p>{followups[followIndex].why}</p>
+              <div className="v1-fu-opts">
+                {followups[followIndex].options.map((o, oi) => (
+                  <button
+                    key={oi}
+                    className={followAnswers[followIndex]?.label === o.label ? 'on' : ''}
+                    onClick={() => {
+                      const next = { ...followAnswers, [followIndex]: { title: followups[followIndex].title, label: o.label } }
+                      setFollowAnswers(next)
+                      const nextIdx = followups.findIndex((_, idx) => !next[idx])
+                      setFollowIndex(nextIdx === -1 ? followups.length : nextIdx)
+                    }}
+                  >
+                    <span>{o.label}</span>
+                    {o.note && <em>{o.note}</em>}
+                  </button>
+                ))}
+                <div className="v1-fu-custom">
+                  <input
+                    value={followDrafts[followIndex] ?? ''}
+                    placeholder="其他（自己写）"
+                    onChange={(e) => setFollowDrafts({ ...followDrafts, [followIndex]: e.target.value })}
+                  />
+                  <button
+                    disabled={!(followDrafts[followIndex] ?? '').trim()}
+                    onClick={() => {
+                      const text = (followDrafts[followIndex] ?? '').trim()
+                      if (!text) return
+                      const next = { ...followAnswers, [followIndex]: { title: followups[followIndex].title, label: text } }
+                      setFollowAnswers(next)
+                      const nextIdx = followups.findIndex((_, idx) => !next[idx])
+                      setFollowIndex(nextIdx === -1 ? followups.length : nextIdx)
+                    }}
+                  >
+                    用这句确认 →
+                  </button>
                 </div>
               </div>
-              <div className={`v1-judge ${choice.rv === 'noon' ? 'ok' : ''}`}>
-                {choice.rv === 'noon'
-                  ? '✓ 节奏在可接受范围，评审不会拦'
-                  : choice.rv === 'early'
-                    ? '⚠ 05:50 起床会被评审标记为体力风险'
-                    : '⚠ 22:10 到家会被标记为疲劳风险'}
-              </div>
-            </aside>
-          </div>
+            </article>
+          )}
 
-          <div className="v1-actions">
-            <button className="v1-primary" onClick={runPlan} disabled={phase === 'running'}>
-              确认，团队开工 →
-            </button>
-            <span className="v1-hint">约 2 分钟 · 15 次模型请求</span>
-          </div>
+          {Object.keys(followAnswers).length === followups.length && (
+            <div className="v1-fu-final">
+              <b>信息齐了。</b>
+              <p>推断已确认，问题已回答。</p>
+              <button className="v1-primary" onClick={() => void runPlan()}>
+                开始规划 →
+              </button>
+            </div>
+          )}
         </section>
       )}
 
@@ -1124,10 +1312,10 @@ export default function App() {
       {screen === 'running' && (
         <section className="v1-page">
           <div className="v1-topbar">
-            <button className="v1-back" onClick={() => setScreen('brief')}>
+            <button className="v1-back" onClick={() => setScreen('demand')}>
               ← 改取舍
             </button>
-            <span className="v1-step">STEP 04 / 06</span>
+            <span className="v1-step">STEP 03 / 05</span>
             <span className="v1-pill">{phase === 'running' ? 'RUNNING' : 'RESULT'}</span>
           </div>
           <h2>{phase === 'running' ? '五个角色，把方案接力装出来。' : phase === 'interrupt' ? '有一个决定，需要你拍板。' : '这次运行没有完成。'}</h2>
@@ -1247,7 +1435,7 @@ export default function App() {
         <section className="v1-page wide">
           <div className="v1-plan-head">
             <div>
-              <div className="v1-label">STEP 05 / 06 · 方案</div>
+              <div className="v1-label">STEP 04 / 05 · 方案</div>
               <h2>{result.document?.title ?? `${result.brief.origin}—${result.brief.destination} 行程`}</h2>
               <div className="v1-meta-line">
                 {result.itinerary.days.length} 天 · {result.itinerary.days.reduce((n, d) => n + d.items.filter((i) => i.type === 'sight').length, 0)} 处 ·{' '}
@@ -1449,7 +1637,7 @@ export default function App() {
       {/* ---------------- 06 交付 ---------------- */}
       {screen === 'share' && result && (
         <section className="v1-share">
-          <div className="v1-label">STEP 06 / 06 · 交付</div>
+          <div className="v1-label">STEP 05 / 05 · 交付</div>
           <h2>方案已交付。</h2>
           <p className="v1-sub">一份可读、可改、可追溯的行程。发给同行的人，或自己带走。</p>
 

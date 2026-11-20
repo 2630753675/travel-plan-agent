@@ -29,6 +29,7 @@ from ..cancellation import RunCancelled
 from ..agents import critic, lodging, llm_refiner, planner, poi, transport, weather
 from ..agents import hub as peer_hub
 from ..checkpoint import PersistentSaver
+from ..followups import FollowUpRequest, safe_generate
 from ..graph.build import build
 from ..llm import LLMClient, LLMError
 from ..event_stream import EventFactory, legacy_activity
@@ -519,6 +520,19 @@ async def create_plan(brief: TripBrief):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/plan/questions")
+async def plan_questions(body: FollowUpRequest):
+    """运行前追问：读需求，返回 0–N 个真正会改变行程的问题。"""
+    cfg = config_store.load()
+    _require_configured_model(cfg)
+    client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s, budget=None)
+    questions, warning = await safe_generate(client, body.brief, body.raw_text)
+    return {
+        "questions": [q.model_dump() for q in questions],
+        "warning": warning,
+    }
 
 
 @app.get("/api/run/{run_id}")

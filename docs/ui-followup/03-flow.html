@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>追问 · 单卡流 03</title>
+<style>
+  :root{--bg:#06070c;--s1:#0b0e15;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);
+    --ink:#eef1f7;--sub:#9aa4b4;--dim:#626c7c;--indigo:#8b9cff;--mint:#6fe3c0;--amber:#f0b872;
+    --sans:"Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;--mono:ui-monospace,"Cascadia Code",Consolas,monospace}
+  *{box-sizing:border-box}
+  .sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.65 var(--sans)}
+  .bg{position:fixed;inset:0;pointer-events:none;background:radial-gradient(760px 520px at 50% 18%,rgba(139,156,255,.17),transparent 62%)}
+  .grid{position:fixed;inset:0;pointer-events:none;opacity:.4;
+    background-image:linear-gradient(rgba(255,255,255,.024) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.024) 1px,transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(760px 560px at 50% 24%,#000 12%,transparent 78%);
+    mask-image:radial-gradient(760px 560px at 50% 24%,#000 12%,transparent 78%)}
+  .nav{display:flex;align-items:center;gap:12px;padding:16px 30px;position:relative;z-index:5}
+  .brand{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600}
+  .brand i{width:12px;height:12px;border-radius:3px;background:var(--ink);position:relative}
+  .brand i::after{content:"";position:absolute;inset:3.5px;background:var(--bg);border-radius:1px}
+  .brand small{font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;color:var(--dim)}
+  .nav .right{margin-left:auto;display:flex;gap:14px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .nav a{color:var(--dim);text-decoration:none}.nav a:hover{color:var(--ink)}
+
+  .wrap{position:relative;z-index:2;max-width:720px;margin:0 auto;padding:6px 24px 70px}
+  .head{text-align:center;margin-bottom:18px}
+  .label{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  h1{font-size:clamp(30px,4vw,44px);letter-spacing:-.045em;line-height:1.12;margin:10px 0 8px;font-weight:600}
+  h1 span{color:var(--sub)}
+  .sub{color:var(--sub);font-size:13px;line-height:1.8;max-width:34em;margin:0 auto}
+
+  /* 需求卡 */
+  .stage0{max-height:900px;opacity:1;overflow:hidden;transition:max-height .65s cubic-bezier(.4,0,.2,1),opacity .4s,margin .4s}
+  #need:checked ~ .wrap .stage0{max-height:0;opacity:0;margin:0;pointer-events:none}
+  .brief{border-radius:18px;border:1px solid transparent;
+    background:
+      linear-gradient(180deg,#0f131b,#0a0d13) padding-box,
+      linear-gradient(135deg,rgba(139,156,255,.45),rgba(255,255,255,.06) 45%,rgba(111,227,192,.16)) border-box;
+    box-shadow:0 46px 90px -60px #000,inset 0 1px 0 rgba(255,255,255,.06);padding:22px 24px}
+  .brief-top{display:flex;align-items:center;gap:8px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .brief-top b{font-size:11.5px}
+  .brief-top .tag{font-family:var(--mono);font-size:8px;color:var(--mint);border:1px solid rgba(111,227,192,.25);border-radius:99px;padding:2px 7px}
+  .brief-top .edit{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+  .brief textarea{width:100%;min-height:70px;background:none;border:none;outline:none;color:var(--ink);resize:vertical;
+    font:16px/1.75 var(--sans);margin-top:14px}
+  .facts{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:14px}
+  .fact{border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:rgba(255,255,255,.015)}
+  .fact span{display:block;font-family:var(--mono);font-size:8px;letter-spacing:.08em;color:var(--dim)}
+  .fact b{display:block;font-family:var(--mono);font-size:11px;font-weight:500;color:var(--ink);margin-top:2px}
+  .rows{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;align-items:center}
+  .rows>span{font-family:var(--mono);font-size:8px;color:var(--dim);margin-right:2px}
+  .rows b{font-size:10.5px;font-weight:500;color:var(--ink);border:1px solid var(--line2);background:rgba(255,255,255,.06);border-radius:5px;padding:3px 8px}
+  .rows i{font-size:10.5px;font-style:normal;color:var(--sub);border:1px solid var(--line);border-radius:5px;padding:3px 8px}
+  .brief-foot{display:flex;align-items:center;gap:12px;margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+  .btn{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#0a0b0d;background:var(--ink);border:1px solid var(--ink);border-radius:8px;padding:9px 16px;cursor:pointer}
+  .btn:hover{background:#fff}
+  .ghost{font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:7px 11px;cursor:pointer}
+  .hint{font-size:10px;color:var(--dim)}
+
+  /* 追问区 */
+  .stage2{display:none}
+  #need:checked ~ .wrap .stage2{display:block;animation:fadeIn .4s both}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .summary{display:flex;align-items:center;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:8px}
+  .summary span{font-family:var(--mono);font-size:9px;color:var(--sub);border:1px solid var(--line);border-radius:99px;padding:3px 9px}
+  .summary label{font-size:9.5px;color:var(--dim);border-bottom:1px solid var(--line2);cursor:pointer}
+  .topline{display:flex;align-items:center;justify-content:center;gap:12px;margin:12px 0 8px}
+  .counter{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .counter::after{content:"1 / 3"}
+  #q1a:checked ~ .wrap .counter::after,#q1b:checked ~ .wrap .counter::after{content:"2 / 3"}
+  #q2a:checked ~ .wrap .counter::after,#q2b:checked ~ .wrap .counter::after{content:"3 / 3"}
+  #q3a:checked ~ .wrap .counter::after,#q3b:checked ~ .wrap .counter::after{content:"完成"}
+  .dots{display:flex;gap:5px}
+  .dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14)}
+  #q1a:checked ~ .wrap .dots i:first-child,#q1b:checked ~ .wrap .dots i:first-child{background:var(--mint)}
+  #q2a:checked ~ .wrap .dots i:nth-child(2),#q2b:checked ~ .wrap .dots i:nth-child(2){background:var(--mint)}
+  #q3a:checked ~ .wrap .dots i:nth-child(3),#q3b:checked ~ .wrap .dots i:nth-child(3){background:var(--mint)}
+
+  .stage{position:relative;height:400px;perspective:1100px}
+  .qcard{position:absolute;inset:0;display:none;border-radius:18px;padding:22px 24px;overflow:hidden;border:1px solid transparent;
+    background:
+      linear-gradient(180deg,#0f131b,#0a0d13) padding-box,
+      linear-gradient(135deg,rgba(139,156,255,.4),rgba(255,255,255,.06) 50%,rgba(139,156,255,.1)) border-box;
+    box-shadow:0 40px 80px -50px #000,inset 0 1px 0 rgba(255,255,255,.06);transform-origin:center top}
+  .q1{display:block}
+  #q1a:checked ~ .wrap .q1,#q1b:checked ~ .wrap .q1{display:block;animation:flyOut .5s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none;z-index:2}
+  #q1a:checked ~ .wrap .q2,#q1b:checked ~ .wrap .q2{display:block;animation:cardIn .55s .06s cubic-bezier(.2,.7,.2,1) both;z-index:5}
+  #q2a:checked ~ .wrap .q2,#q2b:checked ~ .wrap .q2{display:block;animation:flyOut .5s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none;z-index:2}
+  #q2a:checked ~ .wrap .q3,#q2b:checked ~ .wrap .q3{display:block;animation:cardIn .55s .06s cubic-bezier(.2,.7,.2,1) both;z-index:6}
+  #q3a:checked ~ .wrap .q3,#q3b:checked ~ .wrap .q3{display:block;animation:flyOut .5s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none;z-index:2}
+  @keyframes flyOut{0%{transform:none;opacity:1}100%{transform:translateY(-120%) rotate(-2deg) scale(.96);opacity:0}}
+  @keyframes cardIn{0%{transform:translateY(42px) scale(.97);opacity:0}100%{transform:none;opacity:1}}
+
+  .meta{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+  .tag{font-family:var(--mono);font-size:8.5px;border-radius:6px;padding:3px 7px}
+  .tag.infer{color:var(--mint);background:rgba(111,227,192,.08);border:1px solid rgba(111,227,192,.25)}
+  .tag.ask{color:var(--amber);background:rgba(240,184,114,.07);border:1px solid rgba(240,184,114,.25)}
+  .conf{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:2px 7px}
+  .qcard h2{font-size:clamp(19px,2.3vw,25px);line-height:1.35;letter-spacing:-.03em;margin:0 0 5px;font-weight:600}
+  .why{font-size:10.5px;color:var(--dim);line-height:1.7;margin-bottom:14px}
+  .opts{display:flex;flex-direction:column;gap:7px}
+  .opt{display:block;border:1px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer;background:rgba(255,255,255,.012);transition:.15s}
+  .opt:hover{border-color:rgba(139,156,255,.45);background:rgba(139,156,255,.05)}
+  .opt input{display:none}
+  .opt .t{display:flex;align-items:center;gap:9px;font-size:12.5px}
+  .opt .t i{width:14px;height:14px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;flex:none}
+  .opt .cons{font-size:10px;color:var(--dim);margin-top:3px;padding-left:23px}
+  .opt:has(input:checked){border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  .opt:has(input:checked) i{border-color:var(--indigo)}
+  .opt:has(input:checked) i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q1a:checked ~ .wrap .q1 .opt[for="q1a"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q1a:checked ~ .wrap .q1 .opt[for="q1a"] i{border-color:var(--indigo)}
+  #q1a:checked ~ .wrap .q1 .opt[for="q1a"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q1b:checked ~ .wrap .q1 .opt[for="q1b"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q1b:checked ~ .wrap .q1 .opt[for="q1b"] i{border-color:var(--indigo)}
+  #q1b:checked ~ .wrap .q1 .opt[for="q1b"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q2a:checked ~ .wrap .q2 .opt[for="q2a"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q2a:checked ~ .wrap .q2 .opt[for="q2a"] i{border-color:var(--indigo)}
+  #q2a:checked ~ .wrap .q2 .opt[for="q2a"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q2b:checked ~ .wrap .q2 .opt[for="q2b"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q2b:checked ~ .wrap .q2 .opt[for="q2b"] i{border-color:var(--indigo)}
+  #q2b:checked ~ .wrap .q2 .opt[for="q2b"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q3a:checked ~ .wrap .q3 .opt[for="q3a"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q3a:checked ~ .wrap .q3 .opt[for="q3a"] i{border-color:var(--indigo)}
+  #q3a:checked ~ .wrap .q3 .opt[for="q3a"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  #q3b:checked ~ .wrap .q3 .opt[for="q3b"]{border-color:rgba(139,156,255,.5);background:rgba(139,156,255,.07)}
+  #q3b:checked ~ .wrap .q3 .opt[for="q3b"] i{border-color:var(--indigo)}
+  #q3b:checked ~ .wrap .q3 .opt[for="q3b"] i::after{content:"";width:5px;height:5px;border-radius:50%;background:var(--indigo)}
+  .opt::after{content:"点击即确认";float:right;font-family:var(--mono);font-size:8px;color:var(--dim);opacity:0;transition:.15s}
+  .opt:hover::after{opacity:1}
+
+  .final{position:absolute;left:0;right:0;top:42px;display:none;place-items:center;text-align:center;padding:44px 20px;
+    border:1px solid rgba(111,227,192,.25);border-radius:18px;background:linear-gradient(180deg,rgba(111,227,192,.07),rgba(255,255,255,.01))}
+  #q3a:checked ~ .wrap .final,#q3b:checked ~ .wrap .final{display:grid;animation:fadeIn .5s both}
+  .final b{display:block;font-size:20px;margin-bottom:6px}
+  .final p{font-size:11px;color:var(--dim);margin:0 0 16px}
+
+  @media (max-width:640px){
+    .wrap{padding:4px 16px 60px}
+    .facts{grid-template-columns:repeat(2,1fr)}
+    .brief{padding:18px 16px}
+    .stage{height:440px}
+  }
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="bg"></div><div class="grid"></div>
+
+<nav class="nav">
+  <div class="brand"><i></i>行程协作 <small>FOLLOW-UP · FLOW</small></div>
+  <div class="right"><a href="index.html">← 全部方案</a><a href="03-flow.html">重播</a></div>
+</nav>
+
+<input class="sr" type="checkbox" id="need">
+<input class="sr" type="radio" name="q1" id="q1a">
+<input class="sr" type="radio" name="q1" id="q1b">
+<input class="sr" type="radio" name="q2" id="q2a">
+<input class="sr" type="radio" name="q2" id="q2b">
+<input class="sr" type="radio" name="q3" id="q3a">
+<input class="sr" type="radio" name="q3" id="q3b">
+
+<div class="wrap">
+  <div class="head">
+    <div class="label">STEP 02 / 06</div>
+    <h1>先说清楚，<span>再开始。</span></h1>
+    <p class="sub">先确认需求；确认之后，团队才会把不确定的地方问你。</p>
+  </div>
+
+  <section class="stage0">
+    <div class="brief">
+      <div class="brief-top"><b>你的需求</b><span class="tag">可编辑</span><span class="edit">01 / 需求</span></div>
+      <textarea>成都 5 天，2 人，带 1 位老人，预算 8000，想看人文、吃点好的，节奏别太赶</textarea>
+      <div class="facts">
+        <div class="fact"><span>出发</span><b>上海</b></div>
+        <div class="fact"><span>到达</span><b>成都</b></div>
+        <div class="fact"><span>日期</span><b>11.20–11.24</b></div>
+        <div class="fact"><span>人数</span><b>2 人</b></div>
+        <div class="fact"><span>预算</span><b>¥8,000</b></div>
+      </div>
+      <div class="rows"><span>同行</span><b>老人</b><i>儿童</i><i>婴儿车</i></div>
+      <div class="rows"><span>偏好</span><b>人文</b><b>美食</b><i>自然</i><i>购物</i><i>夜景</i></div>
+      <div class="rows"><span>节奏</span><i>轻松</i><b>适中</b><i>紧凑</i></div>
+      <div class="brief-foot">
+        <label class="btn" for="need">确认需求，继续 →</label>
+        <span class="hint">确认后才会出现追问</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="stage2">
+    <div class="summary">
+      <span>成都 · 11.20–11.24</span><span>2 人 · 老人</span><span>¥8,000</span><span>人文 / 美食</span>
+      <label for="need">改</label>
+    </div>
+    <div class="topline"><div class="dots"><i></i><i></i><i></i></div><span class="counter"></span></div>
+
+    <div class="stage">
+      <section class="qcard q1">
+        <div class="meta"><span class="tag infer">推断</span><span class="conf">可信度 高</span></div>
+        <h2>带老人 → 节奏放慢</h2>
+        <p class="why">每天 1–2 处，午后留 1 小时休息；优先电梯与平地。点一个选项就确认并推走。</p>
+        <div class="opts">
+          <label class="opt" for="q1a"><span class="t"><i></i>同意，这样安排</span></label>
+          <label class="opt" for="q1b"><span class="t"><i></i>不用特别放慢</span><span class="cons">按普通节奏排，可能每天 3 处</span></label>
+        </div>
+      </section>
+
+      <section class="qcard q2">
+        <div class="meta"><span class="tag infer">推断</span><span class="conf">可信度 高</span></div>
+        <h2>人文 + 美食 → 博物馆优先</h2>
+        <p class="why">先排成都博物馆 / 四川博物院；餐饮优先本地小馆，不排网红长队。</p>
+        <div class="opts">
+          <label class="opt" for="q2a"><span class="t"><i></i>同意</span></label>
+          <label class="opt" for="q2b"><span class="t"><i></i>更想先去户外</span><span class="cons">博物馆留到雨天</span></label>
+        </div>
+      </section>
+
+      <section class="qcard q3">
+        <div class="meta"><span class="tag ask">需要确认</span><span class="conf">可信度 中</span></div>
+        <h2>8,000 元含往返机票吗？</h2>
+        <p class="why">这决定住宿是 500/晚还是 700/晚；两种都能排，但结果差很多。</p>
+        <div class="opts">
+          <label class="opt" for="q3a"><span class="t"><i></i>含往返机票</span><span class="cons">住宿约 500/晚</span></label>
+          <label class="opt" for="q3b"><span class="t"><i></i>只含当地</span><span class="cons">住宿约 700/晚</span></label>
+        </div>
+      </section>
+
+      <div class="final">
+        <div>
+          <b>信息齐了。</b>
+          <p>2 条推断已确认，1 个问题已回答；团队可以开工了。</p>
+          <button class="btn">开始规划 →</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

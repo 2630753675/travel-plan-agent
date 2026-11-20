@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>追问 · 极光卡 04</title>
+<style>
+  :root{--bg:#06070c;--s1:#0b0e15;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);
+    --ink:#eef1f7;--sub:#9aa4b4;--dim:#626c7c;--indigo:#8b9cff;--mint:#6fe3c0;--amber:#f0b872;
+    --sans:"Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;--mono:ui-monospace,"Cascadia Code",Consolas,monospace}
+  *{box-sizing:border-box}
+  .sr{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.65 var(--sans)}
+  .bg{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(760px 520px at 50% 16%,rgba(139,156,255,.16),transparent 62%),
+      radial-gradient(520px 420px at 86% 80%,rgba(111,227,192,.06),transparent 62%)}
+  .grid{position:fixed;inset:0;pointer-events:none;opacity:.4;
+    background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);
+    background-size:64px 64px;
+    -webkit-mask-image:radial-gradient(760px 560px at 50% 22%,#000 12%,transparent 78%);
+    mask-image:radial-gradient(760px 560px at 50% 22%,#000 12%,transparent 78%)}
+  .nav{display:flex;align-items:center;gap:12px;padding:16px 30px;position:relative;z-index:5}
+  .brand{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600}
+  .brand i{width:12px;height:12px;border-radius:3px;background:var(--ink);position:relative}
+  .brand i::after{content:"";position:absolute;inset:3.5px;background:var(--bg);border-radius:1px}
+  .brand small{font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;color:var(--dim)}
+  .nav .right{margin-left:auto;display:flex;gap:14px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .nav a{color:var(--dim);text-decoration:none}.nav a:hover{color:var(--ink)}
+
+  .wrap{position:relative;z-index:2;max-width:760px;margin:0 auto;padding:6px 24px 70px}
+  .head{text-align:center}
+  .label{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  h1{font-size:clamp(28px,3.6vw,40px);letter-spacing:-.045em;line-height:1.14;margin:10px 0 8px;font-weight:600}
+  h1 span{color:var(--sub)}
+  .sub{color:var(--sub);font-size:12.5px;line-height:1.8;max-width:34em;margin:0 auto 16px}
+
+
+  .demand{max-height:980px;overflow:hidden;border-radius:22px;border:1px solid transparent;
+    background:
+      linear-gradient(180deg,#10141d,#0a0d13) padding-box,
+      linear-gradient(135deg,rgba(139,156,255,.55),rgba(255,255,255,.05) 45%,rgba(111,227,192,.3)) border-box;
+    box-shadow:0 50px 100px -60px #000,inset 0 1px 0 rgba(255,255,255,.07);
+    transition:max-height .7s cubic-bezier(.4,0,.2,1),opacity .45s,margin .5s}
+  #need:checked ~ .wrap .demand{max-height:0;opacity:0;margin:0;pointer-events:none}
+  .d-top{display:flex;align-items:center;gap:8px;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .d-top b{font-size:11.5px}
+  .d-tag{font-family:var(--mono);font-size:8px;color:var(--mint);border:1px solid rgba(111,227,192,.25);border-radius:99px;padding:2px 7px}
+  .d-top .no{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim)}
+  .d-body{display:grid;grid-template-columns:1.15fr .85fr;gap:0}
+  .d-form{padding:18px 20px 18px}
+  .d-form textarea{width:100%;min-height:66px;background:none;border:none;outline:none;color:var(--ink);resize:none;
+    font:16px/1.75 var(--sans)}
+  .d-fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .d-fields label{border:1px solid var(--line);border-radius:7px;padding:6px 9px;background:rgba(255,255,255,.015)}
+  .d-fields label span{display:block;font-family:var(--mono);font-size:7.5px;letter-spacing:.08em;color:var(--dim)}
+  .d-fields label input{background:none;border:none;outline:none;color:var(--ink);font-family:var(--mono);font-size:11px;width:82px;margin-top:2px}
+  .d-fields label input.wide{width:112px}
+  .d-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;align-items:center}
+  .d-chips>span{font-family:var(--mono);font-size:8px;color:var(--dim);margin-right:2px}
+  .d-chips b{font-size:10.5px;font-weight:500;color:var(--ink);border:1px solid var(--line2);background:rgba(255,255,255,.06);border-radius:5px;padding:3px 8px}
+  .d-chips i{font-size:10.5px;font-style:normal;color:var(--sub);border:1px solid var(--line);border-radius:5px;padding:3px 8px}
+  .d-foot{display:flex;justify-content:center;align-items:center;margin-top:20px}
+  .d-foot .hint{display:none}
+
+  .d-visual{position:relative;border-left:1px solid var(--line);overflow:hidden;
+    background:radial-gradient(240px 220px at 65% 40%,rgba(139,156,255,.14),transparent 70%)}
+  .d-cap{position:absolute;left:16px;right:16px;top:14px;display:flex;justify-content:space-between;
+    font-family:var(--mono);font-size:8.5px;color:var(--dim);letter-spacing:.08em;z-index:2}
+  .d-cap b{color:var(--sub);font-weight:500}
+  .d-svg{position:absolute;inset:0;width:100%;height:100%}
+  .d-arc{fill:none;stroke:url(#dg);stroke-width:1.2;stroke-dasharray:420;stroke-dashoffset:420;animation:draw 2.6s .4s cubic-bezier(.3,.7,.3,1) forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .d-port{fill:#06070c;stroke:var(--indigo);stroke-width:1.3}
+  .d-ring{fill:none;stroke:rgba(139,156,255,.3);stroke-width:1;animation:ring 3.4s ease-out infinite}
+  @keyframes ring{0%{r:4;opacity:.8}100%{r:18;opacity:0}}
+  .d-dots{position:absolute;inset:0;z-index:1}
+  .d-dots i{position:absolute;width:2px;height:2px;border-radius:50%;background:rgba(200,210,240,.7);
+    animation:twinkle var(--t,4s) ease-in-out infinite;animation-delay:var(--d,0s)}
+  @keyframes twinkle{0%,100%{opacity:.15;transform:scale(.8)}50%{opacity:.9;transform:scale(1.3)}}
+  .d-badge{position:absolute;right:14px;bottom:12px;font-family:var(--mono);font-size:8px;color:var(--dim);
+    border:1px solid var(--line);border-radius:99px;padding:3px 8px;background:rgba(6,7,12,.6);z-index:2}
+  @media (max-width:700px){
+    .d-body{grid-template-columns:1fr}
+    .d-visual{height:220px;border-left:none;border-top:1px solid var(--line)}
+  }
+
+  .summary{display:none;justify-content:center;gap:6px;flex-wrap:wrap;margin:2px 0 10px}
+  .summary span{font-family:var(--mono);font-size:9px;color:var(--sub);border:1px solid var(--line);border-radius:99px;padding:3px 9px}
+  .summary label{font-size:9.5px;color:var(--dim);border-bottom:1px solid var(--line2);cursor:pointer}
+
+  .done-rail,.topline,.stage{display:none}
+  #need:checked ~ .wrap .summary{display:flex}
+  #need:checked ~ .wrap .done-rail{display:flex}
+  #need:checked ~ .wrap .topline{display:flex}
+  #need:checked ~ .wrap .stage{display:block}
+  .done-rail{display:flex;justify-content:center;gap:6px;flex-wrap:wrap;min-height:30px;margin-bottom:6px}
+  .chip{display:none;align-items:center;gap:6px;font-family:var(--mono);font-size:8.5px;color:var(--mint);
+    border:1px solid rgba(111,227,192,.25);background:rgba(111,227,192,.06);border-radius:99px;padding:3px 8px;cursor:pointer}
+  .chip b{font-size:8px;color:var(--dim);font-weight:400;border-left:1px solid rgba(111,227,192,.25);padding-left:5px}
+  #c1a:checked ~ .wrap .chip[for=c1a],
+  #c1b:checked ~ .wrap .chip[for=c1b],
+  #c1c:checked ~ .wrap .chip[for=c1c],
+  #c2a:checked ~ .wrap .chip[for=c2a],
+  #c2b:checked ~ .wrap .chip[for=c2b],
+  #c2c:checked ~ .wrap .chip[for=c2c],
+  #c3a:checked ~ .wrap .chip[for=c3a],
+  #c3b:checked ~ .wrap .chip[for=c3b],
+  #c3c:checked ~ .wrap .chip[for=c3c]{display:inline-flex}
+
+  .topline{display:flex;align-items:center;justify-content:center;gap:12px;margin:6px 0 8px}
+  .dots{display:flex;gap:5px}.dots i{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.14)}
+  #c1a:checked ~ .wrap .dots i:nth-child(1),#c1b:checked ~ .wrap .dots i:nth-child(1),#c1c:checked ~ .wrap .dots i:nth-child(1){background:var(--mint)}
+  #c2a:checked ~ .wrap .dots i:nth-child(2),#c2b:checked ~ .wrap .dots i:nth-child(2){background:var(--mint)}
+  #c3a:checked ~ .wrap .dots i:nth-child(3),#c3b:checked ~ .wrap .dots i:nth-child(3){background:var(--mint)}
+  .counter{font-family:var(--mono);font-size:9px;color:var(--dim)}
+  .counter::after{content:"1 / 3"}
+  #c1a:checked ~ .wrap .counter::after,#c1b:checked ~ .wrap .counter::after,#c1c:checked ~ .wrap .counter::after{content:"2 / 3"}
+  #c2a:checked ~ .wrap .counter::after,#c2b:checked ~ .wrap .counter::after,#c2c:checked ~ .wrap .counter::after{content:"3 / 3"}
+  #c3a:checked ~ .wrap .counter::after,#c3b:checked ~ .wrap .counter::after,#c3c:checked ~ .wrap .counter::after{content:"完成"}
+
+  .stage{position:relative;height:430px;perspective:1200px}
+  .qcard{position:absolute;inset:0;display:none;border-radius:20px;padding:24px 26px;overflow:hidden;
+    border:1px solid transparent;
+    background:
+      linear-gradient(180deg,#10141d,#0a0d13) padding-box,
+      linear-gradient(135deg,rgba(139,156,255,.5),rgba(255,255,255,.05) 45%,rgba(111,227,192,.25)) border-box;
+    box-shadow:0 50px 90px -60px #000,inset 0 1px 0 rgba(255,255,255,.07);
+    transition:transform .55s cubic-bezier(.2,.7,.2,1),opacity .4s;transform-origin:center top}
+  .qcard::before{content:"";position:absolute;inset:-45%;pointer-events:none;opacity:.5;
+    background:conic-gradient(from 0deg,rgba(139,156,255,.22),transparent 28%,rgba(111,227,192,.18) 52%,transparent 78%,rgba(139,156,255,.22));
+    filter:blur(46px);animation:spin 16s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .qcard > *{position:relative;z-index:1}
+  .q1{display:block}
+  #c1a:checked ~ .wrap .q1,#c1b:checked ~ .wrap .q1,#c1c:checked ~ .wrap .q1{transform:translateY(-118%) rotate(-2deg) scale(.96);opacity:0;pointer-events:none}
+  #c1a:checked ~ .wrap .q2,#c1b:checked ~ .wrap .q2,#c1c:checked ~ .wrap .q2{display:block;animation:cardIn .55s .05s cubic-bezier(.2,.7,.2,1) both}
+  #c2a:checked ~ .wrap .q2,#c2b:checked ~ .wrap .q2,#c2c:checked ~ .wrap .q2{transform:translateY(-118%) rotate(-2deg) scale(.96);opacity:0;pointer-events:none}
+  #c2a:checked ~ .wrap .q3,#c2b:checked ~ .wrap .q3,#c2c:checked ~ .wrap .q3{display:block;animation:cardIn .55s .05s cubic-bezier(.2,.7,.2,1) both}
+  #c3a:checked ~ .wrap .q3,#c3b:checked ~ .wrap .q3,#c3c:checked ~ .wrap .q3{transform:translateY(-118%) rotate(-2deg) scale(.96);opacity:0;pointer-events:none}
+  @keyframes cardIn{0%{transform:translateY(44px) scale(.97);opacity:0}100%{transform:none;opacity:1}}
+
+  .meta{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+  .tag{font-family:var(--mono);font-size:8.5px;border-radius:6px;padding:3px 7px}
+  .tag.infer{color:var(--mint);background:rgba(111,227,192,.08);border:1px solid rgba(111,227,192,.25)}
+  .tag.ask{color:var(--amber);background:rgba(240,184,114,.07);border:1px solid rgba(240,184,114,.25)}
+  .conf{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:2px 7px}
+  .qcard h2{font-size:clamp(22px,2.6vw,30px);line-height:1.3;letter-spacing:-.035em;margin:0 0 6px;font-weight:600}
+  .why{font-size:11px;color:var(--dim);line-height:1.7;margin-bottom:18px;max-width:34em}
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .opt{display:block;border:1px solid var(--line);border-radius:12px;padding:14px 14px;cursor:pointer;
+    background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.008));transition:.18s;position:relative}
+  .opt:hover{border-color:rgba(139,156,255,.45);transform:translateY(-1px)}
+  .opt input:not(.custom-text){display:none}
+  .opt .t{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:500}
+  .opt .t i{width:16px;height:16px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;flex:none}
+  .opt .cons{font-size:10px;color:var(--dim);margin-top:5px;padding-left:25px;line-height:1.6}
+  .opt:has(input:checked){border-color:rgba(139,156,255,.55);background:rgba(139,156,255,.08)}
+  .opt:has(input:checked) i{border-color:var(--indigo)}
+  .opt:has(input:checked) i::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--indigo)}
+  .opt .kbd{position:absolute;right:10px;top:10px;font-family:var(--mono);font-size:8px;color:var(--dim);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+  .custom{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;
+    border-style:dashed;background:transparent}
+  .custom .t{grid-column:1/-1}
+  .custom input.custom-text{grid-column:1;width:100%;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:7px;
+    padding:8px 10px;font:11.5px/1.5 var(--sans);color:var(--ink);outline:none}
+  .custom input.custom-text::placeholder{color:var(--dim)}
+  .custom .mini{grid-column:2;font-size:10px;color:#0a0b0d;background:var(--mint);border-radius:6px;padding:7px 10px;cursor:pointer;font-weight:600}
+
+  .final{display:none;margin-top:16px;text-align:center;padding:38px 22px;
+    border:1px solid rgba(111,227,192,.28);border-radius:18px;
+    background:linear-gradient(180deg,#0e1714,#0a0d13);box-shadow:0 30px 60px -50px #000}
+  #c3a:checked ~ .wrap .stage,
+  #c3b:checked ~ .wrap .stage,
+  #c3c:checked ~ .wrap .stage{display:none}
+  #c3a:checked ~ .wrap .final,
+  #c3b:checked ~ .wrap .final,
+  #c3c:checked ~ .wrap .final{display:block;animation:cardIn .5s both}
+  .final b{display:block;font-size:20px;margin-bottom:6px}
+  .final p{font-size:11px;color:var(--dim);margin:0 0 16px}
+  .btn{display:inline-flex;font-size:12px;font-weight:600;color:#0a0b0d;background:var(--ink);border:1px solid var(--ink);border-radius:8px;padding:9px 16px;cursor:pointer}
+
+  @media (max-width:640px){
+    .wrap{padding:4px 14px 60px}
+    .opts{grid-template-columns:1fr}
+    .custom{grid-template-columns:1fr}
+    .custom .mini{grid-column:1}
+    .stage{height:560px}
+    .qcard{padding:18px 16px}
+  }
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="bg"></div><div class="grid"></div>
+<nav class="nav">
+  <div class="brand"><i></i>行程协作 <small>FOLLOW-UP · AURORA</small></div>
+  <div class="right"><a href="index.html">← 全部方案</a><a href="04-aurora.html">重播</a></div>
+</nav>
+
+<input class="sr" type="checkbox" id="need">
+<input class="sr" type="checkbox" id="c1a">
+<input class="sr" type="checkbox" id="c1b">
+<input class="sr" type="checkbox" id="c1c">
+<input class="sr" type="checkbox" id="c2a">
+<input class="sr" type="checkbox" id="c2b">
+<input class="sr" type="checkbox" id="c2c">
+<input class="sr" type="checkbox" id="c3a">
+<input class="sr" type="checkbox" id="c3b">
+<input class="sr" type="checkbox" id="c3c">
+
+<div class="wrap">
+  <div class="head">
+    <div class="label">STEP 03 / 06 · 确认</div>
+    <h1>开始之前，<span>先确认几件事。</span></h1>
+    <p class="sub">能推断的先写出来，不确定的才问。</p>
+    <div class="summary"><span>成都 · 11.20–11.24</span><span>2 人 · 老人</span><span>¥8,000</span><span>人文 / 美食</span><label for="need" style="font-size:9.5px;color:var(--dim);border-bottom:1px solid var(--line2);cursor:pointer">改需求</label></div>
+  </div>
+
+
+  <section class="demand">
+    <div class="d-top"><b>这趟旅行</b><span class="d-tag">可编辑</span><span class="no">01 / 需求</span></div>
+    <div class="d-body">
+      <div class="d-form">
+        <textarea>成都 5 天，2 人，带 1 位老人，预算 8000，想看人文、吃点好的，节奏别太赶</textarea>
+        <div class="d-fields">
+          <label><span>出发</span><input value="上海"></label>
+          <label><span>到达</span><input value="成都"></label>
+          <label><span>日期</span><input class="wide" value="11.20 – 11.24"></label>
+          <label><span>人数</span><input value="2"></label>
+          <label><span>预算</span><input value="¥8,000"></label>
+        </div>
+        <div class="d-chips"><span>同行</span><b>老人</b><i>儿童</i><i>婴儿车</i></div>
+        <div class="d-chips"><span>偏好</span><b>人文</b><b>美食</b><i>自然</i><i>购物</i><i>夜景</i></div>
+        <div class="d-chips"><span>节奏</span><i>轻松</i><b>适中</b><i>紧凑</i></div>
+        <div class="d-foot">
+          <label class="btn" for="need">确认需求，继续 →</label>
+        </div>
+      </div>
+
+      <div class="d-visual" aria-hidden="true">
+        <div class="d-cap"><b>上海</b><b>成都</b></div>
+        <svg class="d-svg" viewBox="0 0 320 300" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="dg" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stop-color="rgba(139,156,255,.1)"/>
+              <stop offset=".5" stop-color="rgba(139,156,255,.9)"/>
+              <stop offset="1" stop-color="rgba(111,227,192,.6)"/>
+            </linearGradient>
+          </defs>
+          <path class="d-arc" d="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58"/>
+          <circle class="d-port" cx="52" cy="244" r="4"/>
+          <circle class="d-ring" cx="52" cy="244" r="5"/>
+          <circle class="d-port" cx="276" cy="58" r="4"/>
+          <circle class="d-ring" cx="276" cy="58" r="5"/>
+          <g fill="#eef1f7">
+            <circle r="1.7"><animateMotion dur="7s" repeatCount="indefinite" path="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58"/></circle>
+          </g>
+          <g fill="#6fe3c0">
+            <circle r="1.4"><animateMotion dur="7s" begin="-4.5s" repeatCount="indefinite" path="M52 244 C 120 226, 160 174, 196 140 S 264 84, 276 58"/></circle>
+          </g>
+        </svg>
+        <div class="d-dots">
+          <i style="left:18%;top:20%;--t:4.2s;--d:-.4s"></i>
+          <i style="left:34%;top:14%;--t:5.1s;--d:-1.6s"></i>
+          <i style="left:62%;top:18%;--t:3.8s;--d:-2.2s"></i>
+          <i style="left:78%;top:30%;--t:4.6s;--d:-3.1s"></i>
+          <i style="left:24%;top:44%;--t:5.4s;--d:-.9s"></i>
+          <i style="left:46%;top:56%;--t:4.4s;--d:-2.8s"></i>
+          <i style="left:68%;top:62%;--t:5.8s;--d:-1.2s"></i>
+          <i style="left:84%;top:74%;--t:4.1s;--d:-3.6s"></i>
+          <i style="left:30%;top:82%;--t:5.2s;--d:-2.4s"></i>
+          <i style="left:56%;top:88%;--t:4.8s;--d:-.2s"></i>
+          <i style="left:12%;top:62%;--t:5.6s;--d:-4s"></i>
+          <i style="left:88%;top:50%;--t:4.3s;--d:-1.9s"></i>
+        </div>
+        <span class="d-badge">5 DAYS · 2 PAX</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="done-rail">
+    <label class="chip k1" for="c1a">✓ 节奏放慢 <b>改</b></label>
+    <label class="chip k1" for="c1b">✓ 不用特别放慢 <b>改</b></label>
+    <label class="chip k1" for="c1c">✓ 自定义 <b>改</b></label>
+    <label class="chip k2" for="c2a">✓ 博物馆优先 <b>改</b></label>
+    <label class="chip k2" for="c2b">✓ 先户外 <b>改</b></label>
+    <label class="chip k2" for="c2c">✓ 自定义 <b>改</b></label>
+    <label class="chip k3" for="c3a">✓ 预算含机票 <b>改</b></label>
+    <label class="chip k3" for="c3b">✓ 只含当地 <b>改</b></label>
+    <label class="chip k3" for="c3c">✓ 自定义 <b>改</b></label>
+  </div>
+
+  <div class="topline"><div class="dots"><i></i><i></i><i></i></div><span class="counter"></span></div>
+
+  <div class="stage">
+    <section class="qcard q1">
+      <div class="meta"><span class="tag infer">推断</span><span class="conf">可信度 高</span></div>
+      <h2>带老人 → 节奏放慢</h2>
+      <p class="why">每天 1–2 处，午后留 1 小时休息；优先电梯与平地。</p>
+      <div class="opts">
+        <label class="opt" for="c1a"><span class="t"><i></i>同意，这样安排</span><span class="kbd">1</span></label>
+        <label class="opt" for="c1b"><span class="t"><i></i>不用特别放慢</span><span class="cons">按普通节奏排，可能每天 3 处</span><span class="kbd">2</span></label>
+        <div class="opt custom">
+          <span class="t"><i></i>其他（自己写）</span>
+          <input class="custom-text" placeholder="例如：老人腰椎不好，不能久坐">
+          <label class="mini" for="c1c">用这句确认 →</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="qcard q2">
+      <div class="meta"><span class="tag infer">推断</span><span class="conf">可信度 高</span></div>
+      <h2>人文 + 美食 → 博物馆优先</h2>
+      <p class="why">先排成都博物馆 / 四川博物院；餐饮优先本地小馆，不排网红长队。</p>
+      <div class="opts">
+        <label class="opt" for="c2a"><span class="t"><i></i>同意</span><span class="kbd">1</span></label>
+        <label class="opt" for="c2b"><span class="t"><i></i>更想先去户外</span><span class="cons">博物馆留到雨天</span><span class="kbd">2</span></label>
+        <div class="opt custom">
+          <span class="t"><i></i>其他（自己写）</span>
+          <input class="custom-text" placeholder="例如：想看川剧，博物馆少一点">
+          <label class="mini" for="c2c">用这句确认 →</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="qcard q3">
+      <div class="meta"><span class="tag ask">需要确认</span><span class="conf">可信度 中</span></div>
+      <h2>8,000 元含往返机票吗？</h2>
+      <p class="why">这决定住宿是 500/晚还是 700/晚；两种都能排，但结果差很多。</p>
+      <div class="opts">
+        <label class="opt" for="c3a"><span class="t"><i></i>含往返机票</span><span class="cons">住宿约 500/晚</span></label>
+        <label class="opt" for="c3b"><span class="t"><i></i>只含当地</span><span class="cons">住宿约 700/晚</span></label>
+        <div class="opt custom">
+          <span class="t"><i></i>其他（自己写）</span>
+          <input class="custom-text" placeholder="例如：不含机票，但含包车">
+          <label class="mini" for="c3c">用这句确认 →</label>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="final">
+    <b>信息齐了。</b>
+    <p>推断已确认，问题已回答。</p>
+    <button class="btn">开始规划 →</button>
+  </div>
+</div>
+</body>
+</html>
