@@ -126,6 +126,8 @@
 
 ## 阶段 3：清理未接线旧图（第 5 项）
 
+**状态**：已完成（2026-11-20），提交 `refactor: 清理未接线的旧图节点`。
+
 **问题**
 
 - `build.py` 顶部仍画着 `transport / lodging / poi / weather → planner → critic` 的旧图；

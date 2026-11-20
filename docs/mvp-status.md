@@ -34,7 +34,8 @@ MVP 功能闭环已完成：需求输入、模型运行前追问、多 Agent 规
 - 阶段 1：追问失败时显示提示，可重试或直接开始（Playwright 模拟超时验证）；
 - 阶段 1：失败分类单元验证（超时/429/5xx/网络/配置/格式）；
 - 阶段 2：`GET /api/plan/{id}` 返回 `version` 与 `llm_stats`；刷新后交付页仍有调用数；
-- 阶段 2：方案页只显示一个用户可见版本号（`计划 vN`）。
+- 阶段 2：方案页只显示一个用户可见版本号（`计划 vN`）；
+- 阶段 3：真实图只剩 `clarify / peer_run / peer_ask / peer_finalize`，旧节点与 `confirm` 已删除。
 
 ## 4. 已知限制
 
@@ -43,7 +44,7 @@ MVP 功能闭环已完成：需求输入、模型运行前追问、多 Agent 规
 3. ~~追问失败会静默直接开跑~~（阶段 1 已修复：显示失败原因，可重试或直接开始）；
 4. ~~`/api/plan/{id}` 不返回 `llm_stats`~~（阶段 2 已修复：刷新/交付页保留调用数）；
 5. ~~计划版本与团队批准版本编号口径不一致~~（阶段 2 已修复：界面只显示方案版本）；
-6. `build.py` 仍保留未接线的旧图节点和过期注释；
+6. ~~`build.py` 仍保留未接线的旧图节点和过期注释~~（阶段 3 已清理）；
 7. 追问页刷新会丢进度；
 8. 缺少按运行的指标看板；
 9. 改造后尚未完整跑完一次 100 秒交付回归。
@@ -51,5 +52,6 @@ MVP 功能闭环已完成：需求输入、模型运行前追问、多 Agent 规
 ## 5. 相关文档
 
 - 优化计划：[mvp-optimization-plan.md](mvp-optimization-plan.md)
+- 当前架构：[architecture.md](architecture.md)
 - 设计冻结：[ui-system/V1.md](ui-system/V1.md)
 - 架构评审：[deep-team-architecture-review.md](deep-team-architecture-review.md)
