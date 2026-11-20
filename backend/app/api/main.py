@@ -551,6 +551,10 @@ async def get_plan(plan_id: str):
     record = store.load(plan_id)
     if record is None:
         raise HTTPException(status_code=404, detail="规划不存在")
+    # 刷新/分享页也需要方案版本与真实用量；这两项不在 plans 表里，按最新记录补齐。
+    record["version"] = store.current_version(plan_id)
+    run = store.load_run(plan_id) or {}
+    record["llm_stats"] = (run.get("payload") or {}).get("llm_stats") or {}
     team = record.get("team")
     if isinstance(team, dict) and team.get("state") == "approved":
         # 交付视图按版本存，直接读；不再依赖"行程完全相等"的隐式认领。

@@ -1487,9 +1487,6 @@ export default function App() {
             <div className="v1-plan-actions">
               <span className={`v1-vpill ${result.critique.passed ? 'ok' : 'bad'}`}>{result.critique.passed ? '已评审' : '有未解项'}</span>
               <span className="v1-vpill">计划 v{result.version ?? '—'}</span>
-              {result.approved_version != null && result.approved_version !== result.version && (
-                <span className="v1-vpill">审核 v{result.approved_version}</span>
-              )}
               <button className="v1-ghost sm" onClick={() => setScreen('demand')}>
                 重新提需求
               </button>
