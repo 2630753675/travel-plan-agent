@@ -210,6 +210,10 @@ VITE_AMAP_SECURITY_CODE=你的安全密钥
 npm run build
 ```
 
+配置后的效果：
+
+<img src="docs/screenshots/demand-map.png" alt="配置高德后的需求页" width="760">
+
 说明：
 
 - 需要在高德开放平台创建 **Web 端（JS API）** Key，并配置安全密钥；
@@ -234,6 +238,12 @@ npm run build
     <td><img src="docs/screenshots/plan.png" alt="方案页"></td>
   </tr>
 </table>
+
+### 6.1 交付页：计划书
+
+Writer 会在行程卡下方整合总览、逐日摘要与出行提示：
+
+<img src="docs/screenshots/delivery.png" alt="交付页计划书" width="760">
 
 ## 7. API
 
