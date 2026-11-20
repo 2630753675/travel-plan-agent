@@ -113,7 +113,16 @@ SQLite 保存：
 
 地图 Key 是前端 Key，应配置域名白名单；仓库不保存真实 Key。当前版本尚未接入市内道路路线。
 
-## 8. 相关文档
+## 8. 天气（可选）
+
+默认使用 ackend/data/mock/weather.json。配置 QWEATHER_KEY 与 QWEATHER_HOST 后，get_weather 改为读取和风天气：
+
+- Local Expert 用它安排室内/户外与每日节奏；
+- Critic 用雨天标记检查户外项目；
+- Writer 把它写入出行提示；
+- 未配置或请求失败时回退 mock / 报天气不可用，不阻塞其他规划。
+
+## 9. 相关文档
 
 - [运行指标](observability.md)
 - [项目主页](../README.md)

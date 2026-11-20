@@ -1,4 +1,4 @@
-"""应用配置：全部由界面维护，存 SQLite，不读环境变量。
+"""应用配置：界面配置存 SQLite；天气等本地开发密钥可从 backend/.env 读取。
 
 安全约定：
 - api_key 永不回传给前端，读取接口只给掩码；
@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
@@ -17,6 +19,22 @@ from pydantic import BaseModel, Field, ValidationError
 from .paths import DB_PATH
 
 MASK_CHAR = "****"
+
+
+def _load_env_file() -> None:
+    """读取 backend/.env，仅供本地密钥；进程环境变量优先。"""
+    path = Path(__file__).resolve().parents[1] / ".env"
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_env_file()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS app_config (
