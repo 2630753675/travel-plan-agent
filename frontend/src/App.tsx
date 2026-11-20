@@ -129,6 +129,15 @@ type FollowUpQuestion = {
 }
 type FollowAnswer = { title: string; label: string }
 type QuestionError = { message: string; retryable: boolean; code?: string }
+type FollowupDraft = {
+  v: 1
+  form: Form
+  briefText: string
+  followups: FollowUpQuestion[]
+  answers: Record<number, FollowAnswer>
+  drafts: Record<number, string>
+  index: number
+}
 
 type Form = {
   origin: string
@@ -146,6 +155,7 @@ type Form = {
 /** ---------------- 基础设施 ---------------- */
 
 const TOKEN_KEY = 'trip.accessToken'
+const FOLLOWUP_DRAFT_KEY = 'trip.followupDraft.v1'
 let onAuthRequired: (() => void) | null = null
 
 async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
@@ -466,6 +476,47 @@ export default function App() {
   const drawerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (new URLSearchParams(location.search).get('plan')) return
+    const raw = sessionStorage.getItem(FOLLOWUP_DRAFT_KEY)
+    if (!raw) return
+    try {
+      const draft = JSON.parse(raw) as FollowupDraft
+      if (
+        draft?.v !== 1 ||
+        !draft.form ||
+        typeof draft.form.destination !== 'string' ||
+        !Array.isArray(draft.followups) ||
+        draft.followups.length === 0
+      ) {
+        throw new Error('invalid draft')
+      }
+      setForm(draft.form)
+      setBriefText(draft.briefText ?? '')
+      setFollowups(draft.followups)
+      setFollowAnswers(draft.answers ?? {})
+      setFollowDrafts(draft.drafts ?? {})
+      setFollowIndex(Math.min(Math.max(0, draft.index ?? 0), draft.followups.length))
+      setScreen('followup')
+    } catch {
+      sessionStorage.removeItem(FOLLOWUP_DRAFT_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (screen !== 'followup' || followups.length === 0) return
+    const draft: FollowupDraft = {
+      v: 1,
+      form,
+      briefText,
+      followups,
+      answers: followAnswers,
+      drafts: followDrafts,
+      index: followIndex,
+    }
+    sessionStorage.setItem(FOLLOWUP_DRAFT_KEY, JSON.stringify(draft))
+  }, [screen, form, briefText, followups, followAnswers, followDrafts, followIndex])
+
+  useEffect(() => {
     onAuthRequired = () => setNeedToken(true)
     return () => {
       onAuthRequired = null
@@ -636,6 +687,7 @@ export default function App() {
 
   async function preparePlan() {
     if (!form.destination || preparing) return
+    sessionStorage.removeItem(FOLLOWUP_DRAFT_KEY)
     setPreparing(true)
     setError('')
     setQuestionError(null)
@@ -682,6 +734,7 @@ export default function App() {
   }
 
   async function runPlan() {
+    sessionStorage.removeItem(FOLLOWUP_DRAFT_KEY)
     setPhase('running')
     setScreen('running')
     setResult(null)
