@@ -1,535 +1,273 @@
 # 旅行规划助手
 
-系统只保留一个“深度团队”规划模式：Orchestrator、Logistics、Local Expert、Critic 和 Writer 在同一工作区协作。确定性代码负责数据查询、时间排程、费用计算和硬约束；模型只负责需要判断的选择。
-
-> **当前状态（2026-11-20）：MVP 已完成。** 完成范围、验证记录与已知限制见 [docs/mvp-status.md](docs/mvp-status.md)；后续优化计划见 [docs/mvp-optimization-plan.md](docs/mvp-optimization-plan.md)；实际编排图见 [docs/architecture.md](docs/architecture.md)。
-
-> **必须先配置模型。** 未配置有效模型时，系统直接报错并提示完成设置，不再提供规则降级路径；也不会把规则结果伪装成 Agent 对话。
-
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="旅行规划助手首页" width="880">
+  <img src="docs/screenshots/home.png" alt="旅行规划助手首页" width="900">
 </p>
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-SSE-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![LangGraph](https://img.shields.io/badge/LangGraph-workflow-1C3C3C)
-![Status](https://img.shields.io/badge/MVP-completed-6FE3C0)
 ![License](https://img.shields.io/badge/License-MIT-8B9CFF)
 
-**一个会分工、会评审、可追溯的旅行规划多 Agent 系统。**
-五个角色（主控 / 交通住宿 / 本地体验 / 独立评审 / 文案）在同一条 LangGraph 流程里协作；确定性代码负责事实、排程、预算和硬约束。
+一个由多个专业 Agent 协作完成旅行规划的系统。它把“需求澄清、交通住宿、本地体验、独立评审、文案整合”拆成明确角色，用 LangGraph 串起完整流程，并用确定性代码负责预算、时间、开放时间与硬约束。
 
-**快速导航**：[MVP 状态](docs/mvp-status.md) · [当前架构](docs/architecture.md) · [优化计划](docs/mvp-optimization-plan.md) · [运行指标](docs/observability.md) · [快速开始](#3-快速开始)
+> 使用前需要在设置页配置一个 OpenAI 兼容模型；系统不会在未配置模型时用规则结果伪装成 Agent 输出。
 
-## 核心特性
+## 目录
 
-- **运行前追问**：模型先读需求，只问真正会改变行程的 0–2 个问题；可自定义、可回改、刷新不丢。
-- **真正的多角色协作**：每个角色独立提示词、工具白名单与对话历史；提案、反对、返工、批准都有结构化协议。
-- **确定性兜底**：预算、时间冲突、闭馆、赶机、同行人体力由代码终审，模型不能自行宣布通过。
-- **全程可追溯**：SSE 流式轨迹、任务板、版本列表、运行指标（调用数 / tokens / 耗时 / 失败原因）。
-- **可交付**：逐日行程、预算、单日返工、版本回滚、分享页；刷新或重启后可恢复。
+- [项目简介](#1-项目简介)
+- [功能](#2-功能)
+- [工作流](#3-工作流)
+- [架构](#4-架构)
+- [快速开始](#5-快速开始)
+- [使用](#6-使用)
+- [API](#7-api)
+- [项目结构](#8-项目结构)
+- [数据与范围](#9-数据与范围)
+- [开发](#10-开发)
+- [许可](#11-许可)
 
-## 界面预览
+## 1. 项目简介
 
-| 需求输入 | 方案与预算 |
-|---|---|
-| <img src="docs/screenshots/demand.png" alt="需求输入" width="420"> | <img src="docs/screenshots/plan.png" alt="方案页" width="420"> |
+旅行规划不是“一次生成一段文本”，而是同时满足预算、日期、同行人、交通、开放时间、体力与偏好的约束问题。
 
-## 1. 团队架构
+这个项目把问题拆成两层：
+
+- **团队层**：多个角色分别做选择、提出反对、返工和整合；
+- **确定性层**：排程、费用、时间冲突、闭馆、赶机等由代码校验，模型不能自行放行。
+
+最终输出一份可阅读、可修改、可追溯的逐日行程，并保留版本与运行轨迹。
+
+## 2. 功能
+
+- **需求输入**：出发地、目的地、日期、人数、预算、同行人、偏好与节奏。
+- **运行前澄清**：模型阅读需求后，只提出 0–2 个会明显改变行程的问题；支持选项与自定义回答。
+- **多角色规划**：交通住宿、本地体验分别交付，独立评审可否决并触发返工。
+- **确定性校验**：预算、时间轴、闭馆、返程预留、同行人适配等硬约束。
+- **过程可见**：SSE 实时轨迹、任务状态、评审问题与版本记录。
+- **交付与修改**：逐日行程、预算视图、单日返工、版本回滚、分享页。
+- **中断与恢复**：需要用户取舍时暂停；刷新或重启后可继续。
+
+## 3. 工作流
 
 ```text
-用户需求
+需求输入
    |
    v
-clarify（确定性归一化，不调模型）
+运行前澄清（0–2 个问题）
    |
    v
-peer_run（深度团队多 Agent 会话）
-   |-- orchestrator     拆任务 / 派工 / 按评审返工
-   |-- logistics        航班、酒店
-   |-- local_expert     景点、天气、逐日安排
-   |-- critic_agent     依据 ReviewPacket 独立评审
-   |-- writer           只整合已批准版本
-   |        ↕ peer_ask（需要用户取舍时中断）
-   v
-peer_finalize（确定性硬校验）
-   |-- 未通过且未到上限 → peer_run 返工
-   |-- 通过 → END
+LangGraph
+   clarify
+      |
+      v
+   team session
+      |-- orchestrator   拆任务 / 派工 / 返工
+      |-- logistics      航班、酒店
+      |-- local_expert   景点、天气、逐日安排
+      |-- critic_agent   独立评审
+      |-- writer         整合已批准版本
+      |
+      v
+   peer_finalize（确定性硬校验）
+      |-- 未通过 → 返工
+      `-- 通过 → 交付
 ```
 
-### 1.1 主控规划 Agent
+### 3.1 运行前澄清
 
-主控只负责全局任务，不替专业 Agent 查询具体数据。它必须输出结构化任务：
+`POST /api/plan/questions` 读取结构化需求，返回 0–2 个问题：
 
-- 任务编号、负责人、目标、依赖任务；
-- 收齐专业交付后提交方案版本；
-- 收到 Critic 的 `changes` 后，把问题按责任方派回；
-- 交通变更会使依赖的本地体验任务失效并重新执行；
-- 无法同时满足硬约束时向用户确认，不擅自放宽预算或同行人群要求。
+- `kind=infer`：可合理推断，请用户确认；
+- `kind=ask`：无法推断，且答案会改变行程。
 
-### 1.2 Logistics Agent
+问题可以带选项、后果说明和自定义输入；回答会随需求一起进入规划。
 
-交通住宿 Agent 独立查询和选择航班、酒店，必须通过 `set_flights` 和 `set_hotel` 写入真实候选中的选择。推荐文字不算交付，交付必须包含航班号、酒店标识和取舍依据。系统不会声称已经预订，因为当前合成数据源没有预订接口。
+### 3.2 团队角色
 
-### 1.3 Local Expert Agent
-
-本地体验 Agent 独立查询景点、天气、适老风险和坐标距离估算，必须为每个日期调用 `assign_pois`，再使用 `materialize_plan` 与 `check_plan` 形成逐日方案。它不修改交通住宿选择；如果交通住宿导致日程不可行，会把问题交回主控。
-
-### 1.4 Critic Agent
-
-Critic 读取服务端生成的 ReviewPacket，不调用工具、也不能直接修改方案；它检查：
-
-- 总预算、酒店晚数和每日费用；
-- 航班方向、到达/返程时段和机场预留；
-- 景点闭馆、雨天户外、老人适配、每日节奏；
-- 专业交付是否与实际工具状态一致。
-
-没有问题才可以针对当前版本 `accept`。有问题必须输出责任方、问题证据和具体 `required_change`，由主控派回；旧版本的接受意见不能作用于新版本。模型 accept 之后，最终能否交付仍由 `peer_finalize` 的确定性 `critic.run` 决定。
-
-### 1.5 Writer Agent
-
-Writer 只能读取已批准版本，调用 `get_plan` 后生成标题、总览、逐日摘要和实用提示。它没有修改交通、酒店、景点或费用的工具权限；没有通过版本时不能写行程单。
-
-### 1.6 共同机制
-
-- **任务依赖**：本地体验任务默认依赖交通住宿交付，避免航班尚未确定就排日程。
-- **版本绑定**：每次专业变更都会增加 `plan_version` 并使旧硬校验、Critic 接受和 Writer 文案失效。
-- **独立上下文**：每个 Agent 保存自己的 ReAct/tool history，不把其他 Agent 的私有上下文混用。
-- **返工闭环**：`proposal → Critic accept/objection → 主控 rework → 责任 Agent 交付 → 新版本复审`。
-- **用户确认**：无法协调的 Agent 使用 `escalate`，LangGraph 中断并在用户答复后恢复任务状态；复审上限、需要用户取舍时也走同一确认面板。
-- **时间权限**：景点时段、餐期、入住、市内交通由确定性排程生成；Agent 通过 `add_fixed_event` 登记必须固定的事件（如去机场），需要纠错时用 `replace_fixed_event` / `remove_fixed_event` 按稳定 `event_id` 修改，排程自动避让。
-- **失败可回看**：失败/中断写入 `runs` 表，`GET /api/run/{id}` 可取回原因或确认面板，刷新不丢。
-- **最终安全边界**：时间重叠、闭馆、赶机、预算和同行适配由确定性校验器决定能否交付；它不是 Agent。
-
-### 1.7 单一深度团队模式
-
-系统只提供一个入口：Orchestrator / Logistics / Local Expert / Critic / Writer 深度团队。没有 `fast` / `expert` 模式选择，也不再提供未配置模型时的规则降级；未配置模型会直接返回 400 并提示先完成模型设置。
-
-深度团队采用集中式任务依赖调度：Agent 负责任务内容、工具选择和专业取舍，代码负责任务顺序、权限、版本、硬约束和运行预算。查询工具只提供事实，Agent 通过消息提议、质疑、返工和升级；确定性排程、费用计算和硬约束校验只作为工具与安全边界。
-
-运行级保护：默认最长 180 秒，模型请求数与 Agent 回合数分别计数。不限制单次输出 token，只记录供应商返回的用量（未返回时退回字符数）。达到回合或模型调用上限时，Agent 必须升级为待确认状态，不能伪造完成；事实不足时必须标明未核实/待确认，不能编造。运行中可通过取消按钮随时请求停止，取消在当前模型请求返回后的检查点生效。
-## 2. 项目结构
-
-```
-backend/
-  app/
-    models.py            领域模型（Pydantic，全部 agent 的输入输出契约）
-    agents/              五角色定义、ReAct 运行时、专业任务状态机、工具与硬约束校验
-    graph/               状态定义与图组装
-    tools/               数据源协议 + mock 实现（换真实 API 只改这里）
-    api/                 FastAPI 路由与 SQLite 持久化
-    cli.py               命令行入口
-  data/mock/             航班 / 酒店 / 景点 / 天气
-  scripts/               验收脚本（深度团队协议）
-frontend/
-  src/App.tsx            表单、编排时间线、行程单、单日重排
-```
-
-## 3. 快速开始
-
-### 3.1 准备
-
-```bash
-cd backend
-python -m venv .venv
-.venv/Scripts/python.exe -m pip install langgraph pydantic fastapi "uvicorn[standard]" playwright
-```
-
-### 3.2 生产模式（单端口，推荐演示时用）
-
-```bash
-cd frontend && npm install && npm run build
-cd ../backend
-set PYTHONPATH=%cd%          # PowerShell: $env:PYTHONPATH=(Get-Location).Path
-.venv/Scripts/python.exe -m uvicorn app.api.main:app --host 127.0.0.1 --port 8848
-```
-
-打开 <http://127.0.0.1:8848/> 即可。UI 与 API 同端口，无跨域问题。
-模型配置在页面右上角「设置」里填（见第 6 节）；不配也能用，走内置规则引擎。
-
-### 3.3 开发模式（前端热更新）
-
-```bash
-# 终端 1：后端
-cd backend && .venv/Scripts/python.exe -m uvicorn app.api.main:app --port 8848
-
-# 终端 2：前端（默认 5180，可在 vite.config.ts 改）
-cd frontend && npm run dev
-```
-
-> 端口 5173/5180 在本机可能被其他服务占用，`vite.config.ts` 里的 `strictPort: true`
-> 会让冲突直接报错而不是静默换端口。
-
-### 3.4 命令行（不走 UI）
-
-```bash
-cd backend
-$env:PYTHONPATH=(Get-Location).Path
-.venv/Scripts/python.exe -m app.cli --origin 上海 --destination 成都 \
-  --start 2026-11-20 --end 2026-11-24 --travelers 2 --budget 8000 --elder
-```
-
-## 4. 关键设计决策
-
-### 4.1 任务与交付状态
-
-专业团队的任务状态为 `pending → running → delivered`。任务由主控模型定义，执行器只验证依赖、负责人和交付格式；`critic_agent` 是评审角色，不能被声明为交付任务负责人。交通住宿任务交付后，依赖它的本地任务才能执行。各角色独立保存模型历史，checkpoint 保存任务、工具上下文、方案版本，以及指向会话工件的引用——历史消息、消息总线、证据与工具账本按内容哈希存放在 `backend/data/artifacts/`，避免同一份数据在每份快照里重复；工件缺失时恢复会明确报错，不会退化成空会话。`wake` 是 Agent 的协作意图/事件元数据，实际出场顺序由代码集中式调度器按 DAG 和消息决定，并不表示自主并行抢占。
-
-工件保留：`backend/scripts/collect_artifacts.py` 默认**只预览**可清理的工件，加 `--apply` 才删除；规则是“未被任何检查点引用且超过保护期（默认 24 小时）”，不做启动时自动清理，避免误删仍在恢复中的会话。
-
-界面上的「问题清单」来自后端 `issue_ledger`：每条问题有固定代码、责任方、验收条件、首次出现与关闭版本；任务表的「最近变更」来自返工时的差异交付摘要（只记录真正变化的日期或酒店/航班字段，首轮交付显示“—”）。
-
-### 4.2 循环、成本与交付边界
-
-`plan_version` 记录专业选择变更；`itinerary_version` 表示当前时间表由哪个版本生成；`approved_version` 表示 Critic 批准的版本。版本不一致不能交付。
-
-深度团队受两个独立硬上限约束：`max_model_calls` 限制供应商请求总数（包括工具调用轮次），`max_agent_turns` 限制 Agent 交接回合；另有 `max_runtime_s` 总时长上限。单次输出不再设 token 硬上限，只记录实际用量。恢复运行会沿用同一 run 的累计请求、字符、token 与耗时，不会把账本清零；达到上限必须显式提高（可一键提额并继续）。回合失败、请求额度耗尽、复审到上限会升级为可操作的用户确认；运行超时则明确报错，不伪装成功，也不会静默扩充费用额度。用户可随时请求取消：取消是协作式的，在当前模型请求返回后的节点边界停止，保留已产生轨迹与用量，并返回 `run_needs_input`（`recovery_status=cancelled`）。
-
-复审达到上限时转为请示用户（继续返工 / 停止并保留问题清单），不允许绕过确定性硬约束出稿。模型空响应、超时和瞬时供应商错误会有限重试；仍失败时按真实原因升级。失败、中断和未完成终态会写入 `runs` 表，刷新后仍能看到原因或继续确认。
-
-### 4.3 失败与"查无结果"必须区分
-
-- 数据源不可用 → 工具返回具体错误，专业 Agent 修正或如实报告，不能编造候选。
-- 线路确实没航班 → 返回空列表，Agent 交回主控协调或请求用户取舍。
-- 模型/协议失败 → 保留失败事件并阻止未验收交付，不静默切换成脚本模型。
-
-三种情况在前端分别呈现，不会静默省略。
-
-### 4.4 单日重排冻结其余各天
-
-`POST /api/plan/{id}/refine` 把目标日之外的 `DayPlan` 原样保留（包括酒店选择），
-只对目标日重跑规划与硬约束校验，并把其余天已占用的景点登记为已用，避免撞车。
-重排结果未通过硬校验时返回 409 并说明阻断原因，不保存为可用版本。
-
-### 4.5 数据：多城市静态快照
-
-数据放在 `backend/data/mock/`，按城市组织，覆盖四条出行链路的常见组合：
-
-| 文件 | 条数 | 覆盖 |
-|---|---|---|
-| flights.json | 47 | 上海↔成都/西安/厦门/北京、北京↔成都、广州↔成都 |
-| hotels.json | 26 | 成都 6、西安 7、厦门 7、北京 6 |
-| pois.json | 64 | 成都 24、西安 17、厦门 12、北京 11 |
-| weather.json | 26 | 成都 5、西安 7、厦门 7、北京 7 |
-
-景点用的是真实地点；其中 p22–p24 的开放时间/票价/闭馆日按公开百科页面核对过，
-其余条目是演示快照，未逐项核实。来源、核对日期与“哪些字段是近似值”见
-`backend/data/mock/SOURCES.md`。行内含 `city` 字段的按城市过滤，
-历史行没有该字段默认归成都——**加城市不会动到成都那套已被验收依赖的数据**。
-
-快照容量有明确边界：成都老人可用的不重复景点约 19–20 条，5 天行程够用，
-7 天接近上限，10 天以上会出现无新景点可排的日期；这是数据容量限制，
-不是规划器把项目静默丢弃。
-
-三个刻意保留的坑，用来驱动真实分支：
-
-- 成都博物馆、四川博物院、金沙遗址博物馆周一闭馆 → 检验闭馆日规避
-- 天气模板含雨天 → 检验室内优先与雨天提醒
-- 都江堰/青城山/华山带"老人不宜"标签 → 检验人群过滤
-
-注意：这是**静态快照**，价格与余票不随日期变化。`HttpSource` 适配器已写好但本机没有
-真实接口可测，标为未验证；换真实源只需实现 `TravelSource` 协议。
-
-### 4.6 时间轴也要校验，不能只校验"排了多少"
-
-景点时段、餐食窗口和入住由确定性排程生成；Local Expert 只能用 `submit_day_plans` 批量提交（服务端先全量校验再原子应用）或 `assign_pois` 单日微调，用 `add_fixed_event` 登记预约/接驳，用 `replace_fixed_event` / `remove_fixed_event` 修复错误事件。市内交通费用是日级估算，不再伪装成 21:30 的 `rest` 活动。机场自动截止时间与 Agent 登记的 `airport_transfer` 固定事件不是两条独立行程：固定接驳到达时间必须满足起飞前机场提前量，返程日出现多条互斥送机事件会被判为 `AIRPORT_TRANSFER_DUPLICATE` blocker，早班机风险会明确提示“可能需要前一晚靠近机场”。`route_distances` 只返回坐标直线距离（`road_data_available=false`），不能据此声称“相邻/步行可达”或给出步行分钟数。
-
-`critic` 除了预算、时长、闭馆日和人群，还检查这张表**能不能照着走**：
-
-| 检查 | 代码 | 严重度 |
-|---|---|---|
-| 任意两项活动重叠（含航班占用时段，不再只查相邻项） | `TIME_OVERLAP` | blocker |
-| 景点被排在开放时间之外 | `OUTSIDE_OPEN_HOURS` | blocker |
-| 返程日超过"地面交通 + 机场提前量"的最晚离城时间 | `MISSED_AIRPORT_DEADLINE` | blocker |
-| 餐食被排在抵达转场完成之前 | `MEAL_BEFORE_ARRIVAL` | blocker |
-| 餐食被排在返程起飞之后或最晚离城时间之后 | `MEAL_AFTER_FLIGHT` / `MEAL_AFTER_AIRPORT_DEPARTURE` | blocker |
-| 长行程缺少完整餐期且未注明自行安排 | `MISSING_LUNCH` / `MISSING_DINNER` | warning |
-
-**餐食不再伪装成精确行程项。** 午餐/晚餐只在正常餐期且能放满完整时长时才作为"休息窗口"写入当天说明，
-餐饮费用单独记入 `meal_estimate` 并计入预算与花费拆解；放不下时写明"自行安排/机场用餐"，不排到午夜，
-也不截短时长。抵达过晚、返程赶飞机、机场接驳未核实都会在当天说明里明确标注。
-
-机场地面交通目前没有真实接口，返程截止时间按 **提前 150 分钟到机场 + 90 分钟市区接驳** 估算并注明假设，
-不能当作已核实路线。早班机可能得出很早的出发时间，这是数据缺口而非真实建议。
-
-### 4.7 统一事件契约
-
-编排过程只有一条数据流，而不是三套（LangGraph 自定义事件、state 里的日志、SQLite 里的投影）。
-每条记录都是 `RunEvent`：
-
-| 字段 | 作用 |
+| 角色 | 职责 |
 |---|---|
-| `run_id` | 一次规划的稳定 ID，`resume` 继续沿用 |
-| `event_id` | 单事件唯一 ID，客户端据此去重（重复投递无害） |
-| `seq` | run 内严格递增，用于稳定排序与断点续读 |
-| `parent_id` | 因果链：`tool_result` 指向 `tool_call`，`agent_started` 指向所属 `stage_started` |
-| `stage` / `actor` | 阶段与身份 |
-| `event_type` | `run_started` / `run_resumed` / `stage_started` / `agent_started` / `agent_message` / `agent_completed` / `agent_resumed` / `tool_call` / `tool_result` / `tool_exchange` / `validation_result` / `route_decision` / `user_question` / `user_answer` / `artifact_created` / `run_interrupted` / `run_completed` / `run_needs_input` / `run_failed` |
-| `payload` | 结构化数据；展示文案不再充当协议字段 |
+| Orchestrator | 拆解目标、定义任务依赖、派工、按评审意见返工 |
+| Logistics | 查询并选择航班与酒店，交付实际选择 |
+| Local Expert | 结合景点、天气、距离与体力安排逐日行程 |
+| Critic | 基于结构化评审包检查预算、时刻、闭馆与体验风险，可否决 |
+| Writer | 只整合已批准版本，生成计划书文案 |
 
-SSE 只有一种事件名 `run_event`，用 `payload.event_type` 区分语义。
-终态事件自带载荷：`run_completed.payload.result`、`run_interrupted.payload.interrupt`、
-`run_needs_input.payload.{message,issues}`（用户停止或要求调整需求后重新规划）、
-`run_failed.payload.{message,error_type,blockers,reasons,recovery_status}`。
-前端不需要再拼装三个端点。
+每个角色有独立的系统提示、工具权限与对话历史；角色之间通过结构化消息协作，而不是共享一段自由文本。
 
-回放：`GET /api/plan/{id}/events?after_seq=N` 返回游标之后的事件，
-支持断点续看；`GET /api/plan/{id}` 一次性带上全部事件。
+### 3.3 确定性校验
 
-两个刻意的约束：
+以下内容不交给模型自由决定：
 
-- **工具调用必须是真实的**。数据源访问统一经过 `_ObservedSource`，
-  在真正调用前后各发一条事件；旧的摘要式 `tool` 行会被丢弃，避免同一次调用显示两遍。
-- **旧数据仍然可打开**。历史规划只有 `activity` 投影，前端把它还原成同构事件再渲染，
-  分享链接不会因为协议升级而失效。
-- **恢复不是重新开始**。中断后 `resume` 会先把历史事件读回来重建上下文：
-  序号接着往下走、`run_id` 不变、未闭合的节点发 `agent_resumed` 并指回中断前那次启动。
-  否则界面上会出现两次"确认开始"，因果链也断在半路。
-- **先落库再发完成事件**。否则前端收到 `run_completed` 立刻刷新分享链接，
-  可能读到还没写入的记录。
+- 总预算与每日费用；
+- 时间轴、餐期、入住与市内交通；
+- 景点闭馆、雨天户外、返程机场预留；
+- 同行人适配与每日强度；
+- 版本一致性、证据引用与最终交付条件。
 
-### 4.8 版本只追加，不覆盖
+## 4. 架构
 
-每次生成、单日重排、降配、回滚都写一条 `plan_versions` 记录，当前结果只是最后一条。
-这样"改坏了"永远回得去，而且能看清这一步是谁触发的：
-
-```
-v1  首次生成                     6840 元
-v2  单日重排  重排 2026-11-22：这天太赶…   6980 元   ← 当前
-```
-
-两条不变量由 `verify_versions` 断言，而不是靠"看起来对"：
-
-- **未编辑的日期必须逐字节一致**。比较的是每天的完整 JSON（`sort_keys` 后），
-  不是"景点标题列表"——后者会把时间、费用、备注的变化全部漏掉。
-- **回滚结果必须等于目标版本**。回滚本身也记一个新版本，历史不被覆盖。
-
-### 4.9 结果页要能回答三个问题
-
-用户看到 6840 元时会问：钱花在哪、这是不是真的、风险在哪。所以结果页不只给总数：
-
-| 问题 | 呈现 | 依据 |
-|---|---|---|
-| 钱花在哪 | 分摊条形图 + 图例金额/占比 | 按 `Item.type` 归类，金额之和必须等于总花费 |
-| 这是不是真的 | 「报价快照」标记 + 说明 | 数据源类型，写明价格会变动、以实际库存为准 |
-| 风险在哪 | 按类别分组的提示 | 交通/住宿/景点/天气/预算/模型/行程，未命中进"其他"不丢 |
-
-成本与分组都在 `summary.py` 里算，不塞进 `Itinerary`——它们是"怎么展示"，不是"行程是什么"。
-
-失败时不给用户看 `TypeError: Failed to fetch`，而是"连不上后端服务。请确认服务已启动，然后重试。"
-并给一个「用同样的需求重试」按钮。
-
-### 4.10 访问门禁：本机免口令，外部要口令
-
-演示时这套东西可能被隧道暴露到公网，所以加了一层最小门禁，而不是做账号体系。
-
-| 谁 | 能做什么 |
-|---|---|
-| 本机直连（127.0.0.1，且没有 `X-Forwarded-For`） | 全部放行，零摩擦 |
-| 外部访客 | 除 `/api/health` 外都要 `X-Access-Token` |
-| 拿着分享链接的人 | 只能 `GET /api/plan/{id}?share=<签名>`，读这一份 |
-
-几个刻意的选择：
-
-- **一旦看到 `X-Forwarded-For` 就不当本机**。隧道和反向代理都会加这个头，
-  否则"本机免口令"会被端口转发绕过。
-- **分享用 HMAC 签名，不共用总口令**。泄漏一条链接不等于交出口令，
-  而且签名只对那一个 `plan_id` 有效——拿它去读 `/versions` 或发 `rollback` 都是 401。
-- **`/api/config/test` 对所有非本机调用都拒绝内网地址**。这个接口会带着你的 API Key
-  去请求任意 URL，错误信息还区分「域名无法解析」和「无法连接」——等于一个内网探测器和密钥外发器。
-  这条不靠认证兜，认证通过也不允许。
-- **口令与签名密钥首次启动时随机生成**，落在 `backend/data/`，不进代码、不读环境变量、
-  不打印到日志（日志只打印文件路径）。
-
-局限：这是演示级门禁，不是账号体系——没有用户、没有会话、没法按人撤销。
-口令一旦泄漏只能删文件重启。
-
-### 4.11 质量评测集
-
-功能验收只回答"能不能跑通"，`eval_quality.py` 回答"跑出来的东西有多好"：
-
-```
-python scripts/eval_quality.py --out ../docs/eval-report.json
-```
-
-16 条用例（4 城 × 3 节奏 × 不同同行人与预算）走**规则链路**跑一遍，
-按五个维度打分，结果可复现（不启用模型，否则同代码两次跑分不同，无法用于比较改进）：
-
-| 维度 | 权重 | 判定 |
-|---|---|---|
-| 可行性 | 0.30 | 硬约束校验 Workflow 无阻断项 |
-| 预算达成 | 0.20 | 预算内满分，超支按比例扣 |
-| 偏好命中 | 0.20 | 所选景点中命中偏好的比例（类别或标签） |
-| 适老/适幼 | 0.15 | 有老人时不出现"老人不宜"类景点 |
-| 完整度 | 0.15 | 每天都有景点或餐食 |
-
-它一上线就抓出三个真问题，比新增功能更有价值：
-
-1. **用户偏好根本没被消费**。`_select_for_day` 只是按数据文件顺序取前 N 个，
-   表单里勾选的 美食/人文/自然 对规则链路完全无效——只有启用模型时才进入 prompt。
-   修法是把"类别命中权重 2、标签命中累加"并入选择排序。
-2. **半天级景点压不进单日上限**。西安"自然紧凑"选中华山（300 分钟）后单日超 600 分钟，
-   重排只减数量不减体量，两轮都收敛不了。修法：单日超时时，半天级项目也要让路。
-3. **西安没有可用的自然类景点**。唯一的华山是"老人不宜"，带老人时偏好必然落空。
-   补了一个非半天级的秦岭野生动物园。
-
-当前基线：均分 **88.5**，14 条达标用例全部可行；另 2 条标记为"预期不可行"
-（预算 6500 走 5 天成都本身做不到、单日往返没有景点），不计入达标率。
-
-## 5. 执行轨迹（右侧抽屉，流式）
-
-点顶栏「执行轨迹」打开右侧面板。它不是工程日志，而是**多 Agent 对话**：
-各角色边执行边发言，工具调用收进「查看依据」，用户先看懂结论，再按需展开证据。
-SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一事件时，会自动回落到旧日志投影。
+### 4.1 分层
 
 ```text
-▼ 并行检索                                      6 条消息
-  交通
-  ┌──────────────────────────────────────────┐
-  │ 已找到上海 → 成都的去程与返程候选。       │
-  └──────────────────────────────────────────┘
-  查看依据 · 2 次工具调用
-    search_flights   4 条候选
-    search_flights   3 条候选
-
-  住宿
-  ┌──────────────────────────────────────────┐
-  │ 春熙路亚朵酒店更适合老人，距市中心 0.5km。│
-  └──────────────────────────────────────────┘
-  查看依据 · 1 次工具调用
-    search_hotels    6 家候选
-
-▼ 预算与体验协商                                3 条消息
-  预算官    ┌────────────────────────────────┐
-            │ 我建议先减少可替代的付费景点。 │
-            └────────────────────────────────┘
-            查看依据 · 2 次工具调用
-  体验官    ┌────────────────────────────────┐
-            │ 熊猫基地不可替代性 0.676，建议保留。│
-            └────────────────────────────────┘
-  调解者    ┌────────────────────────────────┐
-            │ 折中：换便宜酒店，保留核心景点。│
-            └────────────────────────────────┘
+React + Vite
+   |  HTTP / SSE
+FastAPI
+   |
+LangGraph 工作流
+   |
+Agent 团队会话
+   |
+工具与数据源
+   |
+SQLite（方案 / 版本 / 事件 / 运行记录）
 ```
 
-交互规则：
+### 4.2 编排
 
-- 阶段标题可折叠：需求澄清、并行检索、行程规划、可行性校验、预算与体验协商、等你决定。
-- Agent 消息使用角色气泡：交通、住宿、景点、天气、行程规划、校验、预算官、体验官、调解者。
-- 工具调用不再和对话混在一起，挂在对应发言下方，点击「查看依据」展开工具名与返回摘要。
-- 校验结论、路由决定、用户问题使用不同语气色，避免把系统动作误读成 Agent 发言。
-- 底层仍保存完整 `RunEvent`（`parent_id`、`tool_call_id`、`seq` 不变），对话只是前端投影，
-  因此不会损失调试、回放和事件契约能力。
+外层 LangGraph 负责流程与中断：
 
-## 6. 配置：全部在界面维护
+```text
+clarify → peer_run → peer_ask
+              |
+              v
+        peer_finalize → END
+```
 
-右上角「设置」打开，保存后立即生效。**不读环境变量、不需要 `.env` 文件、不用重启。**
+- `peer_run`：运行完整团队会话；
+- `peer_ask`：需要用户取舍时中断，恢复后继续；
+- `peer_finalize`：确定性硬校验，未通过则返工。
 
-| 分组 | 配置项 | 说明 |
-|---|---|---|
-| 模型连接 | 启用开关、base_url、model、api_key、temperature | OpenAI 兼容协议，DeepSeek / OpenAI / Kimi 只换 base_url |
-| 编排参数 | 运行时长（默认 180 秒）、模型请求数（默认 40，上限 80）、Agent 回合数（默认 20）、复审轮次、节点超时、历史 token 预算字段 | `max_model_calls` 统计供应商请求（含工具调用轮次），`max_agent_turns` 统计 Agent 交接回合，两者独立计数；`max_output_tokens` 已废弃（旧配置自动迁移为不限制，只记录用量）；`token_budget` 仅兼容旧路径，专业团队不使用。已保存的旧配置不会被代码默认值覆盖，需要时在界面调整 |
-| 数据源 | mock / HTTP | HTTP 适配器已实现，本机无真实接口，未实测 |
+更完整的说明见 [docs/architecture.md](docs/architecture.md)。
 
-存储与安全约定：
+## 5. 快速开始
 
-- 配置存后端 SQLite（`backend/data/plans.db` 的 `app_config` 表），不依赖浏览器缓存，换浏览器仍在。
-- `api_key` **永不回传明文**：读取接口只给 `sk-u****7890`；前端原样回传掩码时，后端保留库里的真实值。
-- **「测试连接」不要求勾选启用模型**：先测通再决定是否启用。缺字段、域名解析失败、输出被截断
-  会分别给出不同提示。
-- 历史验收脚本中存在写配置的夹具，不能保证恢复被替换的密钥；不要在真实配置库上运行。真实体验请使用当前应用和有效模型配置。
-- 密钥在库里是明文（本地演示项目，未加密）。**不要填生产密钥。** 日志与错误信息不打印密钥。
-- 本机请求免口令，外部 API 请求使用访问口令；这不是完整账号权限系统。配置和密钥只应由服务所有者管理。
+### 5.1 环境
 
-模型启用后的分工见第 1 节。系统只保留深度团队这一个模式；旧版对等 checkpoint 不能作为专业团队会话恢复，需要重新提交需求。
+- Python 3.12+
+- Node.js 18+
+- 一个 OpenAI 兼容模型接口（base_url、model、api_key）
 
-- 各 Agent 自主选择其职责内工具；主控不承担专业查询，Critic 与 Writer 无专业写入权限。
-- 时间轴、费用与硬约束由确定性工具验证；Critic 的语义评审仍不可省略。
-- 专业团队模型超时、空响应或瞬时供应商错误会有限重试一次（计入请求额度），仍失败时按真实原因升级，不自动冒充 Agent 生成规则结果。
-- 模型请求不再传 `max_tokens`，输出长度由模型/供应商自身决定；应用侧只记录 usage，不把“输出较长”判成失败。模型仍因自身上限返回 `finish_reason=length` 时，按截断错误处理，不把半截 JSON 当作有效回复。
-- 单次运行只统计本运行段的请求数与耗时；中断恢复已改为沿用同一 run 的累计账本（请求、字符、token、耗时），不再从 0 重算。
-
-## 7. 验收与回归
-
-2026-11-20 已完成一次完整真实运行：需求 → 追问 → 多 Agent 规划 → 方案 → 交付，plan `8870760ac404`，67 秒、13 次模型调用、82,291 tokens、5 天行程、¥7,360、硬校验通过。同时通过后端 `compileall`、前端 `npm run build`，以及历史脚本化协议回归。
-
-脚本化成功路径当前为 **15 次供应商请求 / 6 个 Agent 回合**（评审包把 Critic 的四次查询合成一次，代码预取再省掉四个角色的查询往返，任务交付后由代码直接提交评审；此前基线为 24、20、16）；这是成本基线，不代表真实模型的实际用量。
-
-任务拆解完成后，代码会并发预取航班、酒店、景点与天气，并把紧凑摘要注入专业 Agent 的提示；预取失败不影响后续流程，角色仍可自行查询。
-
-进度与剩余项以 [MVP 优化计划](docs/mvp-optimization-plan.md) 和 [MVP 状态](docs/mvp-status.md) 为准；每个阶段完成后同步更新。
-
-> 单模式改造后，基于已删除规则图的旧夹具（`verify_graph.py`、`verify_negotiation*`、`eval_quality.py` 等）不再适用，不应作为回归依据；需要按深度团队协议重写或删除。
-
-建议使用界面提交一份真实需求，检查以下交付事实：
-
-1. **启动最新代码**：修改后需重启后端服务（旧进程仍运行旧代码，曾导致页面展示旧版侦察 Agent 轨迹）。
-2. 主控输出带负责人、目标和依赖的任务，自己不查航班/酒店/景点。
-3. 交通住宿 Agent 调用查询和选择工具，交付实际航班与酒店。
-4. 本地体验 Agent 在交通确定后查询天气、开放时间与距离，并显式分配全部日期。
-5. Critic 基于服务端 `ReviewPacket` 评审，不再自行重复查询四份重叠数据；有问题时只提交带 `code`/`acceptance` 的确定性 issue。
-6. 主控将 Critic 意见转换为原任务返工；按 issue code 决定是否波及下游任务，日期级问题只重开被点名任务。
-7. 新版本重新评审，旧版本批准失效；返工可用 `delivery_patch` 只提交变更，未关闭的 issue 不允许接受。
-8. 最终页面展示计划书、任务状态、真实费用与行程，刷新后仍可回读。
-9. 未通过硬约束的方案只返回失败事件，不保存、不展示为完成行程。
-10. 模型失败返回失败事件，不偷偷切换假模型或伪造专业交付。
-
-### 真实模型验收入口
-
-先在界面设置保存有效模型密钥；密钥不要放进代码、聊天或日志。当前专业团队运行不设置累计 token 预算，也不传 `max_tokens`；网络超时、单回合工具步数、请求额度、Agent 回合、复审次数与总时长用于故障保护，运行中可手动取消。
+### 5.2 后端
 
 ```powershell
 cd backend
-.venv/Scripts/python.exe scripts/verify_live_api.py
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install langgraph pydantic fastapi "uvicorn[standard]"
 ```
 
-这个入口使用当前 FastAPI 应用、当前配置模型和当前数据源，涵盖请求、LangGraph、SSE、持久化与回读；它使用进程内 HTTP 客户端，不验证浏览器和外部网络监听。它会产生真实模型费用并保存运行记录；本轮已通过界面/API 完成一次完整真实运行。
+Linux / macOS 将 `.venv/Scripts/python.exe` 换成 `.venv/bin/python`。
 
-`verify_peer_agents.py`、`verify_negotiation*` 与 `_legacy_llm.py` 仍是历史验收夹具，不适用于新五角色协议；部分会启动脚本模型或修改配置，**不要用于真实体验验收，不要在使用真实密钥的应用库上运行**。`verify_peer_runtime.py` 已迁移到当前角色协议；`verify_peer_remediation.py` 覆盖中断恢复、停止终态、空响应/超时、证据引用、Writer 检查与 checkpoint 并发；`verify_peer_success.py` 用脚本化五角色模型跑通完整成功路径，并验证评审上限后的用户升级；具体调用数会随预取与评审包优化变化，以运行指标为准。
+### 5.3 前端
 
-## 8. 团队协议与产品接口
+```powershell
+cd frontend
+npm install
+npm run build
+```
 
-五角色主路径保留现有 LangGraph 节点名称 `peer_run` / `peer_ask` / `peer_finalize`，但会话状态使用 `architecture="professional_team"`，不与旧对等会话混用。
+前端构建产物由后端静态托管，不需要单独启动前端服务。
 
-- 主控首轮：`tasks:[{id,owner,goal,depends_on}]`。
-- **返工**：`kind=proposal` 的 `delivery` 必须与工具实际选择一致；定向任务优先用 `submit_day_plans` 批量提交日程，还可用 `add_fixed_event` 登记固定时段（`kind=airport_transfer` 的接驳按“到机场不晚于起飞前 150 分钟”单独校验），用 `replace_fixed_event`/`remove_fixed_event` 纠正错误事件。
-- Critic 拒绝：`changes:[{owner,problem,required_change}]`。
-- 主控返工：`rework:[{task_id,reason}]`，依赖任务同时失效。
-- Critic 接受：`kind=accept`、空 `changes`、`approved_version` 等于待审版本，并且硬校验通过。
-- Writer 完成：`kind=final`，附 `document:{title,overview,days:[{date,summary}],practical_notes}`。
-- **证据**：proposal / objection / accept / final 必须引用本会话工具成功结果里的 `evidence_id`（`evidence:[{"id":"..."}]`），否则该角色被要求重答；服务端只登记真实工具结果，不接受自造 ID。
-- **证据转交**：专业交付把 `evidence_ids` 写入消息载荷和任务状态 `delivery.evidence_ids`，主控提交评审时引用这些 ID（主控本身没有工具）。
-- **恢复上下文**：中断恢复后若仍有待返工问题，主控提示会显式带出 `待返工问题`，必须逐项 `rework` 后才能再次送审。
-- **升级类型**：`agent_turn_failed`（回合失败）、`model_call_budget_exhausted`（请求额度耗尽）、`review_rounds_exhausted`（复审到上限）、`hard_constraint_unresolved`（硬约束未解决）。用户选择 `continue` 继续、`stop` 停止、`restart` 调整需求后重新规划。
+### 5.4 启动
 
-每个角色都有独立模型历史与工具白名单；越权工具调用返回工具错误，不执行。非法 JSON 或协议回复会要求同一角色修正，不替模型补造交付。`accept_risk` 在后端被禁用：确定性 blocker 不能被用户选择绕过。
+```powershell
+cd backend
+.venv/Scripts/python.exe -m uvicorn app.api.main:app --host 127.0.0.1 --port 8848
+```
 
-`POST /api/plan/questions`：运行前追问。模型读需求后返回 0–2 个问题；失败返回 `warning / retryable / error_code`，前端可重试或直接开始。
+打开 <http://127.0.0.1:8848>。
 
-`POST /api/plan` 与 `/resume` 使用 `run_event` SSE。专业团队完成结果额外包含 `document`、`team_tasks`、`approved_version`、`llm_stats`。任务表只展示负责人、状态与返工次数，不把模型私有历史发送到结果页。事件保留真实 `message_id`、`reply_to`、所有收件人及结构化消息载荷。
+### 5.5 配置模型
 
-`GET /api/plan/{id}` 返回团队交付视图、`version`（用户可见方案版本）与最新 `llm_stats`；刷新/分享页不再丢调用数。`approved_version` 保留为内部质量字段，界面只展示方案版本。
+进入右上角「设置」：
 
-`GET /api/metrics/runs?limit=20` 返回最近的调用数、token、耗时、结果与失败原因，字段说明见 [docs/observability.md](docs/observability.md)。
+1. 勾选「启用模型」；
+2. 填写 `base_url`、模型名、API Key；
+3. 点击「测试连接」，确认可用后保存。
 
-`GET /api/run/{id}` 返回运行摘要：`status` 可能是 `interrupted`、`needs_input`（用户停止或要求调整需求）、`failed`、`failed_non_resumable`；载荷含 `interrupt`、`message`、`issues`、`error_type`、`recovery_status`。页面刷新后据此恢复确认面板、显示未完成状态或具体失败原因。
+API Key 只保存在本机 SQLite 配置中，不会写入代码或仓库。
 
-## 9. 已知限制与验收状态
+## 6. 使用
 
-- MVP 完整流程已于 2026-11-20 实测：需求 → 追问 → 多 Agent 规划 → 方案 → 交付；最近一次运行 67 秒、13 次调用、82,291 tokens、5 天行程、¥7,360、硬校验通过。
-- 真实运行前需要在设置页保存有效密钥：此前历史脚本覆盖过配置，不能把 `configured=true` 当成凭据有效。
-- 地图路线目前仅提供坐标直线距离估算，不含道路绕行、实时交通或导航，不应写成已查询真实地图路线。
-- 当前数据源是允许保留的旅行静态快照，价格、天气和余票不保证实时；未接实际预订、高铁、点评或小红书接口，也未实现 VLM 与应急 Agent。
-- Writer 文案由模型生成，结构化航班、酒店、日程和费用始终以获批工具数据为准；文案事实准确性需用户验收。
-- 既有单日重排入口仍为历史功能，不自动执行新的五角色完整复审；重排后不沿用旧 Writer 文案或批准版本。
-- 达到工具循环、团队回合、请求额度或复审上限时不会静默交付：回合失败升级为可重试确认，请求额度耗尽提示先提高设置，复审上限让用户选择重新规划或停止并保留问题清单。
-- 恢复运行会沿用同一 run 的累计请求数与耗时（见上文），不再重新计数；checkpoint 分片清理策略与体积观测仍未实现。
-- checkpoint 兼容读取旧的单文件 `checkpoints.pkl`，新写入按 thread_id 落到 `checkpoints.pkl.d/*.pkl` 分片：单次写入只序列化当前线程，异步写入在工作线程完成并原子替换。仍只适用于单进程服务，分片目录需要与主文件一起备份；专业团队改版前的旧 checkpoint 不支持直接恢复为团队会话。
-- 历史规则/legacy 分支及历史验收脚本未在本次重新验收，不能引用旧通过率作为新版本质量结论。
+1. 首页点击「开始规划」；
+2. 填写需求，确认后系统生成 0–2 个澄清问题；
+3. 逐题确认，或选择「其他」自行补充；
+4. 团队开始规划，右侧可查看实时轨迹；
+5. 方案页查看逐日安排、预算与变更；
+6. 可对单日提交返工，或回滚到历史版本；
+7. 进入「交付」生成分享页。
 
-## 10. License
+<table>
+  <tr>
+    <td><img src="docs/screenshots/demand.png" alt="需求输入"></td>
+    <td><img src="docs/screenshots/plan.png" alt="方案页"></td>
+  </tr>
+</table>
 
-本项目采用 **MIT License**，见 [LICENSE](LICENSE)。
+## 7. API
 
-你可以自由使用、修改、分发，保留版权与许可声明即可。
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/plan/questions` | 运行前澄清，返回 0–2 个问题 |
+| POST | `/api/plan` | 创建规划，SSE 流式返回 |
+| POST | `/api/plan/{id}/resume` | 中断后恢复 |
+| GET | `/api/plan/{id}` | 方案、版本、团队交付与运行统计 |
+| GET | `/api/plan/{id}/versions` | 版本列表 |
+| POST | `/api/plan/{id}/refine` | 单日返工 |
+| POST | `/api/plan/{id}/rollback` | 回滚到指定版本 |
+| GET | `/api/metrics/runs` | 最近运行的调用数、tokens、耗时与结果 |
+| GET | `/api/run/{id}` | 失败/中断运行摘要 |
+| GET / PUT | `/api/config` | 读取 / 保存模型与编排配置 |
+
+本机访问免口令；外部访问需要访问口令，或在 URL 中带合法分享签名。
+
+## 8. 项目结构
+
+```text
+backend/
+  app/
+    agents/        角色、运行时、消息总线、工具与校验
+    graph/         LangGraph 状态与图组装
+    tools/         数据源协议与 mock 实现
+    api/           FastAPI 路由与 SQLite 持久化
+  data/mock/       演示用航班 / 酒店 / 景点 / 天气快照
+  scripts/         开发与验收脚本
+frontend/
+  src/             React 页面与组件
+docs/
+  screenshots/     当前界面截图
+  architecture.md  架构说明
+  observability.md 运行指标说明
+```
+
+## 9. 数据与范围
+
+- 默认数据源为内置演示快照，价格、天气与余票不是实时数据；
+- 系统输出规划建议，不执行实际机票、酒店或门票预订；
+- 路线距离为坐标直线估算，不包含道路绕行与实时交通；
+- 当前为单机 SQLite 部署，适合本地运行、演示与二次开发；
+- 接入真实库存、支付或多租户前，需要实现对应数据源与鉴权。
+
+## 10. 开发
+
+```powershell
+# 后端语法检查
+cd backend
+.venv/Scripts/python.exe -m compileall -q app
+
+# 前端类型检查与构建
+cd ../frontend
+npm run build
+```
+
+追问质量评测脚本（会调用真实模型，手动运行）：
+
+```powershell
+cd backend
+.venv/Scripts/python.exe scripts/eval_followups.py --limit 5
+```
+
+## 11. 许可
+
+本项目采用 [MIT License](LICENSE)。

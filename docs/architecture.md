@@ -1,91 +1,108 @@
-# 当前系统架构
+# 系统架构
 
-> 更新：2026-11-20（阶段 3 清理旧图节点后）
-> 这份文档描述**实际运行路径**，不保留已废弃的 fast/expert/legacy 分支。
+## 1. 总览
 
-## 1. 分层
+系统由 Web 前端、FastAPI 服务、LangGraph 工作流、Agent 团队会话和确定性工具层组成。
 
-```
+```text
 React + Vite
-   │  HTTP / SSE
-FastAPI（backend/app/api/main.py）
-   │
-LangGraph StateGraph（backend/app/graph/build.py）
-   │
-深度团队会话（backend/app/agents/hub.py）
-   │
-工具与数据源（backend/app/agents/tools_spec.py / tools/）
-   │
-SQLite（plans / plan_versions / run_events / runs）+ artifact store
+      |
+   HTTP / SSE
+      |
+   FastAPI
+      |
+   LangGraph
+      |
+   Agent 团队会话
+      |
+   工具与数据源
+      |
+   SQLite
 ```
 
-## 2. 真实编排图
+## 2. 请求链路
 
-外层 LangGraph 只有 4 个节点：
-
+```text
+浏览器
+  |-- POST /api/plan/questions   需求澄清
+  |-- POST /api/plan             SSE 规划
+  |-- POST /api/plan/{id}/resume 中断恢复
+  |-- POST /api/plan/{id}/refine 单日返工
+  `-- GET  /api/plan/{id}        方案 / 版本 / 统计
 ```
+
+FastAPI 负责鉴权、SSE、持久化和静态前端托管；LangGraph 负责流程状态与中断；团队会话负责任务拆解、专业选择与评审返工。
+
+## 3. LangGraph 流程
+
+```text
 START
-  ↓
-clarify（确定性归一化，不调模型）
-  ↓
-peer_run（深度团队多 Agent 会话）
-  ↕ peer_ask（需要用户取舍时中断）
-  ↓
+  |
+  v
+clarify（需求归一化）
+  |
+  v
+peer_run（团队会话）
+  |
+  +--> peer_ask（需要用户取舍时中断）
+  |
+  v
 peer_finalize（确定性硬校验）
-  ├─ 未通过且未到上限 → peer_run 返工
-  ├─ 未通过且需要用户决定 → peer_ask
-  └─ 通过 → END
+  |-- 未通过且未到上限 → peer_run
+  `-- 通过 → END
 ```
 
-代码事实：
+### 3.1 clarify
 
-- 节点注册：`build.py` 末尾只有 `clarify / peer_run / peer_ask / peer_finalize`；
-- `confirm`（预算超支确认）在阶段 3 已删除：当前预算超支由确定性 Critic 判 blocker，不再存在“接受超支”入口；
-- 旧版 `transport / lodging / poi / weather / planner / critic / negotiation` 节点函数已删除，避免与真实图混淆。
+把表单需求归一化为 `TripBrief`，补充默认值与可行性提示；不调用模型。
 
-## 3. peer_run 内部：多 Agent 会话
+### 3.2 peer_run
 
-五个角色，均为独立 LLM 回合、独立系统提示、独立工具白名单与历史：
+运行完整的多角色会话：
 
-| 角色 | 职责 | 工具 |
-|---|---|---|
-| orchestrator | 拆任务、派工、按评审意见返工 | 无 |
-| logistics | 选航班、酒店 | search_flights / set_flights / search_hotels / set_hotel 等 |
-| local_expert | 排每日景点、天气、固定事件 | list_pois / assign_pois / materialize_plan / check_plan 等 |
-| critic_agent | 依据 ReviewPacket 独立评审 | 无写工具 |
-| writer | 只整合已批准版本 | get_plan |
+| 角色 | 职责 |
+|---|---|
+| Orchestrator | 拆任务、定义依赖、派工、处理返工 |
+| Logistics | 选择航班与酒店 |
+| Local Expert | 安排景点、天气与逐日行程 |
+| Critic | 基于结构化评审包独立评审 |
+| Writer | 整合已批准版本的计划书 |
 
-协作机制：
+角色使用独立提示词、工具白名单和对话历史；通过结构化消息传递提案、反对、接受与升级。
 
-- 消息总线 `Bus`：`request / proposal / objection / accept / escalate / note`；
-- 任务 DAG：主控产出任务，代码校验依赖并调度；
-- 代码强制：工具白名单、字段沙箱、版本号、证据 ID、ReviewPacket、Issue Ledger；
-- 终审：`peer_finalize` 调用确定性 `critic.run`，模型不能自行宣布通过。
+### 3.3 peer_ask
 
-因此：**是多 Agent，但调度是中心化、协议受控的；不是自治 Agent 社会。**
+团队无法自行协调时，通过 LangGraph `interrupt()` 暂停，等待用户选择；恢复后继续会话。
 
-## 4. 运行前追问
+### 3.4 peer_finalize
 
-```
-POST /api/plan/questions
-  → 单次模型调用
-  → 0–3 个问题（infer / ask）
-  → 前端卡片确认
-  → 答案并入 preferences（确认：问题=答案）
-  → POST /api/plan
-```
+执行确定性硬校验，检查预算、时间轴、闭馆、返程预留、同行人适配与版本一致性。未通过则返工，达到上限后停止并保留问题。
 
-失败时返回 `warning / retryable / error_code`；前端可重试或直接开始。
+## 4. 状态与持久化
 
-## 5. 已知边界
+SQLite 保存：
 
-- 追问答案还没有独立字段，暂存在 `preferences`；
-- 追问质量与耗时仍是后续优化项；
-- 真实库存/预订、登录与多租户、监控告警未实现；
-- 运行指标目前落在 `runs` 表，尚未有页面。
+- `plans`：当前方案；
+- `plan_versions`：只追加的版本快照；
+- `run_events`：SSE 事件与轨迹；
+- `runs`：运行结果、失败原因与用量。
 
-## 6. 相关文档
+长时间会话快照使用 artifact store 单独保存，避免 checkpoint 体积随对话线性增长。
 
-- [MVP 状态](mvp-status.md)
-- [优化计划](mvp-optimization-plan.md)
-- [设计冻结](ui-system/V1.md)
+## 5. 中断与恢复
+
+- 需要用户取舍时写入中断信息；
+- 前端刷新后通过 `GET /api/run/{id}` 恢复确认面板；
+- 用户提交选择后，服务端从 checkpoint 继续，不重跑已完成的模型调用。
+
+## 6. 设计原则
+
+1. **模型负责判断，代码负责事实**：预算、时间、闭馆、距离等由确定性代码校验。
+2. **角色边界清晰**：专业角色只处理自己的领域，跨域修改会被工具权限和沙箱阻止。
+3. **版本只追加**：返工、降配、回滚都保留版本，批准绑定到具体版本。
+4. **过程可追溯**：任务、消息、工具调用、评审与用量都有结构化记录。
+
+## 7. 相关文档
+
+- [运行指标](observability.md)
+- [项目主页](../README.md)
