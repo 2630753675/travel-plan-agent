@@ -2,6 +2,9 @@
 
 系统只保留一个“深度团队”规划模式：Orchestrator、Logistics、Local Expert、Critic 和 Writer 在同一工作区协作。确定性代码负责数据查询、时间排程、费用计算和硬约束；模型只负责需要判断的选择。
 
+
+> **当前状态（2026-11-20）：MVP 已完成。** 完成范围、验证记录与已知限制见 [docs/mvp-status.md](docs/mvp-status.md)；后续优化计划见 [docs/mvp-optimization-plan.md](docs/mvp-optimization-plan.md)；实际编排图见 [docs/architecture.md](docs/architecture.md)。
+
 > **必须先配置模型。** 未配置有效模型时，系统直接报错并提示完成设置，不再提供规则降级路径；也不会把规则结果伪装成 Agent 对话。
 
 ## 1. 团队架构
@@ -10,26 +13,20 @@
 用户需求
    |
    v
-Orchestrator / Planner（主控规划 Agent）
-   |-- 拆解任务、管理依赖、记录责任方
-   |-- 交通住宿任务 ----------------------+
-   |       Logistics Agent               |
-   |       search_flights / hotels       |
-   |       set_flights / set_hotel       |
-   |                                      v
-   |-- 本地体验任务 -----------------> Local Expert Agent
-   |       依赖交通住宿交付             景点 / 天气 / 路线 / 逐日安排
-   |                                      |
-   +-------------------------------> Critic Agent
-                                           |
-                         accept ----------+---------- objection
-                           |                         |
-                           v                         v
-                    Writer Agent              主控派回责任任务
-                    整合已批准版本            多轮返工 / 用户确认
-                           |
-                           v
-                 确定性硬约束终审与行程单
+clarify（确定性归一化，不调模型）
+   |
+   v
+peer_run（深度团队多 Agent 会话）
+   |-- orchestrator     拆任务 / 派工 / 按评审返工
+   |-- logistics        航班、酒店
+   |-- local_expert     景点、天气、逐日安排
+   |-- critic_agent     依据 ReviewPacket 独立评审
+   |-- writer           只整合已批准版本
+   |        ↕ peer_ask（需要用户取舍时中断）
+   v
+peer_finalize（确定性硬校验）
+   |-- 未通过且未到上限 → peer_run 返工
+   |-- 通过 → END
 ```
 
 ### 1.1 主控规划 Agent
@@ -52,14 +49,14 @@ Orchestrator / Planner（主控规划 Agent）
 
 ### 1.4 Critic Agent
 
-Critic 只能读取方案和事实工具，不能直接修改方案。它必须独立调用 `get_plan`、`check_plan`、`day_costs`、`experience_check` 等工具，检查：
+Critic 读取服务端生成的 ReviewPacket，不调用工具、也不能直接修改方案；它检查：
 
 - 总预算、酒店晚数和每日费用；
 - 航班方向、到达/返程时段和机场预留；
 - 景点闭馆、雨天户外、老人适配、每日节奏；
 - 专业交付是否与实际工具状态一致。
 
-没有问题才可以针对当前版本 `accept`。有问题必须输出责任方、问题证据和具体 `required_change`，由主控派回；旧版本的接受意见不能作用于新版本。
+没有问题才可以针对当前版本 `accept`。有问题必须输出责任方、问题证据和具体 `required_change`，由主控派回；旧版本的接受意见不能作用于新版本。模型 accept 之后，最终能否交付仍由 `peer_finalize` 的确定性 `critic.run` 决定。
 
 ### 1.5 Writer Agent
 
@@ -479,15 +476,19 @@ cd backend
 
 每个角色都有独立模型历史与工具白名单；越权工具调用返回工具错误，不执行。非法 JSON 或协议回复会要求同一角色修正，不替模型补造交付。`accept_risk` 在后端被禁用：确定性 blocker 不能被用户选择绕过。
 
-`POST /api/plan` 与 `/resume` 仍使用 `run_event` SSE。专业团队完成结果额外包含 `document`、`team_tasks`、`approved_version`。任务表只展示负责人、状态与返工次数，不把模型私有历史发送到结果页。事件保留真实 `message_id`、`reply_to`、所有收件人及结构化消息载荷。
+`POST /api/plan/questions`：运行前追问。模型读需求后返回 0–2 个问题；失败返回 `warning / retryable / error_code`，前端可重试或直接开始。
 
-`GET /api/plan/{id}` 从现有 trace 保存的团队交付条目恢复计划书；只有条目中的行程与当前行程完全相同才显示，避免重排后显示旧文案。失败/中断另存于新增的 `runs` 表，不改变既有 `plans` 结构。
+`POST /api/plan` 与 `/resume` 使用 `run_event` SSE。专业团队完成结果额外包含 `document`、`team_tasks`、`approved_version`、`llm_stats`。任务表只展示负责人、状态与返工次数，不把模型私有历史发送到结果页。事件保留真实 `message_id`、`reply_to`、所有收件人及结构化消息载荷。
+
+`GET /api/plan/{id}` 返回团队交付视图、`version`（用户可见方案版本）与最新 `llm_stats`；刷新/分享页不再丢调用数。`approved_version` 保留为内部质量字段，界面只展示方案版本。
+
+`GET /api/metrics/runs?limit=20` 返回最近的调用数、token、耗时、结果与失败原因，字段说明见 [docs/observability.md](docs/observability.md)。
 
 `GET /api/run/{id}` 返回运行摘要：`status` 可能是 `interrupted`、`needs_input`（用户停止或要求调整需求）、`failed`、`failed_non_resumable`；载荷含 `interrupt`、`message`、`issues`、`error_type`、`recovery_status`。页面刷新后据此恢复确认面板、显示未完成状态或具体失败原因。
 
 ## 9. 已知限制与验收状态
 
-- 本次按用户要求交付实现与文档，不代替用户执行真实模型验收。此前编译/构建通过不等同于完整体验通过。
+- MVP 完整流程已于 2026-11-20 实测：需求 → 追问 → 多 Agent 规划 → 方案 → 交付；最近一次运行 67 秒、13 次调用、82,291 tokens、5 天行程、¥7,360、硬校验通过。
 - 真实运行前需要在设置页保存有效密钥：此前历史脚本覆盖过配置，不能把 `configured=true` 当成凭据有效。
 - 地图路线目前仅提供坐标直线距离估算，不含道路绕行、实时交通或导航，不应写成已查询真实地图路线。
 - 当前数据源是允许保留的旅行静态快照，价格、天气和余票不保证实时；未接实际预订、高铁、点评或小红书接口，也未实现 VLM 与应急 Agent。
