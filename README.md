@@ -15,6 +15,7 @@
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![LangGraph](https://img.shields.io/badge/LangGraph-workflow-1C3C3C)
 ![Status](https://img.shields.io/badge/MVP-completed-6FE3C0)
+![License](https://img.shields.io/badge/License-MIT-8B9CFF)
 
 **一个会分工、会评审、可追溯的旅行规划多 Agent 系统。**
 五个角色（主控 / 交通住宿 / 本地体验 / 独立评审 / 文案）在同一条 LangGraph 流程里协作；确定性代码负责事实、排程、预算和硬约束。
@@ -526,3 +527,9 @@ cd backend
 - 恢复运行会沿用同一 run 的累计请求数与耗时（见上文），不再重新计数；checkpoint 分片清理策略与体积观测仍未实现。
 - checkpoint 兼容读取旧的单文件 `checkpoints.pkl`，新写入按 thread_id 落到 `checkpoints.pkl.d/*.pkl` 分片：单次写入只序列化当前线程，异步写入在工作线程完成并原子替换。仍只适用于单进程服务，分片目录需要与主文件一起备份；专业团队改版前的旧 checkpoint 不支持直接恢复为团队会话。
 - 历史规则/legacy 分支及历史验收脚本未在本次重新验收，不能引用旧通过率作为新版本质量结论。
+
+## 10. License
+
+本项目采用 **MIT License**，见 [LICENSE](LICENSE)。
+
+你可以自由使用、修改、分发，保留版权与许可声明即可。
