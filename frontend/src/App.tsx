@@ -74,14 +74,21 @@ type LlmStats = {
 
 type Result = {
   plan_id: string
-  brief: { destination: string; origin: string; budget_total: number }
+  brief: {
+    destination: string
+    origin: string
+    budget_total: number
+    start_date: string
+    end_date: string
+    travelers: number
+  }
   itinerary: { days: Day[]; total_cost: number; budget_total: number; warnings: string[] }
   critique: { passed: boolean; issues: Issue[]; suggestions: string[] }
   revision: number
   errors: string[]
   version?: number
   summary?: Summary
-  document?: { title: string; overview: string; days: { date: string; summary: string }[] } | null
+  document?: { title: string; overview: string; days: { date: string; summary: string }[]; practical_notes?: string[] } | null
   team_tasks?: Record<string, TeamTask>
   issue_ledger?: IssueLedgerItem[]
   approved_version?: number | null
@@ -1738,7 +1745,7 @@ export default function App() {
               <div>
                 <h3>{result.document?.title ?? '旅行方案'}</h3>
                 <div className="v1-meta-line">
-                  {form.start_date} — {form.end_date} · {form.travelers} 人 · {money(total)} / {money(budget)}
+                  {result.brief.start_date} — {result.brief.end_date} · {result.brief.travelers} 人 · {money(total)} / {money(result.brief.budget_total)}
                 </div>
               </div>
               <span className="v1-vpill ok">已评审</span>
@@ -1758,6 +1765,47 @@ export default function App() {
               {result.llm_stats?.calls != null && <span>{result.llm_stats.calls} 次请求</span>}
             </div>
           </div>
+
+          {result.document && (
+            <section className="v1-doc">
+              <header className="v1-doc-head">
+                <span className="v1-doc-kicker">PLAN BOOK</span>
+                <b className="v1-doc-title">计划书</b>
+                <span className="v1-doc-by">文案 Agent 整理</span>
+              </header>
+
+              {result.document.overview && <p className="v1-doc-overview">{result.document.overview}</p>}
+
+              <div className="v1-doc-days">
+                {result.document.days.map((day) => {
+                  const text = day.summary || ''
+                  const preview = text.split('（实际安排：')[0].slice(0, 54)
+                  return (
+                    <details key={day.date} className="v1-doc-day">
+                      <summary>
+                        <span>{day.date.slice(5)}</span>
+                        <b className="v1-doc-preview">{preview || '当天安排'}</b>
+                        <em className="v1-doc-open">展开</em>
+                        <em className="v1-doc-close">收起</em>
+                      </summary>
+                      <p>{text}</p>
+                    </details>
+                  )
+                })}
+              </div>
+
+              {(result.document.practical_notes?.length ?? 0) > 0 && (
+                <div className="v1-doc-notes">
+                  <div className="v1-doc-notes-title">出行提示</div>
+                  <ul>
+                    {result.document.practical_notes?.map((note, i) => (
+                      <li key={i}>{note}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
 
           <div className="v1-recap">
             <div><span>角色</span><b>5</b><small>全部交付</small></div>
