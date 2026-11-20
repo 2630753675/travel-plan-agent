@@ -23,3 +23,7 @@ backend/data/artifacts/
 backend/data/checkpoints.pkl.d/
 backend/data/*.txt
 backend/data/*.json
+
+# 内部工作区与历史截图（不随公开发布）
+.harness/
+docs/shot-*.png
