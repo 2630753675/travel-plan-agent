@@ -8,6 +8,7 @@ from ..settings import DataSourceSettings
 from .base import TravelSource
 from .http import HttpSource
 from .mock import MockSource
+from .amap_web import AmapWebSource
 from .qweather import QWeatherSource
 
 
@@ -16,12 +17,15 @@ def make_source(cfg: DataSourceSettings) -> TravelSource:
         if not cfg.http_base_url:
             raise ValueError("数据源选择 http 但未填写地址")
         return HttpSource(cfg.http_base_url)
-    base = MockSource()
+    base: TravelSource = MockSource()
     weather_key = os.getenv("QWEATHER_KEY", "").strip()
     if weather_key:
-        return QWeatherSource(
+        base = QWeatherSource(
             fallback=base,
             key=weather_key,
             host=os.getenv("QWEATHER_HOST", "").strip() or "https://devapi.qweather.com",
         )
+    amap_key = os.getenv("AMAP_WEB_KEY", "").strip()
+    if amap_key:
+        base = AmapWebSource(fallback=base, key=amap_key)
     return base

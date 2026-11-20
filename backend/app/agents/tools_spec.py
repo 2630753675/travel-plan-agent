@@ -593,23 +593,49 @@ def _route_distances(ctx: ToolContext, args: dict) -> dict:
     unknown = [pid for pid in ids if pid not in poi_by_id]
     if unknown:
         return _err(f"不存在的景点 id：{unknown}")
+    route_fn = getattr(ctx.source, "route", None)
     distances = []
+    used_road = False
     for pid in ids:
         poi = poi_by_id[pid]
         if not poi.lat:
             distances.append({"poi_id": pid, "name": poi.name, "distance_km": None, "note": "缺少坐标"})
             continue
+        if callable(route_fn) and hotel.lng and hotel.lat and poi.lng:
+            try:
+                road = route_fn((hotel.lng, hotel.lat), (poi.lng, poi.lat), "driving")
+                distances.append({
+                    "poi_id": pid,
+                    "name": poi.name,
+                    "distance_km": road["distance_km"],
+                    "duration_min": road["duration_min"],
+                    "note": "高德驾车路线距离，不含实时路况",
+                })
+                used_road = True
+                continue
+            except Exception as exc:  # noqa: BLE001
+                fallback_note = f"高德路线不可用（{type(exc).__name__}），以下为直线估算"
+        else:
+            fallback_note = "坐标直线距离估算，不是道路/地图路线"
         lat1, lat2 = radians(hotel.lat), radians(poi.lat)
         dlat, dlng = lat2 - lat1, radians(poi.lng - hotel.lng)
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlng / 2) ** 2
-        distances.append({"poi_id": pid, "name": poi.name, "distance_km": round(6371 * 2 * asin(sqrt(a)), 2), "note": "坐标直线距离估算，不是道路/地图路线"})
+        distances.append({
+            "poi_id": pid,
+            "name": poi.name,
+            "distance_km": round(6371 * 2 * asin(sqrt(a)), 2),
+            "note": fallback_note,
+        })
     return _ok(
         hotel=hotel.name,
         distances=distances,
-        mode="straight_line",
-        road_data_available=False,
+        mode="amap_driving" if used_road else "straight_line",
+        road_data_available=used_road,
         limitation=(
-            "仅为坐标直线距离估算，不含道路绕行、步行可行性、车程或车费；"
+            "高德驾车距离来自道路规划，不含实时路况；未成功查询的项仍为直线估算，"
+            "不得声称步行可达或给出步行分钟数"
+            if used_road
+            else "仅为坐标直线距离估算，不含道路绕行、步行可行性、车程或车费；"
             "不得据此声称景点相邻、步行可达或给出步行分钟数"
         ),
     )
