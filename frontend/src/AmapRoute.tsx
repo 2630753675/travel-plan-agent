@@ -94,7 +94,7 @@ export default function AmapRoute({ origin, destination, onError }: Props) {
         if (disposed || !ref.current) return
         map = new AMap.Map(ref.current, {
           zoom: 4,
-          mapStyle: 'amap://styles/dark',
+          mapStyle: 'amap://styles/darkblue',
           viewMode: '2D',
           showLabel: true,
         })
