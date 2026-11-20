@@ -105,22 +105,22 @@ SQLite 保存：
 
 ## 7. 地图（可选）
 
-需求页右侧默认是 SVG 示意图。配置 rontend/.env.local 中的高德 JS API Key 与安全密钥后，前端会：
+需求页右侧默认是 SVG 示意图。配置 `frontend/.env.local` 中的高德 JS API Key 与安全密钥后，前端会：
 
 - 加载真实底图与城市坐标；
 - 绘制起终点标记和城际弧线；
 - 加载失败时回退到 SVG。
 
-地图 Key 是前端 Key，应配置域名白名单；仓库不保存真实 Key。当前版本尚未接入市内道路路线。
+地图 Key 是前端 Key，应配置域名白名单；仓库不保存真实 Key。地图展示尚未接入市内道路路线；规划侧道路距离见第 9 节。
 
 ## 8. 天气（可选）
 
-默认使用 ackend/data/mock/weather.json。配置 QWEATHER_KEY 与 QWEATHER_HOST 后，get_weather 改为读取和风天气：
+默认使用 `backend/data/mock/weather.json`。配置 `QWEATHER_KEY` 与 `QWEATHER_HOST` 后，`get_weather` 改为读取和风天气：
 
 - Local Expert 用它安排室内/户外与每日节奏；
 - Critic 用雨天标记检查户外项目；
 - Writer 把它写入出行提示；
-- 未配置或请求失败时回退 mock / 报天气不可用，不阻塞其他规划。
+- 未配置时回退 mock；已配置但请求失败会报天气不可用，不静默换假数据，也不阻塞其他规划。
 
 ## 9. 景点与路线（可选）
 
@@ -134,7 +134,9 @@ SQLite 保存：
 
 ## 10. 游览时长估算
 
-景点时长不是 POI 的固定属性。Local Expert 在 `submit_day_plans.stops` 中为每个景点提交 `minutes_low` / `minutes_high`、置信度和理由；Planner 用上限做开门、餐食、返程窗口校验。高德 POI 不预设固定分钟；没有可靠估算时要求 Agent 补充，而不是按类型硬编码。
+景点时长不是 POI 的固定属性。Local Expert 在 `submit_day_plans` 的 `stops` 中为每个景点提交 `minutes_low` / `minutes_high`、置信度和理由；Planner 用上限做开门、餐食、返程窗口校验。高德 POI 不预设固定分钟；没有可靠估算时要求 Agent 补充，而不是按类型硬编码。
+
+返程日不再统一清空：先按航班、机场提前量和市区转场算可用窗口；能放下才排一个点，放不下会在当日说明中写明最晚离店时间。
 
 ## 11. 相关文档
 
