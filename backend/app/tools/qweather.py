@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import urllib.error
 import urllib.parse
@@ -29,7 +30,10 @@ class QWeatherSource:
         url = f"{self.host}{path}?{query}"
         try:
             with urllib.request.urlopen(url, timeout=self.timeout_s) as resp:
-                data = json.loads(resp.read().decode())
+                raw = resp.read()
+                if resp.headers.get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
+                    raw = gzip.decompress(raw)
+                data = json.loads(raw.decode())
         except urllib.error.HTTPError as e:
             raise SourceError(f"和风天气 HTTP {e.code}") from e
         except urllib.error.URLError as e:
