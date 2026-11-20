@@ -2,10 +2,38 @@
 
 系统只保留一个“深度团队”规划模式：Orchestrator、Logistics、Local Expert、Critic 和 Writer 在同一工作区协作。确定性代码负责数据查询、时间排程、费用计算和硬约束；模型只负责需要判断的选择。
 
-
 > **当前状态（2026-11-20）：MVP 已完成。** 完成范围、验证记录与已知限制见 [docs/mvp-status.md](docs/mvp-status.md)；后续优化计划见 [docs/mvp-optimization-plan.md](docs/mvp-optimization-plan.md)；实际编排图见 [docs/architecture.md](docs/architecture.md)。
 
 > **必须先配置模型。** 未配置有效模型时，系统直接报错并提示完成设置，不再提供规则降级路径；也不会把规则结果伪装成 Agent 对话。
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="旅行规划助手首页" width="880">
+</p>
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-SSE-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![LangGraph](https://img.shields.io/badge/LangGraph-workflow-1C3C3C)
+![Status](https://img.shields.io/badge/MVP-completed-6FE3C0)
+
+**一个会分工、会评审、可追溯的旅行规划多 Agent 系统。**
+五个角色（主控 / 交通住宿 / 本地体验 / 独立评审 / 文案）在同一条 LangGraph 流程里协作；确定性代码负责事实、排程、预算和硬约束。
+
+**快速导航**：[MVP 状态](docs/mvp-status.md) · [当前架构](docs/architecture.md) · [优化计划](docs/mvp-optimization-plan.md) · [运行指标](docs/observability.md) · [快速开始](#3-快速开始)
+
+## 核心特性
+
+- **运行前追问**：模型先读需求，只问真正会改变行程的 0–2 个问题；可自定义、可回改、刷新不丢。
+- **真正的多角色协作**：每个角色独立提示词、工具白名单与对话历史；提案、反对、返工、批准都有结构化协议。
+- **确定性兜底**：预算、时间冲突、闭馆、赶机、同行人体力由代码终审，模型不能自行宣布通过。
+- **全程可追溯**：SSE 流式轨迹、任务板、版本列表、运行指标（调用数 / tokens / 耗时 / 失败原因）。
+- **可交付**：逐日行程、预算、单日返工、版本回滚、分享页；刷新或重启后可恢复。
+
+## 界面预览
+
+| 需求输入 | 方案与预算 |
+|---|---|
+| <img src="docs/screenshots/demand.png" alt="需求输入" width="420"> | <img src="docs/screenshots/plan.png" alt="方案页" width="420"> |
 
 ## 1. 团队架构
 
@@ -80,7 +108,7 @@ Writer 只能读取已批准版本，调用 `get_plan` 后生成标题、总览�
 深度团队采用集中式任务依赖调度：Agent 负责任务内容、工具选择和专业取舍，代码负责任务顺序、权限、版本、硬约束和运行预算。查询工具只提供事实，Agent 通过消息提议、质疑、返工和升级；确定性排程、费用计算和硬约束校验只作为工具与安全边界。
 
 运行级保护：默认最长 180 秒，模型请求数与 Agent 回合数分别计数。不限制单次输出 token，只记录供应商返回的用量（未返回时退回字符数）。达到回合或模型调用上限时，Agent 必须升级为待确认状态，不能伪造完成；事实不足时必须标明未核实/待确认，不能编造。运行中可通过取消按钮随时请求停止，取消在当前模型请求返回后的检查点生效。
-## 2. 目录
+## 2. 项目结构
 
 ```
 backend/
@@ -421,15 +449,15 @@ SSE 仍然逐条推送，所以对话会实时长出来；旧记录没有统一�
 - 模型请求不再传 `max_tokens`，输出长度由模型/供应商自身决定；应用侧只记录 usage，不把“输出较长”判成失败。模型仍因自身上限返回 `finish_reason=length` 时，按截断错误处理，不把半截 JSON 当作有效回复。
 - 单次运行只统计本运行段的请求数与耗时；中断恢复已改为沿用同一 run 的累计账本（请求、字符、token、耗时），不再从 0 重算。
 
-## 7. 验收交接（由用户执行）
+## 7. 验收与回归
 
-本次没有调用真实模型做验收，也没有重启服务后的浏览器验收；已运行确定性自检：后端 `compileall`、前端 `npm run build`、`verify_peer_success.py`、`verify_peer_deep_team.py`、`verify_peer_remediation.py`、`verify_peer_runtime.py`、`verify_event_contract.py`、`verify_budget_cancel.py`、`verify_delivery_patch.py`、`verify_rework_resume.py`，以及单模式/无模型 400 的 smoke 测试。
+2026-11-20 已完成一次完整真实运行：需求 → 追问 → 多 Agent 规划 → 方案 → 交付，plan `8870760ac404`，67 秒、13 次模型调用、82,291 tokens、5 天行程、¥7,360、硬校验通过。同时通过后端 `compileall`、前端 `npm run build`，以及历史脚本化协议回归。
 
 脚本化成功路径当前为 **15 次供应商请求 / 6 个 Agent 回合**（评审包把 Critic 的四次查询合成一次，代码预取再省掉四个角色的查询往返，任务交付后由代码直接提交评审；此前基线为 24、20、16）；这是成本基线，不代表真实模型的实际用量。
 
 任务拆解完成后，代码会并发预取航班、酒店、景点与天气，并把紧凑摘要注入专业 Agent 的提示；预取失败不影响后续流程，角色仍可自行查询。
 
-进度与剩余项以 [深度团队架构评审](<docs/deep-team-architecture-review.md>) 第 19 节为准；该节要求**每个阶段完成后同步更新**。
+进度与剩余项以 [MVP 优化计划](docs/mvp-optimization-plan.md) 和 [MVP 状态](docs/mvp-status.md) 为准；每个阶段完成后同步更新。
 
 > 单模式改造后，基于已删除规则图的旧夹具（`verify_graph.py`、`verify_negotiation*`、`eval_quality.py` 等）不再适用，不应作为回归依据；需要按深度团队协议重写或删除。
 
@@ -455,9 +483,9 @@ cd backend
 .venv/Scripts/python.exe scripts/verify_live_api.py
 ```
 
-这个入口使用当前 FastAPI 应用、当前配置模型和当前数据源，涵盖请求、LangGraph、SSE、持久化与回读；它使用进程内 HTTP 客户端，不验证浏览器和外部网络监听。它会产生真实模型费用并保存运行记录；本次未执行。
+这个入口使用当前 FastAPI 应用、当前配置模型和当前数据源，涵盖请求、LangGraph、SSE、持久化与回读；它使用进程内 HTTP 客户端，不验证浏览器和外部网络监听。它会产生真实模型费用并保存运行记录；本轮已通过界面/API 完成一次完整真实运行。
 
-`verify_peer_agents.py`、`verify_negotiation*` 与 `_legacy_llm.py` 仍是历史验收夹具，不适用于新五角色协议；部分会启动脚本模型或修改配置，**不要用于真实体验验收，不要在使用真实密钥的应用库上运行**。`verify_peer_runtime.py` 已迁移到当前角色协议；`verify_peer_remediation.py` 覆盖中断恢复、停止终态、空响应/超时、证据引用、Writer 检查与 checkpoint 并发；`verify_peer_success.py` 用脚本化五角色模型跑通完整成功路径（24 次调用、6 个 Agent 回合），并验证评审上限后的用户升级。
+`verify_peer_agents.py`、`verify_negotiation*` 与 `_legacy_llm.py` 仍是历史验收夹具，不适用于新五角色协议；部分会启动脚本模型或修改配置，**不要用于真实体验验收，不要在使用真实密钥的应用库上运行**。`verify_peer_runtime.py` 已迁移到当前角色协议；`verify_peer_remediation.py` 覆盖中断恢复、停止终态、空响应/超时、证据引用、Writer 检查与 checkpoint 并发；`verify_peer_success.py` 用脚本化五角色模型跑通完整成功路径，并验证评审上限后的用户升级；具体调用数会随预取与评审包优化变化，以运行指标为准。
 
 ## 8. 团队协议与产品接口
 
