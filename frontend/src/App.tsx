@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import SettingsPanel from './Settings'
+import AmapRoute, { amapConfigured } from './AmapRoute'
 
 /** ---------------- 类型 ---------------- */
 
@@ -460,6 +461,7 @@ export default function App() {
   const [followAnswers, setFollowAnswers] = useState<Record<number, FollowAnswer>>({})
   const [followDrafts, setFollowDrafts] = useState<Record<number, string>>({})
   const [preparing, setPreparing] = useState(false)
+  const [mapFailed, setMapFailed] = useState(false)
   const [questionError, setQuestionError] = useState<QuestionError | null>(null)
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
@@ -522,6 +524,10 @@ export default function App() {
     }
     sessionStorage.setItem(FOLLOWUP_DRAFT_KEY, JSON.stringify(draft))
   }, [screen, form, briefText, followups, followAnswers, followDrafts, followIndex])
+
+  useEffect(() => {
+    setMapFailed(false)
+  }, [form.origin, form.destination])
 
   useEffect(() => {
     onAuthRequired = () => setNeedToken(true)
@@ -1269,6 +1275,15 @@ export default function App() {
                 <b>{form.origin || '出发'}</b>
                 <b>{form.destination || '到达'}</b>
               </div>
+              {amapConfigured && !mapFailed ? (
+                <AmapRoute
+                  key={`${form.origin}-${form.destination}`}
+                  origin={form.origin}
+                  destination={form.destination}
+                  onError={() => setMapFailed(true)}
+                />
+              ) : (
+                <>
               <svg className="v1-route-svg" viewBox="0 0 320 300" preserveAspectRatio="none">
                 <defs>
                   <linearGradient id="v1-route-g" x1="0" y1="1" x2="1" y2="0">
@@ -1298,6 +1313,9 @@ export default function App() {
                   <i key={i} style={{ left: `${x}%`, top: `${y}%`, '--t': `${dur}s`, '--d': `${delay}s` } as CSSProperties} />
                 ))}
               </div>
+                </>
+              )}
+
               <span className="v1-route-badge">
                 {dayCount(form)} DAYS · {form.travelers} PAX
               </span>

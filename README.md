@@ -188,6 +188,36 @@ cd backend
 
 API Key 只保存在本机 SQLite 配置中，不会写入代码或仓库。
 
+### 5.6 地图（可选）
+
+右侧默认使用内置 SVG 示意图。配置高德后，会切换为真实底图与城市坐标：
+
+```powershell
+cd frontend
+copy .env.example .env.local
+```
+
+在 `frontend/.env.local` 填写：
+
+```dotenv
+VITE_AMAP_KEY=你的 JS API Key
+VITE_AMAP_SECURITY_CODE=你的安全密钥
+```
+
+然后重新构建：
+
+```powershell
+npm run build
+```
+
+说明：
+
+- 需要在高德开放平台创建 **Web 端（JS API）** Key，并配置安全密钥；
+- 这是前端 Key，必须配置域名白名单；不要使用 Web 服务 Key；
+- 未填写或加载失败时，自动回退到 SVG 示意图；
+- 当前版本展示真实底图、城市定位和城际弧线；市内道路路线尚未接入；
+- 地图版权信息与高德服务条款需按官方要求保留。
+
 ## 6. 使用
 
 1. 首页点击「开始规划」；
@@ -234,7 +264,7 @@ backend/
   data/mock/       演示用航班 / 酒店 / 景点 / 天气快照
   scripts/         开发与验收脚本
 frontend/
-  src/             React 页面与组件
+  src/             React 页面与组件\n  src/AmapRoute.tsx 可选：高德地图与城际弧线
 docs/
   screenshots/     当前界面截图
   architecture.md  架构说明
