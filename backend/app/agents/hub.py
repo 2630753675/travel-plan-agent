@@ -16,6 +16,7 @@ from ..llm import LLMClient
 from ..models import Itinerary, TripBrief
 from ..tools.base import TravelSource
 from . import roles
+from .lodging import rooms_for
 from .bus import Bus, Envelope
 from .runtime import run_turn
 from .review import build_review_packet, make_issue_ledger
@@ -55,7 +56,7 @@ def _task_view(task: dict) -> dict:
         summary = {"version": delivery.get("version")}
         if "days" in delivery:
             summary["days"] = len(delivery.get("days") or [])
-        for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id"):
+        for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id", "rooms", "hotel_total"):
             if delivery.get(key) is not None:
                 summary[key] = delivery[key]
         view["delivered"] = summary
@@ -335,7 +336,7 @@ def _merge_delivery(task: dict, decision: dict) -> dict:
     if type(patch.get("base_version")) is not int or patch["base_version"] != base.get("version"):
         raise ValueError("差异交付 base_version 与任务基线不一致")
     fields = {"rationale", "days"} if task["owner"] == "local_expert" else {
-        "rationale", "hotel_id", "outbound_flight_no", "inbound_flight_no"
+        "rationale", "hotel_id", "rooms", "hotel_total", "outbound_flight_no", "inbound_flight_no"
     }
     if set(patch) - fields - {"base_version"}:
         raise ValueError("差异交付包含未知字段")
@@ -493,7 +494,7 @@ def _delivery_change_summary(base: dict, patch: dict, plan_version: int) -> dict
             previous = before.get(day)
             if previous != after:
                 fields.append({"kind": "days", "date": day, "before": previous, "after": after})
-    for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id"):
+    for key in ("outbound_flight_no", "inbound_flight_no", "hotel_id", "rooms", "hotel_total"):
         if key in patch and patch[key] != base.get(key):
             fields.append({"kind": key, "before": base.get(key), "after": patch[key]})
     return {
@@ -504,14 +505,19 @@ def _delivery_change_summary(base: dict, patch: dict, plan_version: int) -> dict
     }
 
 
-def _expected_delivery(agent: str, ctx: ToolContext) -> dict:
+def _expected_delivery(agent: str, ctx: ToolContext, brief: TripBrief) -> dict:
     """把"当前工具状态对应的交付字段"写进驳回信息，让模型一次改对而不是反复试。"""
     if agent == "logistics":
         out, back = ctx.transport.chosen_outbound, ctx.transport.chosen_inbound
+        hotel = next((h for h in ctx.lodging.candidates if h.name == ctx.hotel_id), None)
+        rooms = rooms_for(brief.travelers, hotel.room_capacity) if hotel else 0
+        nights = max(0, brief.days - 1)
         return {
             "outbound_flight_no": out.flight_no if out else None,
             "inbound_flight_no": back.flight_no if back else None,
             "hotel_id": ctx.hotel_id,
+            "rooms": rooms,
+            "hotel_total": round(hotel.price_per_night * rooms * nights, 2) if hotel else 0,
         }
     return {"days": [
         {"date": str(day), "poi_ids": list(ctx.assignment.get(day, []))}
@@ -528,7 +534,7 @@ def _effective_delivery(agent: str, delivery: object, ctx: ToolContext, brief: T
     if _delivery_valid(agent, delivery, ctx, brief):
         return delivery, False
     rationale = delivery.get("rationale") if isinstance(delivery, dict) else ""
-    derived = {**_expected_delivery(agent, ctx), "rationale": rationale or "按工具事实交付"}
+    derived = {**_expected_delivery(agent, ctx, brief), "rationale": rationale or "按工具事实交付"}
     if _delivery_valid(agent, derived, ctx, brief):
         return derived, True
     raise ValueError(
@@ -542,10 +548,16 @@ def _delivery_valid(owner: str, delivery: object, ctx: ToolContext, brief: TripB
         return False
     if owner == "logistics":
         out, back = ctx.transport.chosen_outbound, ctx.transport.chosen_inbound
+        expected = _expected_delivery("logistics", ctx, brief)
         return bool(out and back
                     and delivery.get("outbound_flight_no") == out.flight_no
                     and delivery.get("inbound_flight_no") == back.flight_no
-                    and (brief.days == 1 or (ctx.hotel_id and delivery.get("hotel_id") == ctx.hotel_id)))
+                    and (brief.days == 1 or (
+                        ctx.hotel_id
+                        and delivery.get("hotel_id") == ctx.hotel_id
+                        and delivery.get("rooms") == expected["rooms"]
+                        and abs(float(delivery.get("hotel_total") or -1) - expected["hotel_total"]) < 0.01
+                    )))
     days = delivery.get("days")
     if not isinstance(days, list) or ctx.itinerary is None or ctx.itinerary_version != ctx.plan_version:
         return False

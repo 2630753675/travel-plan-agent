@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel, Field
 
 from ..models import Hotel, POI, TripBrief
@@ -13,6 +15,11 @@ from ..tools.base import SourceError, TravelSource
 
 # 市区游的可接受住宿半径（公里）。mock 里都江堰民宿 55km，不应进入城市游候选。
 CITY_RADIUS_KM = 12.0
+
+
+def rooms_for(travelers: int, room_capacity: int = 2) -> int:
+    """按房间可住人数计算所需房间数；3 人默认 2 间，避免报价与时间轴不一致。"""
+    return max(1, math.ceil(max(1, travelers) / max(1, room_capacity)))
 
 # 协作后重选时，"离想去的景点近"所占的权重
 LOCATION_WEIGHT = 0.35

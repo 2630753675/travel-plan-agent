@@ -71,7 +71,7 @@ ROLES: dict[str, Role] = {
         '老人出行避免红眼和极晚抵达；预算可行时兼顾可用游览时间，不能只选最低价。'
         '数据没有高铁或真实预订接口时必须说明仅提供候选，不编造预订；'
         '酒店房型、楼层、发票等数据源没有的信息标为"未核实，需向酒店确认"，不要声称已确认。'
-        '最终 kind=proposal，delivery 返回 {"outbound_flight_no":"...","inbound_flight_no":"...","hotel_id":"酒店名称或null","rationale":"取舍依据"}，to=["orchestrator"]。'
+        '最终 kind=proposal，delivery 返回 {"outbound_flight_no":"...","inbound_flight_no":"...","hotel_id":"酒店名称或null","rooms":2,"hotel_total":1280,"rationale":"取舍依据"}，to=["orchestrator"]。rooms 按酒店房型容量和同行人数计算（默认每间 2 人，3 人即 2 间）；hotel_total 是全部住宿晚数的总额，不是单晚价。报价必须与这两个字段一致。'
         '如果无法找到符合任务约束的方案，返回 objection 或 escalate，不能把失败标记已交付。',
     ),
     "local_expert": Role(

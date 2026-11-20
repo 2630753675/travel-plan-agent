@@ -14,7 +14,7 @@ import math
 from datetime import date, time, timedelta
 
 from ..models import Critique, DayPlan, FixedEvent, Hotel, Item, Itinerary, POI, TripBrief, WeatherDay
-from .lodging import LodgingPlan
+from .lodging import LodgingPlan, rooms_for
 from .poi import PoiPlan
 from .transport import TransportPlan
 from .weather import WeatherPlan
@@ -56,8 +56,7 @@ def _slot_for(m: int) -> str:
     return "晚上"
 
 
-def _rooms(travelers: int) -> int:
-    return max(1, math.ceil(travelers / 2))
+
 
 
 def _pick_hotel(lodging: LodgingPlan, brief: TripBrief, budget_pressure: bool) -> Hotel | None:
@@ -501,7 +500,7 @@ def run(
                         type="hotel",
                         title=f"入住 {hotel.name}",
                         ref_id=hotel.name,
-                        cost=hotel.price_per_night * _rooms(brief.travelers),
+                        cost=hotel.price_per_night * rooms_for(brief.travelers, hotel.room_capacity),
                         duration_min=30,
                         note=f"{hotel.district} · 距市中心 {hotel.distance_to_center_km}km",
                     )
@@ -520,7 +519,7 @@ def run(
                     type="hotel",
                     title=f"晚到入住 {hotel.name}",
                     ref_id=hotel.name,
-                    cost=hotel.price_per_night * _rooms(brief.travelers),
+                    cost=hotel.price_per_night * rooms_for(brief.travelers, hotel.room_capacity),
                     duration_min=0,
                     note=(
                         f"航班 {transport.chosen_outbound.arr_time.strftime('%H:%M')} 抵达并转场后办理入住，"

@@ -69,6 +69,7 @@ class Hotel(BaseModel):
     name: str
     district: str
     price_per_night: float = Field(ge=0)
+    room_capacity: int = Field(default=2, ge=1, le=4)
     rating: float = Field(ge=0, le=5)
     tags: list[str] = Field(default_factory=list)
     distance_to_center_km: float = Field(ge=0)
