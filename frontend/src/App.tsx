@@ -128,6 +128,7 @@ type FollowUpQuestion = {
   allow_custom: boolean
 }
 type FollowAnswer = { title: string; label: string }
+type QuestionError = { message: string; retryable: boolean; code?: string }
 
 type Form = {
   origin: string
@@ -442,6 +443,7 @@ export default function App() {
   const [followAnswers, setFollowAnswers] = useState<Record<number, FollowAnswer>>({})
   const [followDrafts, setFollowDrafts] = useState<Record<number, string>>({})
   const [preparing, setPreparing] = useState(false)
+  const [questionError, setQuestionError] = useState<QuestionError | null>(null)
   const [result, setResult] = useState<Result | null>(null)
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const [error, setError] = useState('')
@@ -636,6 +638,7 @@ export default function App() {
     if (!form.destination || preparing) return
     setPreparing(true)
     setError('')
+    setQuestionError(null)
     try {
       const res = await apiFetch('/api/plan/questions', {
         method: 'POST',
@@ -644,10 +647,24 @@ export default function App() {
       })
       if (!res.ok) {
         const detail = await res.json().catch(() => null)
-        throw new Error(typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`)
+        const message = typeof detail?.detail === 'string' ? detail.detail : `HTTP ${res.status}`
+        setQuestionError({
+          message,
+          retryable: res.status === 429 || res.status >= 500,
+          code: `http_${res.status}`,
+        })
+        return
       }
       const data = await res.json()
       const questions: FollowUpQuestion[] = Array.isArray(data?.questions) ? data.questions : []
+      if (data?.warning && questions.length === 0) {
+        setQuestionError({
+          message: String(data.warning),
+          retryable: data.retryable !== false,
+          code: typeof data.error_code === 'string' ? data.error_code : '',
+        })
+        return
+      }
       if (questions.length === 0) {
         await runPlan()
         return
@@ -657,8 +674,8 @@ export default function App() {
       setFollowDrafts({})
       setFollowIndex(0)
       setScreen('followup')
-    } catch {
-      await runPlan()
+    } catch (e) {
+      setQuestionError({ message: describeError(e), retryable: true })
     } finally {
       setPreparing(false)
     }
@@ -1068,6 +1085,31 @@ export default function App() {
             <h2>先说说这趟旅行。</h2>
             <p className="v1-sub">能推断的先写出来，不确定的才问。</p>
           </div>
+
+          {questionError && (
+            <div className="v1-question-alert" role="alert">
+              <div className="v1-question-alert-text">
+                <b>追问生成失败</b>
+                <span>{questionError.message}</span>
+              </div>
+              <div className="v1-question-alert-actions">
+                {questionError.retryable && (
+                  <button className="v1-ghost" onClick={() => void preparePlan()}>
+                    重试
+                  </button>
+                )}
+                <button
+                  className="v1-primary"
+                  onClick={() => {
+                    setQuestionError(null)
+                    void runPlan()
+                  }}
+                >
+                  直接开始
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="v1-demand-card">
             <div className="v1-demand-form">

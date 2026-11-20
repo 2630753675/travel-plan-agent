@@ -101,12 +101,30 @@ async def generate_questions(
     return _clean(data.get("questions") if isinstance(data, dict) else None)
 
 
+def classify_failure(exc: Exception) -> dict:
+    """把底层错误翻译成用户可读、可判断是否重试的失败信息。"""
+    text = str(exc).lower()
+    if "429" in text:
+        return {"code": "rate_limited", "retryable": True, "message": "模型服务繁忙，请稍后重试"}
+    if "timeout" in text or "超时" in text:
+        return {"code": "timeout", "retryable": True, "message": "生成追问超时，请重试"}
+    if any(f"http {code}" in text for code in (500, 502, 503, 504)):
+        return {"code": "upstream", "retryable": True, "message": "模型服务暂时不可用，请重试"}
+    if "域名" in text or "无法连接" in text:
+        return {"code": "network", "retryable": True, "message": "无法连接模型服务，请检查网络后重试"}
+    if "缺少" in text or "401" in text or "403" in text or "未配置" in text:
+        return {"code": "config", "retryable": False, "message": "模型配置不可用，请先检查设置"}
+    if "json" in text or "结构" in text or "空内容" in text or "截断" in text:
+        return {"code": "invalid_output", "retryable": True, "message": "模型返回的追问格式不可用，请重试"}
+    return {"code": "unknown", "retryable": True, "message": "追问生成失败，请重试"}
+
+
 async def safe_generate(
     client: LLMClient, brief: TripBrief, raw_text: str = ""
-) -> tuple[list[FollowUpQuestion], str]:
-    """失败时返回空列表和原因；调用方决定是否直接开跑。"""
+) -> tuple[list[FollowUpQuestion], dict | None]:
+    """失败时返回空列表和结构化失败信息；调用方决定重试或直接开跑。"""
     try:
-        return await generate_questions(client, brief, raw_text), ""
+        return await generate_questions(client, brief, raw_text), None
     except LLMError as e:
         logger.warning("追问生成失败：%s", e)
-        return [], str(e)
+        return [], classify_failure(e)

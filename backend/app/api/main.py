@@ -528,10 +528,12 @@ async def plan_questions(body: FollowUpRequest):
     cfg = config_store.load()
     _require_configured_model(cfg)
     client = LLMClient(cfg.llm, cfg.orchestration.node_timeout_s, budget=None)
-    questions, warning = await safe_generate(client, body.brief, body.raw_text)
+    questions, failure = await safe_generate(client, body.brief, body.raw_text)
     return {
         "questions": [q.model_dump() for q in questions],
-        "warning": warning,
+        "warning": (failure or {}).get("message", ""),
+        "retryable": bool((failure or {}).get("retryable", False)),
+        "error_code": (failure or {}).get("code", ""),
     }
 
 

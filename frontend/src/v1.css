@@ -2077,3 +2077,13 @@ body:has(.v1) {
   .v1-fu-card,.v1-fu-final{animation:none}
   .v1-fu-card::before{animation:none}
 }
+
+.v1-question-alert{display:flex;align-items:center;gap:14px;justify-content:space-between;flex-wrap:wrap;
+  margin:0 0 12px;padding:10px 13px;border:1px solid rgba(240,184,114,.3);border-radius:10px;
+  background:rgba(240,184,114,.06)}
+.v1-question-alert-text{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.v1-question-alert-text b{font-size:11px;color:var(--amber);white-space:nowrap}
+.v1-question-alert-text span{font-size:11px;color:var(--sub);line-height:1.6}
+.v1-question-alert-actions{display:flex;gap:7px;flex-wrap:wrap}
+.v1-question-alert-actions .v1-primary,.v1-question-alert-actions .v1-ghost{padding:6px 11px;font-size:10.5px}
+@media (max-width:640px){.v1-question-alert{align-items:flex-start}.v1-question-alert-actions{width:100%}}
