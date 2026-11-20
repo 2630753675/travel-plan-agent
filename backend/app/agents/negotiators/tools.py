@@ -33,14 +33,14 @@ def poi_irreplaceability(candidates: list[POI]) -> dict[str, float]:
     category_count = Counter(p.category for p in candidates)
     indoor_count = sum(1 for p in candidates if p.indoor)
     outdoor_count = total - indoor_count
-    max_duration = max(p.duration_min for p in candidates) or 1
+    max_duration = max((p.duration_min or 0) for p in candidates) or 1
     max_ticket = max(p.ticket_price for p in candidates) or 1
 
     scores: dict[str, float] = {}
     for p in candidates:
         # 同类越少分越高
         cat = 1.0 / category_count[p.category]
-        dur = p.duration_min / max_duration
+        dur = (p.duration_min or 0) / max_duration
         ticket = p.ticket_price / max_ticket
         # 室内/室外各只有一份时更不可替代
         same_kind = indoor_count if p.indoor else outdoor_count

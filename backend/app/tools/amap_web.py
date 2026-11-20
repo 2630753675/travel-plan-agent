@@ -108,13 +108,13 @@ def _to_poi(row: dict) -> POI | None:
     tags = [part for part in type_text.split(";") if part]
     tags.append("开放时间待核实")
     tags.append("票价待核实")
+    tags.append("游览时长待估算")
     return POI(
         id=f"amap:{row.get('id') or name}",
         name=name,
         category=category,
         open_time=open_time,
         close_time=close_time,
-        duration_min=90,
         ticket_price=0,
         recommended_slot=["上午", "下午"],
         tags=tags,

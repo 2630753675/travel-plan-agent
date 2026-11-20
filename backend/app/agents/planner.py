@@ -100,12 +100,12 @@ def _select_for_day(
         avail = [
             p
             for p in avail
-            if p.duration_min <= MAX_POI_MINUTES_LAST_DAY and "需半天" not in p.tags
+            if p.duration_min is not None and p.duration_min <= MAX_POI_MINUTES_LAST_DAY and "需半天" not in p.tags
         ]
     if duration_pressure:
         # 上一轮被判单日超时：只减数量不够，半天级项目也要让路，
         # 否则 300 分钟的山加上两三个景点永远压不进 600 分钟上限。
-        avail = [p for p in avail if p.duration_min <= HALF_DAY_MINUTES and "需半天" not in p.tags]
+        avail = [p for p in avail if p.duration_min is not None and p.duration_min <= HALF_DAY_MINUTES and "需半天" not in p.tags]
     if rainy:
         indoor = [p for p in avail if p.indoor]
         if indoor:
@@ -162,10 +162,20 @@ def _avoid_busy(start: int, end: int, busy: list[tuple[int, int]]) -> tuple[int,
     return start, end
 
 
-def _place_poi(start: int, poi: POI, busy: list[tuple[int, int]] | None = None) -> tuple[int | None, int | None]:
+def _visit_minutes(poi: POI, d: date, visit_estimates: dict[date, dict[str, object]] | None) -> tuple[int, object] | None:
+    """返回本次行程采用的时长上限，以及对应的估算对象。"""
+    estimate = (visit_estimates or {}).get(d, {}).get(poi.id)
+    if estimate is not None:
+        return int(estimate.high), estimate
+    if poi.duration_min is not None:
+        return poi.duration_min, None
+    return None
+
+
+def _place_poi(start: int, poi: POI, minutes: int, busy: list[tuple[int, int]] | None = None) -> tuple[int | None, int | None]:
     """按开放时间放置一个景点；餐食与固定事件已由单独调度避让。"""
     s = max(start, _minutes(poi.open_time))
-    e = s + poi.duration_min
+    e = s + minutes
     if busy:
         s, e = _avoid_busy(s, e, busy)
     if e > _minutes(poi.close_time):
@@ -219,6 +229,7 @@ def run(
     target_date: date | None = None,
     feedback: str = "",
     llm_selection: dict[date, list[str]] | None = None,
+    visit_estimates: dict[date, dict[str, object]] | None = None,
     forced_drops: set[str] | None = None,
     force_cheaper_hotel: bool = False,
     require_explicit_assignments: bool = False,
@@ -323,8 +334,8 @@ def run(
             busy.append((start_m, end_m))
 
         if is_last:
-            # 返程日不安排景点：航班、接驳与机场提前量优先，机场路程没有实时数据。
-            want = 0
+            # 返程日先用可用窗口尝试一个点；实际能否放下由时长和 deadline 校验决定。
+            want = min(1, per_day)
         elif is_first:
             want = min(1, per_day) if brief.days > 1 else 0
         else:
@@ -358,9 +369,13 @@ def run(
         lunch_reserved = False
         pre_lunch_end = DAY_START
         for poi in picked:
+            resolved = _visit_minutes(poi, d, visit_estimates)
+            if resolved is None:
+                continue
+            minutes, estimate = resolved
             # 景点若会压到午餐窗口，先把 12:00-13:00 完整留出来再排。
             guess_start = max(sightseeing_end, _minutes(poi.open_time))
-            guess_end = guess_start + poi.duration_min
+            guess_end = guess_start + minutes
             if (
                 not is_last
                 and not lunch_reserved
@@ -370,7 +385,7 @@ def run(
             ):
                 lunch_reserved = True
                 sightseeing_end = max(sightseeing_end, LUNCH_END)
-            s, e = _place_poi(sightseeing_end, poi, busy)
+            s, e = _place_poi(sightseeing_end, poi, minutes, busy)
             if s is None or e is None:
                 # 关门前来不及游览，换下一个
                 continue
@@ -388,8 +403,12 @@ def run(
                     title=poi.name,
                     ref_id=poi.id,
                     cost=poi.ticket_price * brief.travelers,
-                    duration_min=poi.duration_min,
-                    note="室内备选" if poi.indoor else "",
+                    duration_min=minutes,
+                    note=(
+                        f"预计游览 {estimate.low // 60}–{estimate.high // 60} 小时"
+                        if estimate and estimate.low >= 60
+                        else (f"预计游览 {estimate.low}–{estimate.high} 分钟" if estimate else ("室内备选" if poi.indoor else ""))
+                    ),
                 )
             )
             placed_ids.add(poi.id)
@@ -540,6 +559,10 @@ def run(
                 f"假设机场地面交通 {AIRPORT_TRANSFER_MIN} 分钟、提前 {AIRPORT_LEAD_MIN} 分钟到机场，需按实际交通核实；"
                 "早班航班可能需要前一晚靠近机场住宿"
             )
+            if not any(item.type == "sight" for item in items):
+                notes.append(
+                    f"返程日可用窗口不足，未安排景点；最晚 {_to_time(deadline).strftime('%H:%M')} 需离开市区"
+                )
 
         days.append(DayPlan(date=d, items=items, day_cost=day_cost, meal_estimate=meal_estimate, notes=notes + meal_notes + unplaced_notes))
 

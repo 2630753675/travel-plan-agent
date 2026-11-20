@@ -13,7 +13,7 @@ import re
 
 from ..artifacts import default_store
 from ..llm import LLMClient
-from ..models import Itinerary, TripBrief
+from ..models import Itinerary, TripBrief, VisitEstimate
 from ..tools.base import TravelSource
 from . import roles
 from .lodging import rooms_for
@@ -398,6 +398,10 @@ def _sandbox_context(ctx: ToolContext) -> ToolContext:
     sandbox.poi = ctx.poi.model_copy(deep=True)
     sandbox.weather = ctx.weather.model_copy(deep=True)
     sandbox.assignment = {d: list(ids) for d, ids in ctx.assignment.items()}
+    sandbox.visit_estimates = {
+        d: {pid: e.model_copy(deep=True) for pid, e in estimates.items()}
+        for d, estimates in ctx.visit_estimates.items()
+    }
     sandbox.fixed_events = {d: [e.model_copy(deep=True) for e in events] for d, events in ctx.fixed_events.items()}
     sandbox.hotel_id = ctx.hotel_id
     sandbox.itinerary = ctx.itinerary.model_copy(deep=True) if ctx.itinerary else None

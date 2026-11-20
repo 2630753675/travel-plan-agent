@@ -20,7 +20,7 @@ from datetime import date, time
 from typing import Any, Callable
 from uuid import uuid4
 
-from ..models import FixedEvent, Itinerary, POI, TripBrief
+from ..models import FixedEvent, Itinerary, POI, TripBrief, VisitEstimate
 from ..tools.base import SourceError, TravelSource
 from . import critic, planner
 from .lodging import LodgingPlan
@@ -61,6 +61,7 @@ class ToolContext:
     poi: PoiPlan = field(default_factory=lambda: PoiPlan())
     weather: WeatherPlan = field(default_factory=lambda: WeatherPlan())
     assignment: dict[date, list[str]] = field(default_factory=dict)
+    visit_estimates: dict[date, dict[str, VisitEstimate]] = field(default_factory=dict)
     fixed_events: dict[date, list[FixedEvent]] = field(default_factory=dict)
     hotel_id: str | None = None
     itinerary: Itinerary | None = None
@@ -341,6 +342,7 @@ def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
         return _err(f"方案版本冲突：期望 {expected}，当前 {ctx.plan_version}；请重新读取后再提交")
     valid = ctx.poi_map()
     staged: dict[date, list[str]] = {}
+    staged_estimates: dict[date, dict[str, VisitEstimate]] = {}
     for item in items:
         if not isinstance(item, dict):
             return _err("days 每一项必须是对象")
@@ -350,7 +352,32 @@ def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
             return _err(f"日期格式不对：{item.get('date')}")
         if d < ctx.brief.start_date or d > ctx.brief.end_date:
             return _err(f"{d} 不在行程区间内")
-        ids = [str(i) for i in (item.get("poi_ids") or [])]
+
+        raw_stops = item.get("stops")
+        estimates: dict[str, VisitEstimate] = {}
+        if isinstance(raw_stops, list):
+            ids = []
+            for stop in raw_stops:
+                if not isinstance(stop, dict):
+                    return _err(f"{d} 的 stops 每一项必须是对象")
+                pid = str(stop.get("poi_id") or "")
+                if not pid:
+                    return _err(f"{d} 的 stop 缺少 poi_id")
+                try:
+                    est = VisitEstimate(
+                        low=stop.get("minutes_low", stop.get("minutes")),
+                        high=stop.get("minutes_high", stop.get("minutes")),
+                        confidence=stop.get("confidence", "中"),
+                        reason=str(stop.get("reason") or ""),
+                        source=stop.get("source", "model"),
+                    )
+                except (ValueError, TypeError) as exc:
+                    return _err(f"{d} / {pid} 的游览时长估算不合法：{exc}")
+                ids.append(pid)
+                estimates[pid] = est
+        else:
+            ids = [str(i) for i in (item.get("poi_ids") or [])]
+
         if len(ids) != len(set(ids)):
             return _err(f"{d} 的景点 id 有重复")
         unknown = [i for i in ids if i not in valid]
@@ -360,7 +387,14 @@ def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
         if closed:
             return _err(f"{d} 闭馆，不能安排：" + "、".join(closed))
         staged[d] = ids
-    if all(ctx.assignment.get(d) == ids for d, ids in staged.items()):
+        staged_estimates[d] = estimates
+
+    unchanged = all(ctx.assignment.get(d) == ids for d, ids in staged.items()) and all(
+        {pid: e.model_dump(mode="json") for pid, e in (ctx.visit_estimates.get(d) or {}).items()}
+        == {pid: e.model_dump(mode="json") for pid, e in estimates.items()}
+        for d, estimates in staged_estimates.items()
+    )
+    if unchanged:
         return _ok(
             plan_version=ctx.plan_version,
             changed=[],
@@ -369,6 +403,8 @@ def _submit_day_plans(ctx: ToolContext, args: dict) -> dict:
         )
     before = {str(d): list(ctx.assignment.get(d, [])) for d in staged}
     ctx.assignment.update(staged)
+    for d, estimates in staged_estimates.items():
+        ctx.visit_estimates[d] = estimates
     ctx.assignment_version += 1
     ctx.plan_version += 1
     ctx.hard_check = None
@@ -449,6 +485,19 @@ def _materialize(ctx: ToolContext, args: dict) -> dict:
     missing_dates = sorted(expected_dates - ctx.assignment.keys())
     if missing_dates:
         return _err("规划前必须由 Agent 对每个日期提交景点安排（优先 submit_day_plans，也可逐日 assign_pois）：" + ", ".join(map(str, missing_dates)))
+    missing_minutes = []
+    poi_by_id = ctx.poi_map()
+    for d, ids in ctx.assignment.items():
+        for pid in ids:
+            poi = poi_by_id.get(pid)
+            if pid not in (ctx.visit_estimates.get(d) or {}) and poi is not None and poi.duration_min is None:
+                missing_minutes.append(f"{d} / {poi.name}")
+    if missing_minutes:
+        return _err(
+            "以下景点缺少本次游览时长估算，请用 submit_day_plans 的 stops 提交 minutes_low/minutes_high："
+            + "、".join(missing_minutes)
+        )
+
     if ctx.brief.days > 1 and not ctx.hotel_id:
         return _err("过夜行程必须由 Agent 通过 set_hotel 选定酒店")
     if not ctx.transport.outbound or not ctx.transport.inbound:
@@ -472,6 +521,7 @@ def _materialize(ctx: ToolContext, args: dict) -> dict:
         weather=ctx.weather,
         revision=0,
         llm_selection=ctx.assignment,
+        visit_estimates=ctx.visit_estimates,
         require_explicit_assignments=True,
         fixed_events=ctx.fixed_events,
     )
@@ -793,8 +843,24 @@ TOOLS: dict[str, ToolSpec] = {
                         "properties": {
                             "date": {"type": "string", "description": "日期 YYYY-MM-DD"},
                             "poi_ids": {"type": "array", "items": {"type": "string"}},
+                            "stops": {
+                                "type": "array",
+                                "description": "优先使用：每个景点附带本次行程的游览时长估算",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "poi_id": {"type": "string"},
+                                        "minutes_low": {"type": "integer", "minimum": 30, "maximum": 240},
+                                        "minutes_high": {"type": "integer", "minimum": 30, "maximum": 240},
+                                        "confidence": {"type": "string", "enum": ["高", "中", "低"]},
+                                        "reason": {"type": "string"},
+                                        "source": {"type": "string", "enum": ["model", "curated", "feedback", "unknown"]},
+                                    },
+                                    "required": ["poi_id", "minutes_low", "minutes_high"],
+                                },
+                            },
                         },
-                        "required": ["date", "poi_ids"],
+                        "required": ["date"],
                     },
                 },
                 "expected_version": {"type": "integer", "description": "可选：要求当前方案版本一致，防止覆盖并发修改"},

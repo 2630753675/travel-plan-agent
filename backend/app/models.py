@@ -85,7 +85,7 @@ class POI(BaseModel):
     open_time: time
     close_time: time
     closed_days: list[int] = Field(default_factory=list, description="0=周一 ... 6=周日")
-    duration_min: int = Field(gt=0)
+    duration_min: int | None = Field(default=None, gt=0, description="精选数据可给出；未知时为空")
     ticket_price: float = Field(ge=0)
     recommended_slot: list[Slot] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -95,6 +95,22 @@ class POI(BaseModel):
 
     def is_open_on(self, d: date) -> bool:
         return d.weekday() not in self.closed_days
+
+
+class VisitEstimate(BaseModel):
+    """一次行程里对某个景点的游览时长估算，不是景点的固定属性。"""
+
+    low: int = Field(ge=30, le=240)
+    high: int = Field(ge=30, le=240)
+    confidence: Literal["高", "中", "低"] = "中"
+    reason: str = Field(default="", max_length=200)
+    source: Literal["model", "curated", "feedback", "unknown"] = "model"
+
+    @model_validator(mode="after")
+    def _check(self) -> VisitEstimate:
+        if self.high < self.low:
+            raise ValueError("high 不能小于 low")
+        return self
 
 
 class WeatherDay(BaseModel):

@@ -132,7 +132,11 @@ SQLite 保存：
 
 高德 POI 的开放时间、票价字段不完整时会标记“待核实”；道路距离不代表步行可达。
 
-## 10. 相关文档
+## 10. 游览时长估算
+
+景点时长不是 POI 的固定属性。Local Expert 在 `submit_day_plans.stops` 中为每个景点提交 `minutes_low` / `minutes_high`、置信度和理由；Planner 用上限做开门、餐食、返程窗口校验。高德 POI 不预设固定分钟；没有可靠估算时要求 Agent 补充，而不是按类型硬编码。
+
+## 11. 相关文档
 
 - [运行指标](observability.md)
 - [项目主页](../README.md)

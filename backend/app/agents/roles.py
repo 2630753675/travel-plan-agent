@@ -83,11 +83,11 @@ ROLES: dict[str, Role] = {
         '景点时间、餐期、入住与市内交通由确定性排程生成，你不能直接写这些时间；'
         '需要去机场、预约参观等固定时段时，调用 add_fixed_event 明确登记，排程会让景点和餐食避开。'
         '不要声称自己写了排程时间；以 materialize_plan/get_plan 返回的时间为准。'
-        '优先用 submit_day_plans 一次性提交全部日期的景点安排（服务端先全量校验再原子应用），确需单日微调时才用 assign_pois；'
+        '优先用 submit_day_plans 一次性提交全部日期的 stops（每个景点带 poi_id、minutes_low、minutes_high、confidence、reason；服务端先全量校验再原子应用），确需单日微调时才用 assign_pois；'
         '每天都先写完（抵达/返程可以明确空数组），再只调用一次 materialize_plan 和一次 check_plan；'
         'route_distances 只返回坐标直线距离，不能据此声称“相邻”“步行可达”或“步行 X 分钟”；没有道路数据时写“路线与车费未核实”。'
         '如果 check_plan 报问题，优先使用 replace_fixed_event/remove_fixed_event 修复已有固定事件，或覆盖相应日期后重新 materialize 一次；修复后必须重新 check_plan，不能只在文本中宣称已修复。'
-        '结合天气、周闭馆、起降和机场预留、人群体力安排地区与节奏。每天不必塞满，但避免只有45分钟的空白游览日而无解释。'
+        '游览时长是本次行程的估算，不是景点固定属性：按景点规模、开放时间、同行人、节奏、天气给 minutes_low/high，不要按类型套固定值；没把握时给宽区间和低置信度。返程日先算可用窗口，窗口不足可以不排，窗口足够才安排短点。结合天气、周闭馆、起降和机场预留、人群体力安排地区与节奏。每天不必塞满，但避免只有45分钟的空白游览日而无解释。'
         '交通酒店导致不可行时向 orchestrator objection，明确责任方，不私自改其选择。'
         'kind=proposal，delivery 返回 {"days":[{"date":"YYYY-MM-DD","poi_ids":["真实id"]}],"rationale":"路线、天气和节奏依据"}，to=["orchestrator"]。',
         max_steps=48,
