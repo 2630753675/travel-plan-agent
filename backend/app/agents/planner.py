@@ -48,6 +48,19 @@ def _to_time(m: int) -> time:
     return time(m // 60, m % 60)
 
 
+def _duration_text(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes} 分钟"
+    hours, rest = divmod(minutes, 60)
+    return f"{hours} 小时 {rest} 分钟" if rest else f"{hours} 小时"
+
+
+def _duration_range(low: int, high: int) -> str:
+    if low == high:
+        return _duration_text(low)
+    return f"{_duration_text(low)}–{_duration_text(high)}"
+
+
 def _slot_for(m: int) -> str:
     if m < LUNCH_START:
         return "上午"
@@ -405,9 +418,9 @@ def run(
                     cost=poi.ticket_price * brief.travelers,
                     duration_min=minutes,
                     note=(
-                        f"预计游览 {estimate.low // 60}–{estimate.high // 60} 小时"
-                        if estimate and estimate.low >= 60
-                        else (f"预计游览 {estimate.low}–{estimate.high} 分钟" if estimate else ("室内备选" if poi.indoor else ""))
+                        f"预计游览 {_duration_range(estimate.low, estimate.high)}（估算）"
+                        if estimate
+                        else ("室内备选" if poi.indoor else "")
                     ),
                 )
             )
