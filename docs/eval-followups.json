@@ -1,0 +1,54 @@
+{
+  "model": "deepseek-flash",
+  "samples": 3,
+  "max_questions": 2,
+  "results": [
+    {
+      "name": "成都-老人-人文",
+      "count": 2,
+      "titles": [
+        "同行老人的步行与体力更接近哪种情况？",
+        "8000 元是按含上海往返成都交通的全程总预算来理解？"
+      ],
+      "kinds": [
+        "ask",
+        "ask"
+      ],
+      "flags": [],
+      "elapsed_s": 9.9,
+      "error": ""
+    },
+    {
+      "name": "东京-购物-美食",
+      "count": 1,
+      "titles": [
+        "购物重点想放在哪一类商圈"
+      ],
+      "kinds": [
+        "ask"
+      ],
+      "flags": [],
+      "elapsed_s": 10.7,
+      "error": ""
+    },
+    {
+      "name": "三亚-儿童-海边",
+      "count": 1,
+      "titles": [
+        "住海边默认安排在三亚湾或大东海一带，你确认一下？"
+      ],
+      "kinds": [
+        "ask"
+      ],
+      "flags": [],
+      "elapsed_s": 8.7,
+      "error": ""
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "duplicates": 0,
+    "generic": 0,
+    "too_many": 0
+  }
+}

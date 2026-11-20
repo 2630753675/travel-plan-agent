@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
@@ -17,7 +19,7 @@ from .models import TripBrief
 
 logger = logging.getLogger(__name__)
 
-MAX_QUESTIONS = 3
+MAX_QUESTIONS = 2
 
 
 class FollowUpOption(BaseModel):
@@ -41,15 +43,17 @@ class FollowUpRequest(BaseModel):
 
 
 SYSTEM = """你是旅行规划团队的“需求澄清官”。你会收到一份结构化需求和用户原话。
-你的任务：判断有没有“会显著改变行程、但用户没有说明”的信息，并给出最多 3 条追问。
+你的任务：判断有没有“会显著改变行程、但用户没有说明”的信息，并给出最多 2 条追问。
 
 规则：
 1. 能合理推断的，用 kind="infer" 写成确认项，让用户确认，不要直接问；推断必须有依据。
 2. 只有真正无法推断、并且不同答案会明显改变行程时，才用 kind="ask"。
-3. 已经有明确字段的信息，不要再问；不要问“有什么偏好”这类泛问题。
-4. 最多 3 条；如果信息足够，返回 {"questions": []}，不要凑数。
+3. 已经有明确字段的信息，不要再问；不要问“有什么偏好”“想去哪”这类泛问题。
+4. 最多 2 条；如果信息足够，返回 {"questions": []}，不要凑数。
 5. 每条给 2–3 个具体、互斥的选项；note 写清这个选择的代价或后果。
-6. 中文；title 一句话；why 说明它影响行程的哪一部分。
+6. 每条问题必须能说清“答案如何改变行程”；说不清就不问。
+7. 中文；title 一句话；why 说明它影响行程的哪一部分。
+8. 不要重复：两条问题不能是同一个信息点的不同问法。
 
 严格输出 JSON，不要 markdown：
 {"questions":[{"kind":"infer|ask","title":"...","why":"...","confidence":"高|中|低","options":[{"label":"...","value":"...","note":"..."}],"allow_custom":true}]}
@@ -65,11 +69,24 @@ def _fallback_options(kind: str) -> list[FollowUpOption]:
     return []
 
 
+def _norm_title(text: str) -> str:
+    return re.sub(r"[\s，。！？、,.!?：:；;（）()「」\"'“”]+", "", text).lower()
+
+
+def _duplicate(a: str, b: str) -> bool:
+    left, right = _norm_title(a), _norm_title(b)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return SequenceMatcher(None, left, right).ratio() >= 0.82
+
+
 def _clean(items: object) -> list[FollowUpQuestion]:
     if not isinstance(items, list):
         return []
     out: list[FollowUpQuestion] = []
-    for raw in items[:MAX_QUESTIONS]:
+    for raw in items[:MAX_QUESTIONS + 2]:
         if not isinstance(raw, dict):
             continue
         try:
@@ -78,14 +95,23 @@ def _clean(items: object) -> list[FollowUpQuestion]:
             continue
         if '？' in q.title or '?' in q.title:
             q.kind = 'ask'
+        # “默认……”这类是确认项，不应因为带问号而被标成提问。
+        if '默认' in q.title or '确认一下' in q.title:
+            q.kind = 'infer'
         if not q.options:
             q.options = _fallback_options(q.kind)
+        if q.kind == 'ask' and len(q.options) < 2:
+            continue
         if not q.options:
             continue
         for opt in q.options:
             if not opt.value:
                 opt.value = opt.label
+        if any(_duplicate(q.title, existing.title) for existing in out):
+            continue
         out.append(q)
+        if len(out) >= MAX_QUESTIONS:
+            break
     return out
 
 
