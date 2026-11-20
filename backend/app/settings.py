@@ -66,7 +66,7 @@ class LLMSettings(BaseModel):
 class OrchestrationSettings(BaseModel):
     max_revisions: int = Field(default=2, ge=1, le=4, description="深度团队最多自动返工轮次")
     node_timeout_s: int = Field(default=45, ge=5, le=180)
-    max_runtime_s: int = Field(default=180, ge=30, le=600, description="单次运行最长秒数")
+    max_runtime_s: int = Field(default=240, ge=30, le=600, description="单次运行最长秒数")
     max_model_calls: int = Field(default=40, ge=1, le=80, description="单次运行最多供应商模型请求数，含工具调用轮次")
     max_agent_turns: int = Field(default=20, ge=1, le=40, description="深度团队最多 Agent 回合数，与模型请求数分别计数")
     # 仅保留字段兼容旧配置；模型请求不再发送 max_tokens 硬上限，实际用量由供应商 usage/字符数记录。
