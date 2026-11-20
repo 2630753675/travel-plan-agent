@@ -695,6 +695,7 @@ export default function App() {
           : ['无'],
       preferences: form.preferences,
       pace: form.pace,
+      notes: briefText.trim().slice(0, 1000),
     }
   }
 
@@ -708,7 +709,7 @@ export default function App() {
       const res = await apiFetch('/api/plan/questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: briefPayload(), raw_text: briefText }),
+        body: JSON.stringify({ brief: briefPayload() }),
       })
       if (!res.ok) {
         const detail = await res.json().catch(() => null)
@@ -763,7 +764,6 @@ export default function App() {
       ...briefPayload(),
       preferences: [
         ...form.preferences,
-        ...(briefText.trim() ? [`补充：${briefText.trim()}`] : []),
         ...confirmed,
       ],
     }
@@ -1181,12 +1181,13 @@ export default function App() {
             <div className="v1-demand-form">
               <div className="v1-demand-top">
                 <b>你的需求</b>
-                <span>可编辑</span>
+                <span>可补充</span>
                 <em>01 / 需求</em>
               </div>
               <textarea
-                placeholder="例如：成都 5 天，2 人，带一位老人，预算 8000，想看人文、吃点好的，节奏别太赶"
+                placeholder="例如：老人膝盖不好，不能久坐；想安排一次川剧；不吃辣；最后一天下午留空休息。"
                 value={briefText}
+                maxLength={1000}
                 onChange={(e) => setBriefText(e.target.value)}
               />
               <div className="v1-demand-fields">

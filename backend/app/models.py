@@ -26,6 +26,7 @@ class TripBrief(BaseModel):
     companions: list[Companion] = Field(default_factory=lambda: ["无"])
     preferences: list[str] = Field(default_factory=list)
     pace: Literal["轻松", "适中", "紧凑"] = "适中"
+    notes: str = Field(default="", max_length=1000, description="用户补充说明")
 
     @model_validator(mode="after")
     def _check(self) -> TripBrief:
