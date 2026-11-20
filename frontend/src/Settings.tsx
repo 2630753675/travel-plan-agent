@@ -31,6 +31,22 @@ type Settings = {
   datasource: DataSource
 }
 
+type RunMetric = {
+  run_id: string
+  status: string
+  created_at: string
+  duration_ms: number
+  calls: number
+  total_tokens: number
+  latency_ms: number
+  passed: boolean | null
+  total_cost: number | null
+  version: number | null
+  revision: number | null
+  failure_type: string
+  message: string
+}
+
 type Props = {
   onClose: () => void
   onSaved: (s: Settings) => void
@@ -41,6 +57,8 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
   const [keyInput, setKeyInput] = useState('')
   const [busy, setBusy] = useState<'load' | 'save' | 'test' | null>('load')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [runs, setRuns] = useState<RunMetric[] | null>(null)
+  const [runsError, setRunsError] = useState('')
 
   // 组件由父级条件挂载：每次打开都是新实例，首屏即为"读取中"，
   // 不存在旧值先渲染再被覆盖的窗口期。
@@ -56,6 +74,27 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
       })
       .finally(() => {
         if (alive) setBusy(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    const token = localStorage.getItem('trip.accessToken')
+    fetch('/api/metrics/runs?limit=10', {
+      headers: token ? { 'X-Access-Token': token } : {},
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((data) => {
+        if (alive) setRuns(Array.isArray(data?.runs) ? data.runs : [])
+      })
+      .catch((e) => {
+        if (alive) setRunsError(String(e))
       })
     return () => {
       alive = false
@@ -276,6 +315,59 @@ export default function SettingsPanel({ onClose, onSaved }: Props) {
               <p className="cfg-hint">
                 HTTP 适配器已实现 /flights /hotels /pois /weather 四类映射，但本机没有真实接口，未做实测。
               </p>
+            </section>
+
+            <section className="cfg">
+              <h3>运行指标</h3>
+              <p className="cfg-hint">最近 10 次运行（含失败）：调用数、token、耗时与失败原因。</p>
+              {runsError && <p className="cfg-hint" style={{ color: '#f0b872' }}>读取失败：{runsError}</p>}
+              {!runs && !runsError && <p className="muted">读取中…</p>}
+              {runs && runs.length === 0 && <p className="muted">暂无运行记录</p>}
+              {runs && runs.length > 0 && (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ color: '#626c7c', textAlign: 'left' }}>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>时间</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>状态</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>调用</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>tokens</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>耗时</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 500 }}>结果</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((r) => (
+                        <tr key={r.run_id} style={{ borderTop: '1px solid rgba(255,255,255,.07)', verticalAlign: 'top' }}>
+                          <td style={{ padding: '6px', color: '#9aa4b4', whiteSpace: 'nowrap' }}>
+                            {new Date(r.created_at).toLocaleString('zh-CN', {
+                              month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+                            })}
+                          </td>
+                          <td style={{ padding: '6px', color: r.status === 'completed' ? '#6fe3c0' : '#f0b872', whiteSpace: 'nowrap' }}>
+                            {r.status}
+                          </td>
+                          <td style={{ padding: '6px', fontFamily: 'ui-monospace, Consolas, monospace' }}>{r.calls}</td>
+                          <td style={{ padding: '6px', fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                            {r.total_tokens.toLocaleString()}
+                          </td>
+                          <td style={{ padding: '6px', fontFamily: 'ui-monospace, Consolas, monospace' }}>
+                            {Math.round(r.duration_ms / 1000)}s
+                          </td>
+                          <td style={{ padding: '6px', color: '#9aa4b4', maxWidth: 220 }}>
+                            {r.passed === true ? '通过' : r.passed === false ? '未通过' : '—'}
+                            {r.message && (
+                              <div title={r.message} style={{ color: '#626c7c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {r.message}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
 
             {msg && <div className={`cfg-msg ${msg.ok ? 'ok' : 'bad'}`}>{msg.text}</div>}

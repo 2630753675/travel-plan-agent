@@ -37,7 +37,8 @@ MVP 功能闭环已完成：需求输入、模型运行前追问、多 Agent 规
 - 阶段 2：方案页只显示一个用户可见版本号（`计划 vN`）；
 - 阶段 3：真实图只剩 `clarify / peer_run / peer_ask / peer_finalize`，旧节点与 `confirm` 已删除；
 - 阶段 4：追问上限 2 条，重复/泛问过滤生效；前 3 个评测样本无重复、无泛问，见 `docs/eval-followups.json`；
-- 阶段 5：追问页刷新后恢复问题、答案和当前卡，不重复调用模型；开始规划后清空草稿。
+- 阶段 5：追问页刷新后恢复问题、答案和当前卡，不重复调用模型；开始规划后清空草稿；
+- 阶段 6：`GET /api/metrics/runs` 返回调用数/tokens/耗时/结果；设置面板可见最近 10 次运行。
 
 ## 4. 已知限制
 
@@ -47,13 +48,14 @@ MVP 功能闭环已完成：需求输入、模型运行前追问、多 Agent 规
 5. ~~计划版本与团队批准版本编号口径不一致~~（阶段 2 已修复：界面只显示方案版本）；
 6. ~~`build.py` 仍保留未接线的旧图节点和过期注释~~（阶段 3 已清理）；
 7. ~~追问页刷新会丢进度~~（阶段 5 已修复：sessionStorage 草稿恢复，开始规划后清空）；
-8. 缺少按运行的指标看板；
+8. ~~缺少按运行的指标看板~~（阶段 6 已修复：设置面板运行指标，接口 `/api/metrics/runs`）；
 9. 改造后尚未完整跑完一次 100 秒交付回归。
 
 ## 5. 相关文档
 
 - 优化计划：[mvp-optimization-plan.md](mvp-optimization-plan.md)
 - 当前架构：[architecture.md](architecture.md)
+- 运行指标：[observability.md](observability.md)
 - 追问评测：[eval-followups.json](eval-followups.json)
 - 设计冻结：[ui-system/V1.md](ui-system/V1.md)
 - 架构评审：[deep-team-architecture-review.md](deep-team-architecture-review.md)

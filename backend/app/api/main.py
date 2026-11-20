@@ -537,6 +537,33 @@ async def plan_questions(body: FollowUpRequest):
     }
 
 
+@app.get("/api/metrics/runs")
+async def metrics_runs(limit: int = 20):
+    """最近的运行指标：调用数、token、耗时、结果与失败原因。"""
+    rows = store.list_runs(limit)
+    runs = []
+    for row in rows:
+        payload = row.get("payload") or {}
+        stats = payload.get("llm_stats") or {}
+        message = payload.get("message") or payload.get("stop_reason") or ""
+        runs.append({
+            "run_id": row["run_id"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "duration_ms": store.run_duration_ms(row["run_id"]),
+            "calls": int(stats.get("calls") or 0),
+            "total_tokens": int(stats.get("total_tokens") or 0),
+            "latency_ms": int(stats.get("latency_ms") or 0),
+            "passed": payload.get("passed"),
+            "total_cost": payload.get("total_cost"),
+            "version": payload.get("version"),
+            "revision": payload.get("revision"),
+            "failure_type": payload.get("type") or payload.get("recovery_status") or row["status"],
+            "message": str(message)[:160],
+        })
+    return {"runs": runs}
+
+
 @app.get("/api/run/{run_id}")
 async def get_run(run_id: str):
     """失败或中断的运行摘要：页面刷新后据此恢复原因/确认面板。"""

@@ -251,6 +251,40 @@ def load_run(run_id: str) -> dict | None:
     }
 
 
+def list_runs(limit: int = 20) -> list[dict]:
+    with closing(_connect()) as conn:
+        rows = conn.execute(
+            "SELECT run_id, status, created_at, payload FROM runs ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+    return [
+        {
+            "run_id": row[0],
+            "status": row[1],
+            "created_at": row[2],
+            "payload": json.loads(row[3]),
+        }
+        for row in rows
+    ]
+
+
+def run_duration_ms(run_id: str) -> int:
+    """按事件首尾时间估算运行耗时；没有事件时为 0。"""
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT MIN(occurred_at), MAX(occurred_at) FROM run_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    if not row or not row[0] or not row[1]:
+        return 0
+    try:
+        start = datetime.fromisoformat(row[0])
+        end = datetime.fromisoformat(row[1])
+    except ValueError:
+        return 0
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
 def current_version(plan_id: str) -> int:
     with closing(_connect()) as conn:
         row = conn.execute(
